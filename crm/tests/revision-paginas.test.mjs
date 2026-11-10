@@ -396,9 +396,9 @@ test("ventas: con mala señal, si el servidor guardó pero la confirmación no l
 });
 
 // ── Entre archivos ──────────────────────────────────────────────────────────
-// El defecto está en src/js/shell.js (no es un archivo de esta revisión): la prueba queda
-// anotada como pendiente y hoy FALLA. Cuando shell.js se corrija tiene que pasar; sacarle
-// entonces la marca "todo".
+// El defecto estaba en src/js/shell.js (la recarga automática solo miraba si había un
+// campo con el cursor). Ya está corregido: una página abierta no se recarga sola. La
+// prueba quedó sin la marca "todo" en la revisión de la capa compartida.
 
 const DIST = new URL("../dist/", import.meta.url).pathname;
 const visibilidad = (p, estado) =>
@@ -409,7 +409,6 @@ const visibilidad = (p, estado) =>
 
 test(
   "ventas: si se publica una versión nueva con un cierre a medio cargar, salir un momento de la app no borra lo escrito",
-  { todo: "se corrige en src/js/shell.js: la recarga automática solo mira si hay un campo con el cursor" },
   async () => {
     const publicado = fs.mkdtempSync(path.join(os.tmpdir(), "sersale-dist-"));
     fs.cpSync(DIST, publicado, { recursive: true });
