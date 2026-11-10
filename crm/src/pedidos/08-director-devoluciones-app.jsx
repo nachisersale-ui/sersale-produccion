@@ -115,6 +115,14 @@
                 _diasGuardado: data.diasAlerta,
                 _freqGuardada: data.freqCalculada
               };
+            } else {
+              // Cliente cargado dos veces (por ejemplo, una ficha con acentos y otra sin): "✓ Contactado"
+              // y el alta de un pedido anotan el contacto en UNA de las fichas, que puede no ser la que
+              // se tomó acá. Vale el contacto más reciente de cualquiera; si no, el cliente marcado
+              // volvía a figurar vencido cada vez que se abría el panel.
+              const cfg = configCli[nombre];
+              if(SersaleBase.diaDe(data.ultimoContacto) > SersaleBase.diaDe(cfg.ultimoContacto)) cfg.ultimoContacto = data.ultimoContacto;
+              if(SersaleBase.diaDe(data.ultimoPedidoRegistrado) > SersaleBase.diaDe(cfg.ultimoPedidoRegistrado)) cfg.ultimoPedidoRegistrado = data.ultimoPedidoRegistrado;
             }
           });
           // Pedidos con el nombre ya unificado (copias: no se toca lo que vino de la base)
@@ -277,7 +285,15 @@
       // Marca el contacto, lo saca de las dos vistas y recalcula con datos frescos
       async function marcarComoContactado(cliente) {
         setContactados(prev => prev.includes(cliente) ? prev : [...prev, cliente]);
-        try { await marcarContacto(cliente); } catch(e) { console.error(e); }
+        let guardado = false;
+        try { guardado = (await marcarContacto(cliente)) !== false; } catch(e) { console.error(e); }
+        if (!guardado) {
+          // No quedó guardado: el cliente vuelve a la lista y se avisa (antes desaparecía igual,
+          // sin aviso, y reaparecía vencido la próxima vez que se abría el panel).
+          setContactados(prev => prev.filter(c => c !== cliente));
+          SersaleUI.toast("No se pudo marcar a " + cliente + " como contactado. Probá de nuevo.", { tipo: "error" });
+          return;
+        }
         try { await cargar(); } catch(e) { console.error(e); }
       }
 
@@ -561,9 +577,12 @@
         return () => { vigente = false; };
       },[modalOpen, form.cliente]);
 
-      // Cambiar el cliente o el crédito es otra operación: no se reusa el id de un intento anterior
+      // Cambiar el cliente es otra operación (otra cuenta): no se reusa el id de un intento anterior.
+      // Corregir el importe NO: si el intento anterior dio error pero el servidor lo había guardado
+      // (señal cortada justo al confirmar), con otro id quedaban dos devoluciones y dos créditos.
+      // Con el mismo id se corrige la misma devolución y el saldo se ajusta solo por la diferencia.
       const cambiarCliente = v => { idDevolucion.current = null; setForm(f=>({...f,cliente:v})); };
-      const cambiarMonto = v => { idDevolucion.current = null; setForm(f=>({...f,monto:v})); };
+      const cambiarMonto = v => { setForm(f=>({...f,monto:v})); };
 
       const [guardar, guardando] = SersaleBase.useAccion(async () => {
         const falta = t => { SersaleUI.toast(t, { tipo: "error" }); };
@@ -587,6 +606,14 @@
           let cuenta = null;
           if(monto>0) {
             cuenta = await ccBuscarCuenta(cliente);
+            if(!cuenta) {
+              // "No tiene cuenta" sale de la copia guardada en el teléfono, que con la señal entrecortada
+              // puede estar vieja o vacía. Antes de ofrecer registrarla sin crédito se confirma con el
+              // servidor; si no contesta, no se registra nada (se avisa y el formulario queda como está).
+              const { getDocsFromServer } = fb();
+              const snapCtas = await getDocsFromServer(collection(db,"cuentas_corrientes"));
+              cuenta = ccElegirCuenta(snapCtas.docs.map(d => ({ id: d.id, ...d.data() })), cliente);
+            }
             if(!cuenta) {
               const ok = await SersaleUI.confirmar({
                 titulo: cliente+" no tiene cuenta corriente",

@@ -25,6 +25,10 @@
         const snap = await tx.get(ref);
         if (!snap.exists()) return { ok: false, motivo: "Ese pedido ya no existe. Se actualizó la lista." };
         const actual = snap.data();
+        // Si se cortó la señal justo al confirmar, Firestore vuelve a ejecutar esto con el cambio
+        // YA guardado. Se lo reconoce por su marca en el historial: sin esto se avisaba "cambió
+        // desde otro teléfono" (era este) y no se seguía con lo que viene después de guardar.
+        if ((actual.historial || []).some(x => x && x.fecha === marca && x.estado === nuevoEstado)) return { ok: true };
         if ((actual.estado || "pendiente") !== (visto.estado || "pendiente")) {
           const etiqueta = (ESTADOS[actual.estado] || ESTADOS.pendiente).label.replace(" ✓", "");
           return { ok: false, motivo: "El pedido de " + (actual.cliente || visto.cliente) + " cambió desde otro teléfono: ahora está " + etiqueta + ". Se actualizó la lista." };
@@ -415,7 +419,7 @@
           if (cambiaCliente) {
             // Con remito emitido el cargo ya está en la cuenta del cliente anterior y no se pasa
             // solo a otra cuenta: cambiar el cliente dejaba el remito a un nombre y la deuda a otro.
-            const remito = await remitoDePedido(pedido.id);
+            const remito = await remitoDePedido(pedido.id, { servidor: true });
             if (remito) return aviso(`Este pedido ya tiene el Remito N° ${String(remito.nro).padStart(4,"0")} a nombre de ${pedido.cliente}: no se puede pasar a otro cliente.`);
           }
           const ref = doc(db,"pedidos",pedido.id);
@@ -560,9 +564,13 @@
     // ── REMITO PEDIDO ───────────────────────────────────────
     // Remito ya emitido para un pedido (o null). Los remitos nuevos se guardan con
     // id "ped_<id del pedido>"; los anteriores se encuentran por el campo pedidoId.
-    async function remitoDePedido(pedidoId) {
-      const { db, collection, getDocs, query, where } = fb();
-      const snap = await getDocs(query(collection(db,"remitos"), where("pedidoId","==",pedidoId)));
+    // Con { servidor: true } se le pregunta al servidor (falla si no contesta): es para cuando la
+    // respuesta decide qué se escribe. La copia del teléfono puede no tener todavía el remito que
+    // se hizo desde otro teléfono.
+    async function remitoDePedido(pedidoId, opciones) {
+      const { db, collection, getDocs, getDocsFromServer, query, where } = fb();
+      const leer = opciones && opciones.servidor ? getDocsFromServer : getDocs;
+      const snap = await leer(query(collection(db,"remitos"), where("pedidoId","==",pedidoId)));
       const lista = snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(Number(a.nro)||0)-(Number(b.nro)||0));
       return lista[0] || null;
     }
@@ -668,7 +676,21 @@
           const productos = pedido.items.map(it=>it.producto).join(", ");
 
           // ── Lecturas previas ──
-          const previo = await remitoDePedido(pedido.id);
+          // Lo que decide qué se escribe (¿ya hay remito?, ¿el cliente tiene cuenta?, ¿cuál es el
+          // cargo de este pedido?) se le pregunta al servidor, no a la copia del teléfono: con la
+          // señal entrecortada esa copia puede no tener lo que hizo otro teléfono, y se emitía un
+          // segundo remito y se cobraba dos veces. Si el servidor no contesta, no se guarda nada.
+          const previo = await remitoDePedido(pedido.id, { servidor: true });
+          if(previo && !(emitido && emitido.id === previo.id)) {
+            // El remito lo hicieron desde otro teléfono y esta pantalla no lo sabía: se muestra y no se pisa sin avisar.
+            setEmitido({ id: previo.id, nro: previo.nro, fecha: previo.fecha });
+            setNroRemito(nro4(previo.nro));
+            const usados = {};
+            (previo.items||[]).forEach(it=>{ if(it.precio>0) usados[it.producto] = it.precio; });
+            setPrecios(prev=>({...usados, ...prev}));
+            SersaleUI.toast("Este pedido ya tiene el Remito N° "+nro4(previo.nro)+", hecho desde otro teléfono. Revisá los importes: si tocás Guardar de nuevo se cambia ese remito y su cargo.", { tipo: "info", ms: 9000 });
+            return;
+          }
           const remitoRef = doc(db,"remitos", previo ? previo.id : "ped_"+pedido.id);
           const pedidoRef = doc(db,"pedidos",pedido.id);
           const counterRef = doc(db,"config","contador_remitos");
@@ -679,16 +701,16 @@
             todos.docs.forEach(d=>{ const n = Number(d.data().nro)||0; if(n>maxNro) maxNro=n; });
           }
           // Cuenta corriente: si el pedido está marcado o el cliente tiene cuenta.
-          const cuenta = await ccBuscarCuenta(pedido.cliente);
+          const cuenta = await ccBuscarCuenta(pedido.cliente, { servidor: true });
           let asiento = null, movPrevio = null;
           if(pedido.cuentaCorriente || cuenta) {
-            const movs = await ccMovimientosDe(pedido.cliente, cuenta);
+            const movs = await rvccMovimientosDePedido(pedido, previo ? previo.nro : null, cuenta);
             movPrevio = ccMovimientoDePedido(movs, pedido, previo ? previo.nro : null);
             // Sin importe y sin cargo anterior que corregir: el "Pendiente de facturar" queda como está.
             const hayCargoPrevio = !!(movPrevio && (Number(movPrevio.monto)||0) > 0);
             if(montoFinal > 0 || hayCargoPrevio) {
               asiento = await ccPrepararAsiento({
-                cliente: pedido.cliente, cuenta, movs,
+                cliente: pedido.cliente, cuenta,
                 movId: movPrevio ? movPrevio.id : "remito_"+pedido.id,
                 abrirCuenta: true, ultimoMovimiento: hoyStr
               });
@@ -753,7 +775,9 @@
               else if(czEsPendiente(movPrevio) && pedido.fechaEntrega) datosMov.fecha = pedido.fechaEntrega;
               cc = ccEscribirAsiento(tx, asiento, datosMov);
             }
-            return { nro, fecha: datos.fecha, cc, corregido: yaEmitido };
+            // Si Firestore repite la transacción porque se perdió la respuesta, el remito que se ve
+            // guardado es el de esta misma operación (misma hora de alta): es un alta, no una corrección.
+            return { nro, fecha: datos.fecha, cc, corregido: yaEmitido && anterior.createdAt !== ahora };
           });
 
           // Que lo que se lea después (lista, cuenta corriente) ya traiga el remito

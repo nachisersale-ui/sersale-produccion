@@ -75,6 +75,77 @@
       return { filas, incompletas, total: SersaleBase.redondear(filas.reduce((s, f) => s + f.total, 0), 2) };
     }
 
+    // ── VENTAS RÁPIDAS "EN DUDA" ────────────────────────────
+    // Si la señal se corta justo al confirmar, o se cierra la app mientras dice
+    // "Guardando...", el servidor puede haber guardado la venta aunque acá se haya
+    // avisado un error (o no se haya avisado nada). Si la persona la cargaba de
+    // nuevo desde otra ventana, al cliente se le cobraba dos veces.
+    // Antes de enviar cada venta se anota en el teléfono (cliente, importe e id
+    // del pedido) y se borra cuando el servidor confirma. Lo que queda anotado es
+    // una venta en duda: apenas hay señal se le pregunta al servidor si existe y,
+    // si existe, se avisa para que no se cargue otra vez.
+    const RVPEDIDOS_DUDAS = "sersale_ventas_en_duda";
+    const RVPEDIDOS_DUDA_VENCE_MS = 3 * 24 * 60 * 60 * 1000;
+    const rvpedidosEnviando = new Set(); // ids de pedido de las ventas que se están guardando en este momento
+    function rvpedidosLeerDudas() {
+      try {
+        const lista = JSON.parse(localStorage.getItem(RVPEDIDOS_DUDAS) || "[]");
+        return (Array.isArray(lista) ? lista : []).filter(d => d && d.pedido && Date.now() - d.ts < RVPEDIDOS_DUDA_VENCE_MS);
+      } catch(e) { return []; }
+    }
+    function rvpedidosGuardarDudas(lista) {
+      try { localStorage.setItem(RVPEDIDOS_DUDAS, JSON.stringify(lista)); } catch(e) {}
+    }
+    const rvpedidosQuitarDuda = pedidoId => rvpedidosGuardarDudas(rvpedidosLeerDudas().filter(d => d.pedido !== pedidoId));
+    const rvpedidosAnotarDuda = duda => rvpedidosGuardarDudas([...rvpedidosLeerDudas().filter(d => d.pedido !== duda.pedido), duda]);
+
+    let rvpedidosAclarando = Promise.resolve(); // de a una revisión por vez (no avisar dos veces la misma venta)
+    /**
+     * Pregunta al servidor por cada venta en duda. La que existe se avisa y deja de
+     * estar en duda; la que no existe se olvida (no se guardó); si el servidor no
+     * contesta, sigue en duda. `salvo`: id de pedido que no se revisa (la venta
+     * que la ventana abierta va a reintentar con los mismos ids).
+     * Devuelve { registradas, enDuda } (las que se avisaron y las que siguen sin saberse).
+     */
+    function rvpedidosAclararVentas(salvo) {
+      const turno = rvpedidosAclarando.then(async () => {
+        const registradas = [], enDuda = [];
+        for (const duda of rvpedidosLeerDudas()) {
+          if (duda.pedido === salvo || rvpedidosEnviando.has(duda.pedido)) continue;
+          let existe;
+          try {
+            const { db, doc, runTransaction } = fb();
+            // Lectura directa al servidor (no pasa por la copia del teléfono)
+            existe = await runTransaction(db, async tx => (await tx.get(doc(db, "pedidos", duda.pedido))).exists(), { maxAttempts: 1 });
+          } catch(e) { enDuda.push(duda); continue; }
+          if (rvpedidosEnviando.has(duda.pedido)) continue; // se la está reintentando ahora mismo
+          rvpedidosQuitarDuda(duda.pedido);
+          if (existe) registradas.push(duda);
+        }
+        for (const d of registradas) {
+          await SersaleUI.aviso(
+            "La venta rápida de " + SersaleBase.fmtMonto(d.monto) + " a " + d.cliente + " (" + SersaleBase.fmtFechaCorta(d.ts) + " " + SersaleBase.fmtHora(d.ts) + ") quedó registrada, aunque se cortó la señal mientras se guardaba. No la cargues de nuevo.",
+            { titulo: "La venta sí quedó registrada" }
+          );
+        }
+        return { registradas, enDuda };
+      });
+      rvpedidosAclarando = turno.catch(() => {});
+      return turno;
+    }
+    let rvpedidosReloj = null;
+    /** Revisa las ventas en duda cada 5 segundos hasta que no quede ninguna (como mucho unos 15 minutos). */
+    function rvpedidosVigilarDudas(vuelta) {
+      if (rvpedidosReloj || (vuelta || 0) > 180) return;
+      rvpedidosReloj = setTimeout(async () => {
+        try { await rvpedidosAclararVentas(); } catch(e) { console.error(e); }
+        rvpedidosReloj = null;
+        if (rvpedidosLeerDudas().length) rvpedidosVigilarDudas((vuelta || 0) + 1);
+      }, 5000);
+    }
+    // Quedó una venta en duda de antes (se cerró o recargó la app mientras se guardaba): se revisa al abrir.
+    if (rvpedidosLeerDudas().length) rvpedidosVigilarDudas();
+
     // ── MODAL VENTA RAPIDA ──────────────────────────────────
     function ModalVentaRapida({ clienteInicial, clientes, onClose, onGuardado }) {
       const [cliente, setCliente] = useState(clienteInicial||"");
@@ -127,11 +198,32 @@
           if(!ok) return;
         }
         if(navigator.onLine === false) return falta("Sin conexión: la venta no se registró. Probá de nuevo cuando vuelva la señal.");
+        let enviada = false; // ¿llegó a mandarse al servidor?
         try {
           const {db,collection,doc,runTransaction,Timestamp} = fb();
+          // Una venta anterior a este cliente que dio error sin saberse si quedó guardada (y que no
+          // es la que esta ventana está reintentando): primero se aclara con el servidor.
+          const previas = await rvpedidosAclararVentas(idsVenta.current && idsVenta.current.pedido);
+          // Recién se avisó que sí estaba registrada: no se carga otra sin que la persona lo decida.
+          if(previas.registradas.some(d=>SersaleBase.mismoNombre(d.cliente, cliente))) return;
+          // No se pudo aclarar: esta venta se guarda con los mismos ids que aquella. Si aquella había
+          // quedado guardada, esta la corrige (como al reintentar en la misma ventana) y no se cobra dos veces.
+          const sinAclarar = previas.enDuda.filter(d=>d.mov && SersaleBase.mismoNombre(d.cliente, cliente)).pop();
+          if(sinAclarar && !idsVenta.current) idsVenta.current = { pedido: sinAclarar.pedido, mov: sinAclarar.mov };
           const hoy = SersaleBase.hoy();
           const ahora = new Date().toISOString();
-          const cuenta = await ccBuscarCuenta(cliente);
+          let cuenta = await ccBuscarCuenta(cliente);
+          let sueltos; // movimientos que el cliente ya tuviera, leídos del servidor (solo si hay que abrirle la cuenta)
+          if(!cuenta) {
+            // Según la copia del teléfono no tiene cuenta. Antes de abrirle una se confirma con el
+            // servidor: con señal entrecortada la copia puede estar atrasada y al cliente se le abría
+            // una segunda cuenta (la deuda quedaba repartida en dos).
+            let srv;
+            try { srv = await rvpedidosDelServidor(["cuentas_corrientes","cc_movimientos"]); }
+            catch(e) { console.error(e); return falta("No se pudo consultar la cuenta corriente de "+cliente+": la venta no se registró. Revisá la conexión y probá de nuevo."); }
+            cuenta = ccElegirCuenta(srv.cuentas_corrientes, cliente);
+            if(!cuenta) sueltos = srv.cc_movimientos.filter(m=>ccMismoCliente(m.cliente, cliente));
+          }
           if(!cuenta) {
             const ok = await SersaleUI.confirmar({
               titulo: cliente+" no tiene cuenta corriente",
@@ -164,15 +256,22 @@
             origen:"venta_rapida", pedidoId:pedidoRef.id,
             items: filas.map(f=>({ producto:f.producto, cantidad:f.cantidad, unidad:f.unidad, precio:f.precio }))
           };
-          const asiento = await ccPrepararAsiento({ cliente, cuenta, movId: idsVenta.current.mov, abrirCuenta: true, ultimoMovimiento: hoy });
+          const asiento = await ccPrepararAsiento({ cliente, cuenta, movs: sueltos, movId: idsVenta.current.mov, abrirCuenta: true, ultimoMovimiento: hoy });
           // Pedido, movimiento y saldo se guardan juntos (o no se guarda nada)
-          const res = await runTransaction(db, async tx => {
-            asiento.marca = null;
-            const pedSnap = await tx.get(pedidoRef);
-            await ccLeerAsiento(tx, asiento);
-            if(pedSnap.exists()) tx.update(pedidoRef, pedidoDatos); else tx.set(pedidoRef, pedidoDatos);
-            return ccEscribirAsiento(tx, asiento, movDatos);
-          });
+          let res;
+          rvpedidosEnviando.add(pedidoRef.id);
+          rvpedidosAnotarDuda({ cliente, pedido: pedidoRef.id, mov: idsVenta.current.mov, monto: montoFinal, ts: Date.now() });
+          enviada = true;
+          try {
+            res = await runTransaction(db, async tx => {
+              asiento.marca = null;
+              const pedSnap = await tx.get(pedidoRef);
+              await ccLeerAsiento(tx, asiento);
+              if(pedSnap.exists()) tx.update(pedidoRef, pedidoDatos); else tx.set(pedidoRef, pedidoDatos);
+              return ccEscribirAsiento(tx, asiento, movDatos);
+            });
+          } finally { rvpedidosEnviando.delete(pedidoRef.id); }
+          rvpedidosQuitarDuda(pedidoRef.id); // el servidor confirmó: ya no está en duda
           if(!res || !res.asentado) throw new Error("No se pudo asentar la venta en la cuenta de "+cliente);
           // Que lo que se lea después (panel, cuenta corriente) ya traiga la venta
           await esperarCopiaLocal(pedidoRef, d => !!d && d.fechaPedidoISO === ahora);
@@ -186,6 +285,8 @@
         } catch(e){
           console.error(e);
           SersaleUI.toast("No se pudo registrar la venta. Revisá la conexión y probá de nuevo.", { tipo: "error" });
+          // Puede haber quedado guardada igual (señal cortada al confirmar): se sigue preguntando al servidor.
+          if(enviada) rvpedidosVigilarDudas();
         }
       });
       // Mientras se guarda no se cierra: parecería cancelada y se cargaría de nuevo

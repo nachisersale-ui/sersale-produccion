@@ -270,27 +270,71 @@
 
     // Pasa los kg anotados en pantalla a los ítems que están guardados AHORA. No agrega,
     // saca ni cambia productos: lo que otro teléfono editó en el pedido queda como está.
-    function pasarKgAItemsGuardados(guardados, deLaPantalla) {
+    // `vistos` (opcional): los ítems como estaban en pantalla ANTES de que la persona escribiera.
+    // El kg que la persona no cambió queda como está guardado: lo puede haber corregido otro
+    // teléfono un momento antes, sin que esta pantalla (con señal lenta) llegara a enterarse.
+    function pasarKgAItemsGuardados(guardados, deLaPantalla, vistos) {
       const actuales = Array.isArray(guardados) ? guardados : [];
       const pantalla = Array.isArray(deLaPantalla) ? deLaPantalla : [];
+      const antes = Array.isArray(vistos) ? vistos : null;
+      const kg = v => (v == null || v === "" ? null : Number(v));
       const usados = {};
       return actuales.map((it, i) => {
         const j = (!usados[i] && pantalla[i] && pantalla[i].producto === it.producto) ? i
           : pantalla.findIndex((x, k) => !usados[k] && x && x.producto === it.producto);
         if (j < 0) return it;
         usados[j] = true;
+        const sinTocar = !!antes && !!antes[j] && antes[j].producto === pantalla[j].producto && kg(antes[j].kgReal) === kg(pantalla[j].kgReal);
+        if (sinTocar) return it.kgReal === undefined ? { ...it, kgReal: null } : it;
         return { ...it, kgReal: pantalla[j].kgReal === undefined ? null : pantalla[j].kgReal };
       });
     }
 
+    // Productos Y kg de un pedido: para saber si otro teléfono le cambió algo a una tarjeta.
+    function rvdepositoFirma(items) {
+      return (Array.isArray(items) ? items : []).map(it => [it && it.producto, it && it.cantidad, it && it.unidad,
+        it && it.kgReal != null && it.kgReal !== "" ? Number(it.kgReal) : ""].join("¦")).join("║");
+    }
+
+    // Las tarjetas del depósito esperan el resultado real del guardado, igual que en Comercial
+    // (acá también es una transacción): la hoja de kg se cierra solo si quedó guardado. Sin esto
+    // la tarjeta daba el cambio por hecho al segundo y medio y se perdían los kg escritos.
+    const RVDEPOSITO_CTX = { onRemito: null };
+
     function VistaDeposito({ onBack, modoOperario }) {
-      const [pedidos, setPedidos] = useState(null);
+      const [pedidos, setPedidosCrudo] = useState(null);
       const [filtro, setFiltro] = useState("todos");
       const [prepId, setPrepId] = useState(null);
       const [errorCarga, setErrorCarga] = useState(false);
       const [guardandoCambio, setGuardandoCambio] = useState(0);
       const enCurso = React.useRef({}); // id de pedido -> hay un guardado en marcha
       const avisadoItems = React.useRef(null);
+      // La lista se actualiza sola, pero la hoja de kg de una tarjeta guarda lo escrito por posición
+      // (primer campo, segundo campo…) y con los kg que había al abrirla. Si OTRO teléfono le cambia
+      // los productos o los kg al pedido mientras está abierta, lo escrito quedaba al lado de otro
+      // producto, o se volvía a guardar el kg viejo arriba del que cargó el otro. Por eso cada
+      // tarjeta lleva una versión que sube con cada cambio ajeno: la tarjeta se arma de nuevo
+      // (se cierra su hoja) y al reabrirla trae el pedido al día.
+      const tarjetas = React.useRef({});    // id -> { firma, n }
+      const firmaPropia = React.useRef({}); // id -> firma de lo que acaba de guardar ESTE teléfono
+      function setPedidos(lista) {
+        const conHojaAbierta = [];
+        (lista||[]).forEach(p => {
+          const firma = rvdepositoFirma(p.items);
+          const t = tarjetas.current[p.id];
+          if (!t) { tarjetas.current[p.id] = { firma, n: 0 }; return; }
+          if (t.firma === firma) return;
+          const propio = firmaPropia.current[p.id] === firma;
+          tarjetas.current[p.id] = { firma, n: propio ? t.n : t.n + 1 };
+          if (propio) return;
+          try {
+            const tarjeta = Array.from(document.querySelectorAll("[data-rvdeposito-pedido]")).find(el => el.getAttribute("data-rvdeposito-pedido") === p.id);
+            if (tarjeta && tarjeta.querySelector('input[placeholder="kg"]')) conHojaAbierta.push(p);
+          } catch(e) {}
+        });
+        if (conHojaAbierta.length) SersaleUI.toast("Otro teléfono cambió el pedido de " + (conHojaAbierta[0].cliente||"este cliente") + " mientras anotabas los kg. No se guardó lo que estabas escribiendo: abrí la hoja de nuevo, ya trae el pedido al día.", { tipo:"info", ms: 9000 });
+        setPedidosCrudo(lista);
+      }
       // NUEVO = entró después de la última vez que este teléfono tuvo el depósito a la vista.
       // (La marca general "sersale_last_seen" se pisa al tocar el acceso en Inicio y un
       // operario nunca pasa por Inicio, así que no servía para esta pantalla.)
@@ -357,6 +401,12 @@
         const visto = (pedidos||[]).find(p=>p.id===id) || null; // el pedido tal como se ve en pantalla
         enCurso.current[id] = true;
         setGuardandoCambio(n=>n+1);
+        // Marca de ESTE cambio (es la fecha que queda en el historial). Si la señal se corta justo al
+        // confirmar, Firestore vuelve a ejecutar la transacción con el cambio ya guardado: al ver la
+        // marca se da por hecho. Sin esto el reintento veía "otro estado" y avisaba que lo había
+        // cambiado otro teléfono (y, al cancelar, no se sacaba el "Pendiente de facturar").
+        const marca = new Date().toISOString();
+        let cambiaronItems = false;
         try {
           const { db, doc, runTransaction } = fb();
           const ref = doc(db,"pedidos",id);
@@ -364,16 +414,21 @@
             const snap = await tx.get(ref);
             if (!snap.exists()) return { freno:"borrado" };
             const actual = snap.data();
+            const historial = Array.isArray(actual.historial) ? actual.historial : [];
+            if (historial.some(x => x && x.fecha === marca && x.estado === nuevoEstado)) return { ok:true, cambiaronItems };
             const cerrado = ["despachado","cancelado"].includes(actual.estado);
             if (cerrado || (visto && actual.estado !== visto.estado)) return { freno:"estado", estado: actual.estado };
-            const cambiaronItems = !!visto && firmaItemsDeposito(actual.items) !== firmaItemsDeposito(visto.items);
+            cambiaronItems = !!visto && firmaItemsDeposito(actual.items) !== firmaItemsDeposito(visto.items);
             // Marcar "listo" sin haber visto los productos que tiene ahora el pedido: mejor que lo revisen.
             if (cambiaronItems && !itemsConKg && nuevoEstado === "listo") return { freno:"items" };
             const upd = {
               estado: nuevoEstado,
-              historial:[...(Array.isArray(actual.historial)?actual.historial:[]),{estado:nuevoEstado,fecha:new Date().toISOString()}]
+              historial:[...historial,{estado:nuevoEstado,fecha:marca}]
             };
-            if(itemsConKg) upd.items = pasarKgAItemsGuardados(actual.items, itemsConKg);
+            if(itemsConKg) {
+              upd.items = pasarKgAItemsGuardados(actual.items, itemsConKg, visto ? visto.items : null);
+              firmaPropia.current[id] = rvdepositoFirma(upd.items);
+            }
             tx.update(ref, upd);
             return { ok:true, cambiaronItems };
           });
@@ -413,7 +468,13 @@
           try {
             const { db, collection, query, orderBy, onSnapshot } = fb();
             cortar = onSnapshot(query(collection(db,"pedidos"), orderBy("fechaEntrega","asc")),
-              (snap) => { setPedidos(soloActivos(snap)); setErrorCarga(false); },
+              (snap) => {
+                // Lista vacía que no viene del servidor sino de lo guardado en el teléfono: puede ser
+                // un teléfono que nunca bajó los pedidos y no logra conectar. Ahí no se afirma "No hay
+                // pedidos": decide cargar(), que avisa "No se pudieron cargar" si no hay datos reales.
+                if (snap.empty && snap.metadata && snap.metadata.fromCache) { cargar(); return; }
+                setPedidos(soloActivos(snap)); setErrorCarga(false);
+              },
               (e) => { console.error("[Depósito] Se cortó la actualización en vivo:", e); cargar(); });
           } catch(e) { console.error("[Depósito] No se pudo iniciar la actualización en vivo:", e); cargar(); }
         }
@@ -452,6 +513,7 @@
         }} />;
 
       return (
+        <ComercialCtx.Provider value={RVDEPOSITO_CTX}>
         <div className="crm-page">
           <div className="chapa" style={{background:"#12161A",borderBottom:"2px solid #A4232A",color:"#fff",padding:"16px 20px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:10,boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}>
             {!modoOperario && onBack && <button onClick={onBack} style={{background:"none",color:"#fff",border:"none",cursor:"pointer",fontSize:20,padding:12,margin:-12}}>←</button>}
@@ -514,7 +576,11 @@
                             <span style={{fontSize:10,background:"rgba(255,255,255,0.25)",color:"#fff",borderRadius:99,padding:"2px 6px",fontWeight:700}}>{dp.length}</span>
                           </div>
                         </div>
-                        {dp.map(p=><TarjetaPedido key={p.id} pedido={p} onCambiarEstado={cambiarEstado} showActions={true} isNew={p.fechaPedidoISO>lastSeen} onDetallePrep={p.estado==="preparando"?()=>setPrepId(p.id):null} modoOperario={modoOperario} />)}
+                        {dp.map(p=>(
+                          <div key={p.id+"║"+((tarjetas.current[p.id]||{}).n||0)} data-rvdeposito-pedido={p.id}>
+                            <TarjetaPedido pedido={p} onCambiarEstado={cambiarEstado} showActions={true} isNew={p.fechaPedidoISO>lastSeen} onDetallePrep={p.estado==="preparando"?()=>setPrepId(p.id):null} modoOperario={modoOperario} />
+                          </div>
+                        ))}
                       </div>
                     );
                   });
@@ -542,6 +608,7 @@
             }
           </div>
         </div>
+        </ComercialCtx.Provider>
       );
     }
 

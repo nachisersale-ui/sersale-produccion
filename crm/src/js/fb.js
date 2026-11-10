@@ -39,7 +39,11 @@ function crearDb() {
   if (!sinPersistencia) {
     try {
       const base = fs.initializeFirestore(app, {
-        localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }),
+        // Sin tope de tamaño. Con el tope de fábrica (40 MB), cuando la copia lo
+        // pasa Firestore borra del teléfono las colecciones que hace más que no
+        // se abren; sin señal esas pantallas quedaban vacías o por la mitad como
+        // si fuera lo que hay (acá se anota "esta colección está entera").
+        localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager(), cacheSizeBytes: fs.CACHE_SIZE_UNLIMITED }),
       });
       guardaEnTelefono = true;
       return base;
@@ -53,6 +57,46 @@ function crearDb() {
 export const db = crearDb();
 if (PRUEBA) fs.connectFirestoreEmulator(db, PRUEBA.emulatorHost, PRUEBA.emulatorPort);
 
+// initializeFirestore no avisa si el teléfono no deja usar su base local
+// (IndexedDB): Firestore sigue, en silencio, con una copia en memoria que se
+// pierde al cerrar la app. En ese caso no se puede decir "guardado en el
+// teléfono": se prueba la base local y, si no anda, los guardados vuelven a
+// esperar al servidor y las marcas de "colección bajada" de otros días no valen.
+function probarGuardado() {
+  return new Promise((ok) => {
+    let listo = false;
+    const fin = (anda) => {
+      if (listo) return;
+      listo = true;
+      ok(anda);
+    };
+    try {
+      const pedido = indexedDB.open("sersale_prueba_guardado");
+      pedido.onsuccess = () => {
+        try {
+          pedido.result.close();
+        } catch (e) {}
+        fin(true);
+      };
+      pedido.onblocked = () => fin(true);
+      pedido.onerror = (ev) => {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        fin(false);
+      };
+    } catch (e) {
+      fin(false);
+    }
+    setTimeout(() => fin(true), 4000); // no contestó: no se puede afirmar que no ande
+  });
+}
+if (guardaEnTelefono) {
+  probarGuardado().then((anda) => {
+    if (anda) return;
+    guardaEnTelefono = false;
+    console.warn("Este teléfono no deja guardar datos (IndexedDB): se trabaja sin copia local.");
+  });
+}
+
 // ── Lecturas rápidas ───────────────────────────────────────────────────────
 
 const ESPERA_PRIMERA_SYNC_MS = 6000; // cuánto esperar a la escucha antes de ir al servidor
@@ -63,10 +107,51 @@ const escuchas = new Map(); // nombre de colección -> estado de su escucha
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 const sinConexion = () => typeof navigator !== "undefined" && navigator.onLine === false;
 
+// Señal entrecortada: el teléfono dice que hay conexión, pero el servidor no
+// contestó y la lectura se respondió con la copia guardada (o se confirmó una
+// transacción y la copia no pudo ponerse al día). Lo que se ve puede ser viejo:
+// se avisa (js/shell.js muestra una franja) hasta que las escuchas vuelven a
+// estar al día con el servidor.
+let atrasado = false;
+let relojAtraso = null;
+function marcarAtrasado() {
+  if (atrasado) return;
+  atrasado = true;
+  avisar();
+  // Mientras dure, se insiste en reconectar (Firestore solo puede tardar hasta un minuto
+  // entre intentos): apenas el servidor contesta, las escuchas se ponen al día y el aviso se va.
+  if (!relojAtraso) {
+    relojAtraso = setInterval(() => {
+      if (!atrasado) {
+        clearInterval(relojAtraso);
+        relojAtraso = null;
+      } else if (!sinConexion()) reconectar();
+    }, 8000);
+  }
+}
+
 function avisar() {
   let alDia = true;
   for (const st of escuchas.values()) if (!st.sincronizado) alDia = false;
-  window.dispatchEvent(new CustomEvent("sersale:datos", { detail: { alDia, enLinea: !sinConexion() } }));
+  if (alDia) atrasado = false;
+  window.dispatchEvent(new CustomEvent("sersale:datos", { detail: { alDia, enLinea: !sinConexion(), atrasado: atrasado && !sinConexion() } }));
+}
+
+// Firestore, cuando falla la conexión, espera cada vez más (hasta un minuto)
+// antes de volver a intentar. Si se sabe que hay señal (acaba de confirmarse
+// una transacción), se le pide que reconecte ya. Como mucho una vez cada 15 s.
+let ultimaReconexion = 0;
+async function reconectar() {
+  if (Date.now() - ultimaReconexion < 15000) return false;
+  ultimaReconexion = Date.now();
+  try {
+    await fs.disableNetwork(db);
+    await fs.enableNetwork(db);
+    return true;
+  } catch (e) {
+    console.warn("No se pudo reiniciar la conexión:", e);
+    return false;
+  }
 }
 
 function vigilar(nombre) {
@@ -104,12 +189,16 @@ function vigilar(nombre) {
 // Sin señal y sin esa marca no hay nada guardado para mostrar: es mejor decir
 // "sin conexión" que mostrar listas vacías o saldos en cero como si fueran reales.
 const claveGuardada = (nombre) => "sersale_copia_" + app.options.projectId + "_" + nombre;
+const bajadasAhora = new Set(); // colecciones que se bajaron completas desde que se abrió esta página
 function marcarGuardada(nombre) {
+  bajadasAhora.add(nombre);
   try {
     localStorage.setItem(claveGuardada(nombre), String(Date.now()));
   } catch (e) {}
 }
 function hayCopiaGuardada(nombre) {
+  // Sin guardado en el teléfono la copia vive en memoria: solo vale lo bajado en esta página.
+  if (!guardaEnTelefono) return bajadasAhora.has(nombre);
   try {
     return !!localStorage.getItem(claveGuardada(nombre));
   } catch (e) {
@@ -186,7 +275,11 @@ export async function getDocs(q) {
 // ingreso creía que no existía ningún usuario). En ese caso se informa el error.
 async function delServidor(q, nombre) {
   const snap = await fs.getDocs(q);
-  if (snap.metadata.fromCache && !hayCopiaGuardada(nombre)) throw errorSinDatos(nombre);
+  if (snap.metadata.fromCache) {
+    if (!hayCopiaGuardada(nombre)) throw errorSinDatos(nombre);
+    // Contestó la copia guardada, no el servidor: puede ser vieja. Se avisa en pantalla.
+    if (!sinConexion() && escuchas.has(nombre)) marcarAtrasado();
+  }
   return snap;
 }
 
@@ -194,7 +287,12 @@ export async function getDoc(ref) {
   const nombre = origen.get(ref);
   // Solo se responde desde la copia local si esa colección ya se está escuchando.
   const st = nombre && escuchas.get(nombre);
-  if (!st || !st.sincronizado) return fs.getDoc(ref);
+  if (!st) return fs.getDoc(ref);
+  if (!st.sincronizado) {
+    const snap = await fs.getDoc(ref);
+    if (snap.metadata.fromCache && !sinConexion() && escuchas.has(nombre)) marcarAtrasado();
+    return snap;
+  }
   try {
     const snap = await fs.getDocFromCache(ref);
     st.lecturas++;
@@ -209,6 +307,18 @@ export async function getDoc(ref) {
 // apenas termina de guardar vea el cambio, al confirmar se vuelve a pedir al
 // servidor cada documento que la transacción escribió: eso actualiza la copia
 // local antes de devolver el control.
+//
+// Con señal entrecortada esa relectura puede fallar aunque la transacción se
+// haya guardado (la confirmación va por un pedido suelto; la relectura, por el
+// canal de escucha, que puede estar esperando para reconectar). Como acaba de
+// pasar la confirmación, hay señal: se reconecta ya y se intenta de nuevo. Si
+// tampoco se puede, la copia del teléfono quedó atrás del servidor y se avisa
+// en pantalla, en vez de mostrar el saldo o el stock de antes como si nada.
+//
+// OJO al escribir una transacción: si la confirmación llega al servidor pero la
+// respuesta se pierde, Firestore vuelve a ejecutar la función y a guardar. Todo
+// lo que sume o reste tiene que dar lo mismo si se ejecuta dos veces (id fijo
+// del movimiento y leerlo antes de sumar; ver ccLeerAsiento en src/pedidos/00).
 export async function runTransaction(base, fn, opciones) {
   const escritos = new Map();
   const resultado = await fs.runTransaction(
@@ -226,7 +336,11 @@ export async function runTransaction(base, fn, opciones) {
     },
     opciones
   );
-  await Promise.all([...escritos.values()].map((ref) => fs.getDocFromServer(ref).catch(() => null)));
+  const refs = [...escritos.values()];
+  const releer = () => Promise.all(refs.map((ref) => fs.getDocFromServer(ref))).then(() => true, () => false);
+  let alDia = await releer();
+  if (!alDia && (await reconectar())) alDia = await Promise.race([releer(), espera(4000).then(() => false)]);
+  if (!alDia && !sinConexion() && refs.some((ref) => escuchas.has(ref.path.split("/")[0]))) marcarAtrasado();
   return resultado;
 }
 
