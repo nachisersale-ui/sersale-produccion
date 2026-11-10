@@ -17,11 +17,88 @@
 
     const UNIDADES = ["kg","piezas","ganchos","bolsas","unidades"];
     const CATEGORIAS_STOCK = ["Cocidos","Jamones Crudos","Secos","Frescos","Ahumados","Pastas","Materia Prima","Insumos","Otro"];
-    const fmt  = iso => new Date(iso).toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"});
-    const fmtH = iso => new Date(iso).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
+    // Fechas y horas siempre en hora de Buenos Aires (SersaleBase), no en UTC.
+    const fmt  = iso => SersaleBase.fmtFecha(iso);
+    const fmtH = iso => { const d = SersaleBase.aFecha(iso); return d ? d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit",timeZone:SersaleBase.ZONA}) : ""; };
     const fmtN = n => Math.round(n*100)/100;
+    // Un reporte viejo o tocado a mano puede traer un área que ya no existe: se muestra igual.
+    const areaDe = k => AREAS[k] || { label: k || "Sin área", color:"#5C666F", light:"#EDEEF0", icon:"📋", productos:[] };
+    // Lo escrito en un campo numérico -> número (0 si está vacío o no es válido).
+    const numCant = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+    const avisoError = (texto, e) => { if (e) console.error(e); SersaleUI.toast(texto, { tipo:"error" }); };
+    const sinSenal = () => typeof navigator !== "undefined" && navigator.onLine === false;
+    const msgNoGuardo = () => sinSenal() ? "Sin conexión: no se guardó. Probá de nuevo cuando vuelva la señal." : "No se pudo guardar. Probá de nuevo.";
 
     function getFirebase() { return { db: window.__db, ...window.__firebase }; }
+
+    /* ── Stock: funciones compartidas por las dos vistas ── */
+    async function leerStock() {
+      const { db, collection, getDocs, query, orderBy } = getFirebase();
+      const snap = await getDocs(query(collection(db,"stock_produccion"), orderBy("nombre")));
+      return snap.docs.map(d=>({id:d.id,...d.data()}));
+    }
+    // Ítem de stock por nombre: primero idéntico; si no, sin mirar mayúsculas, acentos ni espacios de más.
+    function buscarStock(lista, nombre) {
+      return lista.find(s=>s.nombre===nombre) || lista.find(s=>SersaleBase.mismoNombre(s.nombre,nombre)) || null;
+    }
+    // Filas a medio completar de un formulario de productos: devuelve el mensaje, o "" si están bien.
+    function filaIncompleta(filas, campo) {
+      for (let i=0;i<filas.length;i++) {
+        const nombre = String(filas[i][campo]||"").trim();
+        const q = String(filas[i].cantidad==null?"":filas[i].cantidad).trim();
+        if (!nombre && !q) continue;
+        if (!nombre) return "Falta elegir el producto " + (i+1);
+        if (!(parseFloat(q)>0)) return "Ingresá una cantidad mayor a 0 para " + nombre;
+      }
+      return "";
+    }
+    /* Cambia cantidades de stock dentro de una transacción: lee cada ítem en el
+       servidor en ese momento, le suma su diferencia (sin bajar de 0) y, en la
+       misma operación, deja que `escribir(tx, res)` agregue lo demás (reporte,
+       movimientos). O se guarda todo o no se guarda nada.
+       deltas: { idStock: diferencia }. Devuelve { idStock: { antes, despues, datos } | null si ya no existe }. */
+    async function moverStock(deltas, escribir) {
+      const { db, doc, runTransaction } = getFirebase();
+      if (sinSenal()) throw new Error("sin conexión");
+      const ids = Object.keys(deltas);
+      return runTransaction(db, async tx => {
+        const snaps = [];
+        for (const id of ids) snaps.push(await tx.get(doc(db,"stock_produccion",id)));
+        const res = {};
+        snaps.forEach((s,i)=>{
+          const id = ids[i];
+          if (!s.exists()) { res[id] = null; return; }
+          const antes = parseFloat(s.data().cantidad)||0;
+          const despues = SersaleBase.redondear(Math.max(0, antes + deltas[id]), 3);
+          res[id] = { antes, despues, datos: s.data() };
+        });
+        if (escribir) escribir(tx, res); // puede cortar todo con un throw antes de que se escriba nada
+        ids.forEach(id=>{
+          if (res[id] && deltas[id]) tx.update(doc(db,"stock_produccion",id), { cantidad: res[id].despues, updatedAt: new Date().toISOString() });
+        });
+        return res;
+      });
+    }
+    // Ítems que con esta operación pasaron a estar en su mínimo o por debajo (no los que ya estaban).
+    function cruzaronMinimo(res) {
+      return Object.keys(res).filter(id=>res[id]).map(id=>({ ...res[id].datos, id, cantidad: res[id].despues, _antes: res[id].antes }))
+        .filter(s=>{ const min = parseFloat(s.minimo)||0; return min>0 && s._antes>min && s.cantidad<=min; });
+    }
+
+    /* ── WHATSAPP NOTIFICACIONES ── */
+    async function sendStockAlert(items) {
+      try {
+        const { db, doc, getDoc } = getFirebase();
+        const cfgDoc = await getDoc(doc(db,"config","whatsapp"));
+        if(!cfgDoc.exists()) return;
+        const { phone, apikey } = cfgDoc.data();
+        if(!phone||!apikey) return;
+        const lista = items.map(s=>`⚠️ ${s.nombre}: ${fmtN(s.cantidad)} ${s.unidad} (mín. ${s.minimo})`).join("\n");
+        const msg = `🔴 STOCK BAJO — Frigorífico Sersale\n${lista}\nFecha: ${SersaleBase.fmtFecha(SersaleBase.hoy())}`;
+        // El texto se codifica una sola vez (antes los saltos de línea llegaban como "%0A" escrito).
+        await fetch(`https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(String(phone).trim())}&apikey=${encodeURIComponent(String(apikey).trim())}&text=${encodeURIComponent(msg)}`, { mode:"no-cors" });
+      } catch(e){ console.error("Error WA notif:", e); }
+    }
 
     /* ═══════════════════════════════════════════════════════
        VISTA ENCARGADO
@@ -32,7 +109,6 @@
       const [encargado, setEncargado] = useState("");
       const [items, setItems] = useState([{producto:"",cantidad:"",unidad:"kg",obs:""}]);
       const [obs, setObs] = useState("");
-      const [enviando, setEnviando] = useState(false);
       const [enviado, setEnviado] = useState(false);
       const [enviadoData, setEnviadoData] = useState(null);
 
@@ -40,46 +116,54 @@
       const updItem = (i,f,v) => { const c=[...items]; c[i][f]=v; setItems(c); };
       const remItem = i => setItems(items.filter((_,idx)=>idx!==i));
 
-      async function enviar() {
-        if (!encargado.trim()) return alert("Ingresá tu nombre");
+      const [enviar, enviando] = SersaleBase.useAccion(async () => {
+        if (!encargado.trim()) return avisoError("Ingresá tu nombre");
+        const incompleta = filaIncompleta(items, "producto");
+        if (incompleta) return avisoError(incompleta);
         const val = items.filter(it=>it.producto&&it.cantidad);
-        if (!val.length) return alert("Agregá al menos un producto con cantidad");
-        setEnviando(true);
+        if (!val.length) return avisoError("Agregá al menos un producto con cantidad");
         try {
-          const { db, collection, addDoc, getDocs, query, where, doc, updateDoc, Timestamp } = getFirebase();
+          const { db, collection, doc, Timestamp } = getFirebase();
           const rep = { area, encargado: encargado.trim(), fecha: Timestamp.now(), fechaISO: new Date().toISOString(), items: val, obs: obs.trim() };
-          const repRef = await addDoc(collection(db,"reportes"), rep);
+          const repRef = doc(collection(db,"reportes"));
 
-          // Auto-update stock for items in "piezas"
-          const piezasItems = val.filter(it=>it.unidad==="piezas"&&it.producto&&it.cantidad);
-          const sinStock = [];
+          // Suman al stock las filas cargadas en "piezas" (regla de siempre). El reporte, el
+          // stock y los movimientos se guardan juntos: si algo falla no queda nada a medias
+          // y se puede volver a enviar sin duplicar.
+          const piezasItems = val.filter(it=>it.unidad==="piezas"&&it.producto!=="Otro"&&numCant(it.cantidad)>0);
+          const stock = piezasItems.length ? await leerStock() : [];
+          const filas = [], deltas = {}, sinMatch = [];
           for (const it of piezasItems) {
-            const cant = parseFloat(it.cantidad)||0;
-            if (!cant) continue;
-            // Find matching stock item by name
-            const snap = await getDocs(query(collection(db,"stock_produccion"), where("nombre","==",it.producto)));
-            if (!snap.empty) {
-              const stockDoc = snap.docs[0];
-              const actual = parseFloat(stockDoc.data().cantidad)||0;
-              await updateDoc(doc(db,"stock_produccion",stockDoc.id), { cantidad: actual+cant, updatedAt: new Date().toISOString() });
-              // Log movement
-              await addDoc(collection(db,"stock_movimientos"), {
-                stockId: stockDoc.id, nombre: it.producto,
-                tipo: "entrada", subtipo: "produccion",
-                cantidad: cant, unidad: "piezas",
-                ref: repRef.id, encargado: encargado.trim(),
-                fecha: new Date().toISOString().split("T")[0],
-                createdAt: new Date().toISOString()
-              });
-            } else {
-              console.warn("[Stock] Sin coincidencia en stock_produccion para:", it.producto);
-              sinStock.push(it.producto);
-            }
+            const s = buscarStock(stock, it.producto);
+            if (!s) { console.warn("[Stock] Sin coincidencia en stock_produccion para:", it.producto); sinMatch.push(it.producto); continue; }
+            deltas[s.id] = (deltas[s.id]||0) + numCant(it.cantidad);
+            filas.push({ s, cant: numCant(it.cantidad) });
           }
-          if (sinStock.length) alert("El reporte se guardó, pero NO se pudo impactar el stock de:\n\n• "+sinStock.join("\n• ")+"\n\nEsos productos no figuran en Stock de Producción con ese nombre exacto. Cargalos o corregí el nombre y ajustá el stock a mano.");
+          const hoy = SersaleBase.hoy(), ahora = new Date().toISOString();
+          const res = await moverStock(deltas, (tx, res) => {
+            tx.set(repRef, rep);
+            filas.forEach(f=>{
+              if (!res[f.s.id]) return; // lo borraron recién: se avisa abajo
+              tx.set(doc(collection(db,"stock_movimientos")), {
+                stockId: f.s.id, nombre: f.s.nombre,
+                tipo: "entrada", subtipo: "produccion",
+                cantidad: f.cant, unidad: "piezas",
+                ref: repRef.id, encargado: encargado.trim(),
+                fecha: hoy,
+                createdAt: ahora
+              });
+            });
+          });
+          const sinStock = sinMatch.concat(filas.filter(f=>!res[f.s.id]).map(f=>f.s.nombre));
           setEnviadoData(rep); setEnviado(true);
-        } catch(e) { alert("Error al enviar."); console.error(e); }
-        setEnviando(false);
+          if (sinStock.length) SersaleUI.aviso("El reporte se guardó, pero NO se pudo impactar el stock de:\n\n• "+sinStock.join("\n• ")+"\n\nEsos productos no figuran en Stock de Producción. Cargalos o corregí el nombre y ajustá el stock a mano.", { titulo:"Stock sin actualizar" });
+        } catch(e) { avisoError(sinSenal() ? "Sin conexión: el reporte no se envió. Probá de nuevo cuando vuelva la señal." : "No se pudo enviar el reporte. Probá de nuevo.", e); }
+      });
+
+      // Al cambiar de área, lo elegido en la otra no puede quedar escondido en el formulario.
+      function elegirArea(key) {
+        if (key !== area) setItems(items.map(it=>(it.producto && it.producto!=="Otro" && !AREAS[key].productos.includes(it.producto)) ? {...it, producto:""} : it));
+        setArea(key); setStep("form");
       }
 
       function nuevo() {
@@ -88,10 +172,10 @@
         setObs(""); setEnviado(false); setEnviadoData(null);
       }
 
-      const A = area ? AREAS[area] : null;
+      const A = area ? areaDe(area) : null;
 
       if (enviado && enviadoData) {
-        const a = AREAS[enviadoData.area];
+        const a = areaDe(enviadoData.area);
         return (
           <div style={{minHeight:"100vh",background:"#F2F3F5",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
             <div style={{background:"#fff",borderRadius:20,padding:32,textAlign:"center",width:"100%",maxWidth:400,boxShadow:"0 4px 20px rgba(0,0,0,0.1)"}}>
@@ -129,7 +213,7 @@
             <p style={{fontWeight:700,fontSize:13,color:"#5C666F",textTransform:"uppercase",letterSpacing:1,margin:"8px 0 14px"}}>Seleccioná tu área</p>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               {Object.entries(AREAS).map(([key,a])=>(
-                <button key={key} onClick={()=>{setArea(key);setStep("form");}}
+                <button key={key} onClick={()=>elegirArea(key)}
                   style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,padding:"22px 12px",borderRadius:16,border:`2px solid ${a.color}`,background:a.light,cursor:"pointer"}}>
                   <span style={{fontSize:36}}>{a.icon}</span>
                   <span style={{fontWeight:700,fontSize:13,color:a.color,textAlign:"center",lineHeight:1.3}}>{a.label}</span>
@@ -170,7 +254,7 @@
                 </select>
                 <div style={{display:"flex",gap:8,marginTop:8}}>
                   <input style={{flex:1,padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
-                    type="number" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
+                    type="number" inputMode="decimal" min="0" step="any" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
                   <select style={{width:120,padding:"12px 10px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                     value={item.unidad} onChange={e=>updItem(i,"unidad",e.target.value)}>
                     {UNIDADES.map(u=><option key={u} value={u}>{u}</option>)}
@@ -195,258 +279,15 @@
       );
     }
 
-    /* ═══════════════════════════════════════════════════════
-       VISTA DIRECTOR
-    ═══════════════════════════════════════════════════════ */
-    function VistaDirector({ onSwitch }) {
-      const [tab, setTab] = useState("reportes");
-      const [showReportModal, setShowReportModal] = useState(false);
-      const [reportes, setReportes] = useState(null);
-      const [filtroArea, setFiltroArea] = useState("todos");
-      const [filtroFecha, setFiltroFecha] = useState(new Date().toISOString().slice(0,10));
-      const [expanded, setExpanded] = useState(null);
-      const [editando, setEditando] = useState(null); // reporte en edición
-      const [guardandoEdit, setGuardandoEdit] = useState(false);
-
-      // Stock state
-      const [stockItems, setStockItems] = useState(null);
-      const [modalStock, setModalStock] = useState(false);
-      const [editStock, setEditStock] = useState(null);
-      const [stockForm, setStockForm] = useState({nombre:"",categoria:"Cocidos",cantidad:"",unidad:"kg",minimo:"",obs:""});
-      const [guardandoStock, setGuardandoStock] = useState(false);
-      const [filtroCategoria, setFiltroCategoria] = useState("todas");
-      const [stockSubTab, setStockSubTab] = useState("items"); // "items" | "movimientos"
-      const [modalSalida, setModalSalida] = useState(false);
-      const [salidaForm, setSalidaForm] = useState({destino:"PP",tipo:"despacho",fecha:"",items:[{nombre:"",cantidad:"",unidad:"piezas"}],obs:""});
-      const [guardandoSalida, setGuardandoSalida] = useState(false);
-      const [movimientos, setMovimientos] = useState(null);
-
-      // Faena state
-      const [faenas, setFaenas] = useState(null);
-      const [modalFaena, setModalFaena] = useState(false);
-      const [editFaena, setEditFaena] = useState(null);
-      const [faenaForm, setFaenaForm] = useState({fecha:"",tipo:"Cerdo",cantidad:"",pesoTotal:"",pesoPromedio:"",obs:""});
-      const [guardandoFaena, setGuardandoFaena] = useState(false);
-      const [filtroFaenaMes, setFiltroFaenaMes] = useState(() => { const n=new Date(); return n.getFullYear()+"-"+String(n.getMonth()+1).padStart(2,"0"); });
-
-      // Trazabilidad state
-      const [lotes, setLotes] = useState(null);
-      const [modalLote, setModalLote] = useState(false);
-      const [loteDetalle, setLoteDetalle] = useState(null);
-      const [guardandoLote, setGuardandoLote] = useState(false);
-      const [filtroLoteMes, setFiltroLoteMes] = useState(() => { const n=new Date(); return n.getFullYear()+"-"+String(n.getMonth()+1).padStart(2,"0"); });
-      const [loteForm, setLoteForm] = useState({
-        fechaElab:"", fechaVenc:"", operario:"",
-        materiasPrimas:[{tipo:"cerdo",corte:"",proveedor:"",kg:""}],
-        productos:[{nombre:"",cantidad:"",unidad:"piezas"}],
-        obs:""
-      });
-
-      /* ── REPORTES ── */
-      async function cargar() {
-        try {
-          const { db, collection, query, getDocs, where, orderBy, Timestamp } = getFirebase();
-          let q;
-          if (filtroFecha) {
-            const inicio = new Date(filtroFecha + "T00:00:00");
-            const fin    = new Date(filtroFecha + "T23:59:59");
-            q = query(collection(db,"reportes"), where("fecha",">=",Timestamp.fromDate(inicio)), where("fecha","<=",Timestamp.fromDate(fin)), orderBy("fecha","desc"));
-          } else {
-            q = query(collection(db,"reportes"), orderBy("fecha","desc"));
-          }
-          const snap = await getDocs(q);
-          const data = snap.docs.map(d=>({id:d.id,...d.data(),fechaISO:d.data().fecha?.toDate().toISOString()}));
-          setReportes(filtroArea==="todos" ? data : data.filter(r=>r.area===filtroArea));
-        } catch(e) { console.error(e); setReportes([]); }
-      }
-
-      useEffect(()=>{ if(window.__fbReady) cargar(); else document.addEventListener("fbReady",cargar); },[filtroFecha,filtroArea]);
-
-      /* ── EDICIÓN DE REPORTE ── */
-      function abrirEdit(r) {
-        setEditando({
-          id: r.id,
-          encargado: r.encargado,
-          obs: r.obs||"",
-          items: r.items.map(it=>({...it}))
-        });
-      }
-      function updEditItem(i,f,v) {
-        const c = [...editando.items]; c[i][f]=v; setEditando({...editando, items:c});
-      }
-      function addEditItem() {
-        setEditando({...editando, items:[...editando.items,{producto:"",cantidad:"",unidad:"kg",obs:""}]});
-      }
-      function remEditItem(i) {
-        setEditando({...editando, items: editando.items.filter((_,idx)=>idx!==i)});
-      }
-      async function guardarEdit() {
-        const val = editando.items.filter(it=>it.producto&&it.cantidad);
-        if (!val.length) return alert("Al menos un producto con cantidad");
-        setGuardandoEdit(true);
-        try {
-          const { db, doc, updateDoc } = getFirebase();
-          await updateDoc(doc(db,"reportes",editando.id), {
-            encargado: editando.encargado,
-            items: val,
-            obs: editando.obs,
-            editadoEn: new Date().toISOString()
-          });
-          setEditando(null);
-          cargar();
-        } catch(e) { alert("Error al guardar"); console.error(e); }
-        setGuardandoEdit(false);
-      }
-      async function eliminarReporte(id) {
-        if (!confirm("¿Eliminar este reporte?")) return;
-        try {
-          const { db, doc, deleteDoc } = getFirebase();
-          await deleteDoc(doc(db,"reportes",id));
-          setReportes(reportes.filter(r=>r.id!==id));
-          setExpanded(null);
-        } catch(e) { alert("Error al eliminar"); }
-      }
-
-      /* ── STOCK ── */
-      async function cargarStock() {
-        try {
-          const { db, collection, getDocs, query, orderBy } = getFirebase();
-          const snap = await getDocs(query(collection(db,"stock_produccion"), orderBy("nombre")));
-          setStockItems(snap.docs.map(d=>({id:d.id,...d.data()})));
-        } catch(e) { console.error(e); setStockItems([]); }
-      }
-      useEffect(()=>{ if(tab==="stock"){ if(window.__fbReady) cargarStock(); else document.addEventListener("fbReady",cargarStock); } },[tab]);
-
-      async function cargarMovimientos() {
-        try {
-          const { db, collection, getDocs, query, orderBy } = getFirebase();
-          const snap = await getDocs(query(collection(db,"stock_movimientos"), orderBy("createdAt","desc")));
-          setMovimientos(snap.docs.map(d=>({id:d.id,...d.data()})));
-        } catch(e) { console.error(e); setMovimientos([]); }
-      }
-      useEffect(()=>{ if(tab==="stock"&&stockSubTab==="movimientos"){ if(window.__fbReady) cargarMovimientos(); else document.addEventListener("fbReady",cargarMovimientos); } },[tab,stockSubTab]);
-
-      function abrirModalSalida() {
-        const hoy = new Date().toISOString().split("T")[0];
-        setSalidaForm({destino:"PP",tipo:"despacho",fecha:hoy,items:[{nombre:"",cantidad:"",unidad:"piezas"}],obs:""});
-        setModalSalida(true);
-      }
-      function updSalidaItem(i,f,v){ const c=[...salidaForm.items]; c[i][f]=v; setSalidaForm({...salidaForm,items:c}); }
-      function addSalidaItem(){ setSalidaForm({...salidaForm,items:[...salidaForm.items,{nombre:"",cantidad:"",unidad:"piezas"}]}); }
-      function remSalidaItem(i){ setSalidaForm({...salidaForm,items:salidaForm.items.filter((_,idx)=>idx!==i)}); }
-
-      async function guardarSalida() {
-        const val = salidaForm.items.filter(it=>it.nombre&&it.cantidad);
-        if(!val.length) return alert("Agregá al menos un producto con cantidad");
-        if(!salidaForm.fecha) return alert("Seleccioná una fecha");
-        setGuardandoSalida(true);
-        try {
-          const { db, collection, addDoc, getDocs, query, where, doc, updateDoc } = getFirebase();
-          const sinStock = [];
-          for (const it of val) {
-            const cant = parseFloat(it.cantidad)||0;
-            if(!cant) continue;
-            const snap = await getDocs(query(collection(db,"stock_produccion"), where("nombre","==",it.nombre)));
-            if(snap.empty) {
-              // Sin ítem de stock no registramos el movimiento: quedaría huérfano y sin stockId.
-              console.warn("[Stock] Sin coincidencia en stock_produccion para:", it.nombre);
-              sinStock.push(it.nombre);
-              continue;
-            }
-            const stockDoc = snap.docs[0];
-            const actual = parseFloat(stockDoc.data().cantidad)||0;
-            await updateDoc(doc(db,"stock_produccion",stockDoc.id), { cantidad: Math.max(0, actual-cant), updatedAt: new Date().toISOString() });
-            await addDoc(collection(db,"stock_movimientos"), {
-              stockId: stockDoc.id,
-              nombre: it.nombre, tipo:"salida",
-              subtipo: salidaForm.tipo,
-              destino: salidaForm.tipo==="despacho"?salidaForm.destino:salidaForm.tipo==="venta"?"Planta":"Cliente",
-              cantidad: cant, unidad: it.unidad,
-              fecha: salidaForm.fecha, obs: salidaForm.obs.trim(),
-              createdAt: new Date().toISOString()
-            });
-          }
-          if(sinStock.length) alert("NO se registró la salida de:\n\n• "+sinStock.join("\n• ")+"\n\nEsos productos no figuran en Stock de Producción con ese nombre exacto. Cargalos o corregí el nombre y volvé a registrar la salida.");
-          // Reload stock y chequear alertas
-          await cargarStock();
-          if(stockSubTab==="movimientos") await cargarMovimientos();
-          // Check for low stock and notify
-          const { db: db2, collection: col2, getDocs: gd2, query: q2, orderBy: ob2 } = getFirebase();
-          const snapCheck = await gd2(q2(col2(db2,"stock_produccion"), ob2("nombre")));
-          const allItems = snapCheck.docs.map(d=>({id:d.id,...d.data()}));
-          const bajos = allItems.filter(s=>s.minimo>0&&s.cantidad<=s.minimo);
-          if(bajos.length>0) sendStockAlert(bajos);
-          setModalSalida(false);
-        } catch(e){ alert("Error al guardar"); console.error(e); }
-        setGuardandoSalida(false);
-      }
-
-      function abrirModalStock(item=null) {
-        if(item) {
-          setEditStock(item.id);
-          setStockForm({nombre:item.nombre,categoria:item.categoria||"Cocidos",cantidad:item.cantidad,unidad:item.unidad||"kg",minimo:item.minimo||"",obs:item.obs||""});
-        } else {
-          setEditStock(null);
-          setStockForm({nombre:"",categoria:"Cocidos",cantidad:"",unidad:"kg",minimo:"",obs:""});
-        }
-        setModalStock(true);
-      }
-      async function guardarStock() {
-        if (!stockForm.nombre.trim()) return alert("Ingresá el nombre");
-        if (stockForm.cantidad === "") return alert("Ingresá la cantidad");
-        setGuardandoStock(true);
-        try {
-          const { db, collection, addDoc, doc, updateDoc, setDoc } = getFirebase();
-          const data = {
-            nombre: stockForm.nombre.trim(),
-            categoria: stockForm.categoria,
-            cantidad: parseFloat(stockForm.cantidad)||0,
-            unidad: stockForm.unidad,
-            minimo: parseFloat(stockForm.minimo)||0,
-            obs: stockForm.obs.trim(),
-            updatedAt: new Date().toISOString()
-          };
-          if (editStock) {
-            await updateDoc(doc(db,"stock_produccion",editStock), data);
-            setStockItems(stockItems.map(s=>s.id===editStock?{...s,...data}:s));
-          } else {
-            const ref = await addDoc(collection(db,"stock_produccion"), data);
-            setStockItems([...stockItems, {id:ref.id,...data}].sort((a,b)=>a.nombre.localeCompare(b.nombre)));
-          }
-          setModalStock(false);
-        } catch(e) { alert("Error al guardar"); console.error(e); }
-        setGuardandoStock(false);
-      }
-      async function eliminarStock(id) {
-        if (!confirm("¿Eliminar este ítem?")) return;
-        try {
-          const { db, doc, deleteDoc } = getFirebase();
-          await deleteDoc(doc(db,"stock_produccion",id));
-          setStockItems(stockItems.filter(s=>s.id!==id));
-        } catch(e) { alert("Error"); }
-      }
-      async function ajustarCantidad(item, delta) {
-        const nueva = Math.max(0, (parseFloat(item.cantidad)||0) + delta);
-        try {
-          const { db, doc, updateDoc } = getFirebase();
-          await updateDoc(doc(db,"stock_produccion",item.id), {cantidad: nueva, updatedAt: new Date().toISOString()});
-          const updated = stockItems.map(s=>s.id===item.id?{...s,cantidad:nueva}:s);
-          setStockItems(updated);
-          // Notify if crossed minimum threshold going down
-          if(delta<0 && item.minimo>0 && nueva<=item.minimo) {
-            sendStockAlert([{...item,cantidad:nueva}]);
-          }
-        } catch(e) { alert("Error"); }
-      }
-
-  
     // ── CONFIG WHATSAPP ─────────────────────────────────────
+    // Va fuera de VistaDirector: declarado adentro, React lo desmontaba y lo volvía a
+    // montar en cada cambio de la pantalla (se cerraba el panel, se perdía lo escrito y
+    // hacía una lectura a la base por cada tecla o toque).
     function ConfigWhatsApp() {
       const [cfg, setCfg] = React.useState(null);
       const [phone, setPhone] = React.useState("");
       const [apikey, setApikey] = React.useState("");
       const [open, setOpen] = React.useState(false);
-      const [saving, setSaving] = React.useState(false);
 
       React.useEffect(()=>{
         async function load(){
@@ -455,21 +296,20 @@
             const d = await getDoc(doc(db,"config","whatsapp"));
             if(d.exists()){ const data=d.data(); setPhone(data.phone||""); setApikey(data.apikey||""); setCfg(data); }
             else setCfg({});
-          } catch(e){ setCfg({}); }
+          } catch(e){ console.error(e); setCfg({}); }
         }
         if(window.__fbReady) load(); else document.addEventListener("fbReady",load);
       },[]);
 
-      async function guardar(){
-        setSaving(true);
+      const [guardar, saving] = SersaleBase.useAccion(async () => {
         try {
           const { db, doc, setDoc } = getFirebase();
           await setDoc(doc(db,"config","whatsapp"), { phone: phone.trim(), apikey: apikey.trim() });
           setCfg({ phone: phone.trim(), apikey: apikey.trim() });
           setOpen(false);
-        } catch(e){ alert("Error al guardar"); }
-        setSaving(false);
-      }
+          SersaleUI.toast("Configuración guardada", { tipo:"ok" });
+        } catch(e){ avisoError(msgNoGuardo(), e); }
+      });
 
       if(cfg===null) return null;
       const activo = cfg.phone && cfg.apikey;
@@ -497,8 +337,10 @@
                 3. Te responden con tu API Key
               </div>
               <input style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:14,marginBottom:8,background:"#fff"}}
+                inputMode="tel" autoComplete="off"
                 placeholder="Número WhatsApp (ej: 5491112345678)" value={phone} onChange={e=>setPhone(e.target.value)} />
               <input style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:14,marginBottom:10,background:"#fff"}}
+                autoComplete="off" autoCapitalize="off" autoCorrect="off"
                 placeholder="API Key de CallMeBot" value={apikey} onChange={e=>setApikey(e.target.value)} />
               <button onClick={guardar} disabled={saving}
                 style={{width:"100%",padding:12,borderRadius:10,border:"none",background:saving?"#A3ABB3":"#2F6B4F",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>
@@ -510,27 +352,423 @@
       );
     }
 
-    /* ── WHATSAPP NOTIFICACIONES ── */
-      async function sendStockAlert(items) {
+    /* ═══════════════════════════════════════════════════════
+       VISTA DIRECTOR
+    ═══════════════════════════════════════════════════════ */
+    function VistaDirector({ onSwitch }) {
+      const [tab, setTab] = useState("reportes");
+      const [showReportModal, setShowReportModal] = useState(false);
+      const [reportes, setReportes] = useState(null);
+      const [filtroArea, setFiltroArea] = useState("todos");
+      const [filtroFecha, setFiltroFecha] = useState(() => SersaleBase.hoy());
+      const [expanded, setExpanded] = useState(null);
+      const [editando, setEditando] = useState(null); // reporte en edición
+      const pedidoReportes = React.useRef(0);              // para descartar respuestas viejas de cargar()
+      const colaAjustes = React.useRef(Promise.resolve()); // los toques de +/− se aplican de a uno, en orden
+
+      // Stock state
+      const [stockItems, setStockItems] = useState(null);
+      const [modalStock, setModalStock] = useState(false);
+      const [editStock, setEditStock] = useState(null);
+      const [stockForm, setStockForm] = useState({nombre:"",categoria:"Cocidos",cantidad:"",unidad:"kg",minimo:"",obs:""});
+      const [filtroCategoria, setFiltroCategoria] = useState("todas");
+      const [stockSubTab, setStockSubTab] = useState("items"); // "items" | "movimientos"
+      const [modalSalida, setModalSalida] = useState(false);
+      const [salidaForm, setSalidaForm] = useState({destino:"PP",tipo:"despacho",fecha:"",items:[{nombre:"",cantidad:"",unidad:"piezas"}],obs:""});
+      const [movimientos, setMovimientos] = useState(null);
+
+      // Faena state
+      const [faenas, setFaenas] = useState(null);
+      const [modalFaena, setModalFaena] = useState(false);
+      const [editFaena, setEditFaena] = useState(null);
+      const [faenaForm, setFaenaForm] = useState({fecha:"",tipo:"Cerdo",cantidad:"",pesoTotal:"",pesoPromedio:"",obs:""});
+      const [filtroFaenaMes, setFiltroFaenaMes] = useState(() => SersaleBase.hoy().slice(0,7));
+
+      // Trazabilidad state
+      const [lotes, setLotes] = useState(null);
+      const [modalLote, setModalLote] = useState(false);
+      const [loteDetalle, setLoteDetalle] = useState(null);
+      const [filtroLoteMes, setFiltroLoteMes] = useState(() => SersaleBase.hoy().slice(0,7));
+      const [loteForm, setLoteForm] = useState({
+        fechaElab:"", fechaVenc:"", operario:"",
+        materiasPrimas:[{tipo:"cerdo",corte:"",proveedor:"",kg:""}],
+        productos:[{nombre:"",cantidad:"",unidad:"piezas"}],
+        obs:""
+      });
+
+      /* ── REPORTES ── */
+      async function cargar() {
+        const n = ++pedidoReportes.current;
+        try {
+          const { db, collection, query, getDocs, where, orderBy, Timestamp } = getFirebase();
+          let q;
+          if (filtroFecha) {
+            // El día elegido, de 00:00 a 23:59 de Buenos Aires.
+            const inicio = new Date(filtroFecha + "T00:00:00-03:00");
+            const fin    = new Date(filtroFecha + "T23:59:59.999-03:00");
+            q = query(collection(db,"reportes"), where("fecha",">=",Timestamp.fromDate(inicio)), where("fecha","<=",Timestamp.fromDate(fin)), orderBy("fecha","desc"));
+          } else {
+            q = query(collection(db,"reportes"), orderBy("fecha","desc"));
+          }
+          const snap = await getDocs(q);
+          if (n !== pedidoReportes.current) return; // ya se pidió otro filtro: esta respuesta es vieja
+          const data = snap.docs.map(d=>{ const f = SersaleBase.aFecha(d.data().fecha); return {id:d.id,...d.data(),items:Array.isArray(d.data().items)?d.data().items:[],fechaISO:f?f.toISOString():d.data().fechaISO}; });
+          setReportes(filtroArea==="todos" ? data : data.filter(r=>r.area===filtroArea));
+        } catch(e) {
+          if (n !== pedidoReportes.current) return;
+          setReportes(prev=>prev||[]);
+          avisoError("No se pudieron cargar los reportes. Tocá ↻ para probar de nuevo.", e);
+        }
+      }
+
+      useEffect(()=>{ if(window.__fbReady) cargar(); else document.addEventListener("fbReady",cargar); },[filtroFecha,filtroArea]);
+
+      /* ── EDICIÓN DE REPORTE ── */
+      function abrirEdit(r) {
+        setEditando({
+          id: r.id,
+          encargado: r.encargado,
+          obs: r.obs||"",
+          items: r.items.map(it=>({...it}))
+        });
+      }
+      function updEditItem(i,f,v) {
+        const c = [...editando.items]; c[i][f]=v; setEditando({...editando, items:c});
+      }
+      function addEditItem() {
+        setEditando({...editando, items:[...editando.items,{producto:"",cantidad:"",unidad:"kg",obs:""}]});
+      }
+      function remEditItem(i) {
+        setEditando({...editando, items: editando.items.filter((_,idx)=>idx!==i)});
+      }
+      /* Qué hay que tocar en el stock cuando un reporte cambia (o se elimina: `nuevos` vacío).
+         Se compara, producto por producto, lo cargado en "piezas" antes y ahora:
+         - si la línea ya había sumado al stock (tiene su movimiento de entrada), se aplica la diferencia;
+         - si la línea es nueva, suma como en un reporte nuevo;
+         - si nunca había sumado (el producto no estaba en Stock cuando se envió), no se toca y se avisa. */
+      function planDeReporte(viejos, nuevos, movs, stock, eliminando) {
+        const clave = n => SersaleBase.norm(n);
+        const piezas = lista => {
+          const m = {};
+          (lista||[]).forEach(it=>{
+            if (!it || it.unidad!=="piezas" || !it.producto || it.producto==="Otro") return;
+            const k = clave(it.producto);
+            m[k] = { nombre: it.producto, cant: (m[k]?m[k].cant:0) + numCant(it.cantidad) };
+          });
+          return m;
+        };
+        const antes = piezas(viejos), ahora = piezas(nuevos);
+        const movsDe = {};
+        movs.forEach(m=>{ const k=clave(m.nombre); (movsDe[k]=movsDe[k]||[]).push(m); });
+        const plan = { deltas:{}, actualizar:[], borrar:[], crear:[], sinStock:[], sinImpacto:[], cambios:[] };
+        const sumar = (id, d) => { plan.deltas[id] = SersaleBase.redondear((plan.deltas[id]||0) + d, 3); };
+        new Set([...Object.keys(antes), ...Object.keys(ahora), ...Object.keys(movsDe)]).forEach(k=>{
+          const a = antes[k] ? antes[k].cant : 0, b = ahora[k] ? ahora[k].cant : 0;
+          const ms = movsDe[k] || [];
+          if (ms.length) {
+            const id = ms[0].stockId || (buscarStock(stock, ms[0].nombre)||{}).id;
+            if (id && b !== a) sumar(id, b - a);
+            if (eliminando || (b === 0 && a !== 0)) ms.forEach(m=>plan.borrar.push(m.id));
+            else if (b !== a) {
+              // El movimiento queda con la cantidad nueva del reporte.
+              plan.actualizar.push({ id: ms[0].id, cantidad: b });
+              ms.slice(1).forEach(m=>plan.borrar.push(m.id));
+            }
+          } else if (b > 0 && a === 0) {
+            const st = buscarStock(stock, ahora[k].nombre);
+            if (!st) plan.sinStock.push(ahora[k].nombre);
+            else { sumar(st.id, b); plan.crear.push({ stockId: st.id, nombre: st.nombre, cantidad: b }); }
+          } else if (b > 0 && b !== a) plan.sinImpacto.push(ahora[k].nombre);
+        });
+        return plan;
+      }
+      /* Guarda el cambio de un reporte (o lo elimina si `nuevo` es null) junto con su efecto
+         en el stock y en sus movimientos, todo en una sola transacción. */
+      async function aplicarCambioDeReporte(id, nuevo) {
+        const { db, collection, doc, getDocs, query, where, runTransaction } = getFirebase();
+        if (sinSenal()) throw new Error("sin conexión");
+        const movSnap = await getDocs(query(collection(db,"stock_movimientos"), where("ref","==",id)));
+        const idsMov = movSnap.docs.filter(d=>d.data().tipo==="entrada").map(d=>d.id);
+        const stock = await leerStock();
+        const repRef = doc(db,"reportes",id);
+        return runTransaction(db, async tx => {
+          const repSnap = await tx.get(repRef);
+          if (!repSnap.exists()) { const e = new Error("el reporte ya no existe"); e.yaNoExiste = true; throw e; }
+          const movs = [];
+          for (const mid of idsMov) { const m = await tx.get(doc(db,"stock_movimientos",mid)); if (m.exists()) movs.push({id:m.id,...m.data()}); }
+          const plan = planDeReporte(repSnap.data().items, nuevo ? nuevo.items : [], movs, stock, !nuevo);
+          const ids = Object.keys(plan.deltas).filter(sid=>plan.deltas[sid]);
+          const snaps = [];
+          for (const sid of ids) snaps.push(await tx.get(doc(db,"stock_produccion",sid)));
+          const ahora = new Date().toISOString();
+          snaps.forEach((st,i)=>{
+            if (!st.exists()) return; // el ítem de stock ya no existe: no hay nada que corregir
+            const antes = parseFloat(st.data().cantidad)||0;
+            const despues = SersaleBase.redondear(Math.max(0, antes + plan.deltas[ids[i]]), 3);
+            tx.update(st.ref, { cantidad: despues, updatedAt: ahora });
+            plan.cambios.push({ nombre: st.data().nombre, delta: plan.deltas[ids[i]] });
+          });
+          plan.actualizar.forEach(m=>tx.update(doc(db,"stock_movimientos",m.id), { cantidad: m.cantidad }));
+          plan.borrar.forEach(mid=>tx.delete(doc(db,"stock_movimientos",mid)));
+          plan.crear.forEach(m=>tx.set(doc(collection(db,"stock_movimientos")), {
+            stockId: m.stockId, nombre: m.nombre,
+            tipo: "entrada", subtipo: "produccion",
+            cantidad: m.cantidad, unidad: "piezas",
+            ref: id, encargado: (nuevo ? nuevo.encargado : repSnap.data().encargado) || "",
+            fecha: SersaleBase.hoy(),
+            createdAt: ahora
+          }));
+          if (nuevo) tx.update(repRef, nuevo); else tx.delete(repRef);
+          return plan;
+        });
+      }
+      const resumenStock = plan => plan.cambios.map(c=>`${c.nombre} ${c.delta>0?"+":"−"}${fmtN(Math.abs(c.delta))}`).join(", ");
+
+      const [guardarEdit, guardandoEdit] = SersaleBase.useAccion(async () => {
+        const incompleta = filaIncompleta(editando.items, "producto");
+        if (incompleta) return avisoError(incompleta);
+        const val = editando.items.filter(it=>it.producto&&it.cantidad);
+        if (!val.length) return avisoError("Al menos un producto con cantidad");
+        try {
+          const plan = await aplicarCambioDeReporte(editando.id, {
+            encargado: editando.encargado,
+            items: val,
+            obs: editando.obs,
+            editadoEn: new Date().toISOString()
+          });
+          setEditando(null);
+          cargar();
+          if (stockItems) cargarStock();
+          SersaleUI.toast(plan.cambios.length ? "Reporte guardado. Stock corregido: " + resumenStock(plan) : "Reporte guardado", { tipo:"ok", ms: plan.cambios.length ? 6000 : undefined });
+          const avisos = [];
+          if (plan.sinStock.length) avisos.push("No figuran en Stock de Producción, así que no sumaron al stock:\n• " + plan.sinStock.join("\n• "));
+          if (plan.sinImpacto.length) avisos.push("No habían sumado al stock cuando se envió el reporte, así que el stock no se tocó:\n• " + plan.sinImpacto.join("\n• "));
+          if (avisos.length) SersaleUI.aviso(avisos.join("\n\n") + "\n\nSi corresponde, ajustá el stock a mano.", { titulo:"Stock sin actualizar" });
+        } catch(e) {
+          if (e && e.yaNoExiste) { setEditando(null); cargar(); return avisoError("Ese reporte ya no existe: lo eliminaron desde otro teléfono.", e); }
+          avisoError(msgNoGuardo(), e);
+        }
+      });
+      const [eliminarReporte] = SersaleBase.useAccion(async (id) => {
+        const r = (reportes||[]).find(x=>x.id===id);
+        const sumaStock = r && (r.items||[]).some(it=>it.unidad==="piezas");
+        const ok = await SersaleUI.confirmar({
+          titulo: "¿Eliminar este reporte?",
+          cuerpo: (r ? `${areaDe(r.area).label} · ${r.encargado||""}` : "") + (sumaStock ? "\n\nLas piezas que este reporte había sumado al stock se descuentan." : ""),
+          aceptar: "Eliminar", peligro: true
+        });
+        if (!ok) return;
+        try {
+          const plan = await aplicarCambioDeReporte(id, null);
+          setReportes(prev=>(prev||[]).filter(x=>x.id!==id));
+          setExpanded(null);
+          if (stockItems) cargarStock();
+          SersaleUI.toast(plan.cambios.length ? "Reporte eliminado. Stock corregido: " + resumenStock(plan) : "Reporte eliminado", { tipo:"ok", ms: plan.cambios.length ? 6000 : undefined });
+        } catch(e) {
+          if (e && e.yaNoExiste) { setReportes(prev=>(prev||[]).filter(x=>x.id!==id)); return; }
+          avisoError(sinSenal() ? "Sin conexión: no se eliminó. Probá de nuevo cuando vuelva la señal." : "No se pudo eliminar. Probá de nuevo.", e);
+        }
+      });
+
+      /* ── STOCK ── */
+      async function cargarStock() {
+        try {
+          const lista = await leerStock();
+          setStockItems(lista);
+          return lista;
+        } catch(e) {
+          setStockItems(prev=>prev||[]);
+          avisoError("No se pudo cargar el stock. Probá de nuevo.", e);
+          return null;
+        }
+      }
+      // El stock se trae al entrar al panel (para el aviso de stock bajo en la pestaña) y cada vez que se abre la pestaña.
+      useEffect(()=>{ if(tab==="stock"||stockItems===null){ if(window.__fbReady) cargarStock(); else document.addEventListener("fbReady",cargarStock); } },[tab]);
+
+      async function cargarMovimientos() {
+        try {
+          const { db, collection, getDocs, query, orderBy } = getFirebase();
+          const snap = await getDocs(query(collection(db,"stock_movimientos"), orderBy("createdAt","desc")));
+          setMovimientos(snap.docs.map(d=>({id:d.id,...d.data()})));
+        } catch(e) { setMovimientos(prev=>prev||[]); avisoError("No se pudieron cargar los movimientos. Probá de nuevo.", e); }
+      }
+      useEffect(()=>{ if(tab==="stock"&&stockSubTab==="movimientos"){ if(window.__fbReady) cargarMovimientos(); else document.addEventListener("fbReady",cargarMovimientos); } },[tab,stockSubTab]);
+
+      function abrirModalSalida() {
+        const hoy = SersaleBase.hoy();
+        setSalidaForm({destino:"PP",tipo:"despacho",fecha:hoy,items:[{nombre:"",cantidad:"",unidad:"piezas"}],obs:""});
+        setModalSalida(true);
+      }
+      function updSalidaItem(i,f,v){
+        const c=[...salidaForm.items]; c[i]={...c[i],[f]:v};
+        // Al completar el nombre de un ítem de stock, la unidad pasa a ser la del ítem.
+        if(f==="nombre"){ const s=buscarStock(stockItems||[], v.trim()); if(s&&s.unidad) c[i].unidad=s.unidad; }
+        setSalidaForm({...salidaForm,items:c});
+      }
+      function addSalidaItem(){ setSalidaForm({...salidaForm,items:[...salidaForm.items,{nombre:"",cantidad:"",unidad:"piezas"}]}); }
+      function remSalidaItem(i){ setSalidaForm({...salidaForm,items:salidaForm.items.filter((_,idx)=>idx!==i)}); }
+
+      const [guardarSalida, guardandoSalida] = SersaleBase.useAccion(async () => {
+        const incompleta = filaIncompleta(salidaForm.items, "nombre");
+        if(incompleta) return avisoError(incompleta);
+        const val = salidaForm.items.filter(it=>String(it.nombre||"").trim()&&it.cantidad);
+        if(!val.length) return avisoError("Agregá al menos un producto con cantidad");
+        if(!salidaForm.fecha) return avisoError("Seleccioná una fecha");
+        try {
+          const { db, collection, doc } = getFirebase();
+          // 1. Se revisan todas las líneas antes de tocar nada: si una no se puede registrar, no se registra ninguna
+          //    (antes se descontaban las que coincidían, se cerraba el formulario y al cargarlo de nuevo se descontaban dos veces).
+          const stock = await leerStock();
+          const filas = [], sinStock = [], otraUnidad = [];
+          for (const it of val) {
+            const nombre = String(it.nombre).trim();
+            const s = buscarStock(stock, nombre);
+            if(!s) sinStock.push(nombre);
+            else if(s.unidad && it.unidad!==s.unidad) otraUnidad.push(`${s.nombre}: en Stock se lleva en ${s.unidad}, no en ${it.unidad}`);
+            else filas.push({ s, unidad: it.unidad, cant: numCant(it.cantidad) });
+          }
+          if(sinStock.length || otraUnidad.length) {
+            SersaleUI.aviso(
+              (sinStock.length ? "No figuran en Stock de Producción:\n• "+sinStock.join("\n• ")+"\n\n" : "") +
+              (otraUnidad.length ? "La unidad no coincide:\n• "+otraUnidad.join("\n• ")+"\n\n" : "") +
+              "Todavía no se descontó nada. Corregí esas líneas y confirmá de nuevo.",
+              { titulo:"No se registró la salida" });
+            return;
+          }
+          const deltas = {};
+          filas.forEach(f=>{ deltas[f.s.id] = (deltas[f.s.id]||0) - f.cant; });
+          // 2. Si sale más de lo que figura, se pregunta (el stock no baja de 0).
+          const cortos = stock.filter(s=>deltas[s.id] && (parseFloat(s.cantidad)||0) + deltas[s.id] < 0);
+          if(cortos.length) {
+            const ok = await SersaleUI.confirmar({
+              titulo: "Sale más de lo que hay en stock",
+              cuerpo: cortos.map(s=>`• ${s.nombre}: hay ${fmtN(parseFloat(s.cantidad)||0)} ${s.unidad||""} y salen ${fmtN(-deltas[s.id])}`).join("\n") + "\n\nSi seguís, el stock de esos productos queda en 0.",
+              aceptar: "Registrar igual"
+            });
+            if(!ok) return;
+          }
+          // 3. Stock y movimientos se guardan juntos, leyendo la cantidad del servidor en ese momento.
+          const ahora = new Date().toISOString();
+          const res = await moverStock(deltas, (tx, res) => {
+            const borrado = filas.find(f=>!res[f.s.id]);
+            if(borrado) { const e = new Error("ítem de stock eliminado"); e.itemBorrado = borrado.s.nombre; throw e; }
+            filas.forEach(f=>tx.set(doc(collection(db,"stock_movimientos")), {
+              stockId: f.s.id,
+              nombre: f.s.nombre, tipo:"salida",
+              subtipo: salidaForm.tipo,
+              destino: salidaForm.tipo==="despacho"?salidaForm.destino:salidaForm.tipo==="venta"?"Planta":"Cliente",
+              cantidad: f.cant, unidad: f.unidad,
+              fecha: salidaForm.fecha, obs: salidaForm.obs.trim(),
+              createdAt: ahora
+            }));
+          });
+          setModalSalida(false);
+          SersaleUI.toast("Salida registrada", { tipo:"ok" });
+          // Aviso por WhatsApp solo de lo que esta salida dejó en el mínimo o por debajo.
+          const bajos = cruzaronMinimo(res);
+          if(bajos.length) sendStockAlert(bajos);
+          await cargarStock();
+          if(stockSubTab==="movimientos") await cargarMovimientos();
+        } catch(e){
+          if(e && e.itemBorrado) { cargarStock(); return avisoError(`"${e.itemBorrado}" ya no está en Stock. No se registró nada.`, e); }
+          avisoError(msgNoGuardo(), e);
+        }
+      });
+
+      function abrirModalStock(item=null) {
+        if(item) {
+          setEditStock(item.id);
+          setStockForm({_id:item.id,nombre:item.nombre,categoria:item.categoria||"Cocidos",cantidad:item.cantidad,cantidadAlAbrir:item.cantidad,unidad:item.unidad||"kg",minimo:item.minimo||"",obs:item.obs||""});
+          refrescarCantidad(item.id);
+        } else {
+          setEditStock(null);
+          setStockForm({nombre:"",categoria:"Cocidos",cantidad:"",unidad:"kg",minimo:"",obs:""});
+        }
+        setModalStock(true);
+      }
+      // La lista en pantalla puede estar vieja (otro teléfono cargó producción o una salida):
+      // al abrir "Editar" se trae la cantidad al día y, si todavía no se tocó en el formulario, se muestra esa.
+      async function refrescarCantidad(id) {
         try {
           const { db, doc, getDoc } = getFirebase();
-          const cfgDoc = await getDoc(doc(db,"config","whatsapp"));
-          if(!cfgDoc.exists()) return;
-          const { phone, apikey } = cfgDoc.data();
-          if(!phone||!apikey) return;
-          const lista = items.map(s=>`⚠️ ${s.nombre}: ${s.cantidad} ${s.unidad} (mín. ${s.minimo})`).join("%0A");
-          const msg = encodeURIComponent(`🔴 STOCK BAJO — Frigorífico Sersale%0A${lista}%0AFecha: ${new Date().toLocaleDateString("es-AR")}`);
-          await fetch(`https://api.callmebot.com/whatsapp.php?phone=${phone}&apikey=${apikey}&text=${msg}`);
-        } catch(e){ console.error("Error WA notif:", e); }
+          const d = await getDoc(doc(db,"stock_produccion",id));
+          if(!d.exists()) return;
+          const c = d.data().cantidad;
+          setStockForm(f=>(f._id===id && String(f.cantidad)===String(f.cantidadAlAbrir)) ? {...f,cantidad:c,cantidadAlAbrir:c} : f);
+          setStockItems(prev=>(prev||[]).map(s=>s.id===id?{...s,cantidad:c}:s));
+        } catch(e) { console.error(e); }
+      }
+      const [guardarStock, guardandoStock] = SersaleBase.useAccion(async () => {
+        if (!stockForm.nombre.trim()) return avisoError("Ingresá el nombre");
+        if (stockForm.cantidad === "") return avisoError("Ingresá la cantidad");
+        if (numCant(stockForm.cantidad) < 0 || numCant(stockForm.minimo) < 0) return avisoError("La cantidad y el mínimo no pueden ser negativos");
+        // Dos ítems con el mismo nombre hacen que la producción y las salidas impacten en uno cualquiera.
+        const actual = editStock ? (stockItems||[]).find(s=>s.id===editStock) : null;
+        if (!actual || !SersaleBase.mismoNombre(actual.nombre, stockForm.nombre)) {
+          const repetido = (stockItems||[]).find(s=>s.id!==editStock && SersaleBase.mismoNombre(s.nombre, stockForm.nombre));
+          if (repetido) return avisoError(`Ya hay un ítem que se llama "${repetido.nombre}"`);
+        }
+        try {
+          const { db, collection, addDoc, doc, updateDoc } = getFirebase();
+          const data = {
+            nombre: stockForm.nombre.trim(),
+            categoria: stockForm.categoria,
+            cantidad: parseFloat(stockForm.cantidad)||0,
+            unidad: stockForm.unidad,
+            minimo: parseFloat(stockForm.minimo)||0,
+            obs: stockForm.obs.trim(),
+            updatedAt: new Date().toISOString()
+          };
+          if (editStock) {
+            // Si en el formulario no se tocó la cantidad, no se reescribe: así cambiar el mínimo o el
+            // nombre no pisa la producción o las salidas que se cargaron mientras tanto.
+            if (String(stockForm.cantidad) === String(stockForm.cantidadAlAbrir)) delete data.cantidad;
+            await updateDoc(doc(db,"stock_produccion",editStock), data);
+            setStockItems(prev=>(prev||[]).map(s=>s.id===editStock?{...s,...data}:s));
+          } else {
+            const ref = await addDoc(collection(db,"stock_produccion"), data);
+            setStockItems(prev=>[...(prev||[]), {id:ref.id,...data}].sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))));
+          }
+          setModalStock(false);
+          SersaleUI.toast("Ítem guardado", { tipo:"ok" });
+        } catch(e) { avisoError(msgNoGuardo(), e); }
+      });
+      const [eliminarStock] = SersaleBase.useAccion(async (id) => {
+        const it = (stockItems||[]).find(s=>s.id===id);
+        const ok = await SersaleUI.confirmar({ titulo:"¿Eliminar este ítem?", cuerpo: it ? `${it.nombre} · ${fmtN(it.cantidad)} ${it.unidad||""}` : "", aceptar:"Eliminar", peligro:true });
+        if (!ok) return;
+        try {
+          const { db, doc, deleteDoc } = getFirebase();
+          await deleteDoc(doc(db,"stock_produccion",id));
+          setStockItems(prev=>(prev||[]).filter(s=>s.id!==id));
+        } catch(e) { avisoError("No se pudo eliminar. Probá de nuevo.", e); }
+      });
+      /* Botones + y −: cada toque suma o resta 1 sobre lo que hay en el servidor en ese
+         momento (transacción), no sobre el número que quedó dibujado en la pantalla.
+         Los toques seguidos se aplican de a uno y en orden, así no se pierde ninguno. */
+      function ajustarCantidad(item, delta) {
+        colaAjustes.current = colaAjustes.current.then(async () => {
+          try {
+            const res = await moverStock({ [item.id]: delta });
+            const r = res[item.id];
+            if (!r) { cargarStock(); return avisoError("Ese ítem ya no está en Stock."); }
+            setStockItems(prev=>(prev||[]).map(s=>s.id===item.id?{...s,cantidad:r.despues}:s));
+            // Aviso por WhatsApp solo cuando este toque lo deja en el mínimo (no en cada toque siguiente).
+            if (delta<0) { const bajos = cruzaronMinimo(res); if (bajos.length) sendStockAlert(bajos); }
+          } catch(e) { avisoError(sinSenal() ? "Sin conexión: el stock no se cambió." : "No se pudo cambiar el stock. Probá de nuevo.", e); }
+        });
       }
 
       /* ── FAENA ── */
+      const ordenarFaenas = lista => [...lista].sort((a,b)=>String(b.fecha||"").localeCompare(String(a.fecha||"")));
       async function cargarFaenas() {
         try {
           const { db, collection, getDocs, query, orderBy } = getFirebase();
           const snap = await getDocs(query(collection(db,"faenas"), orderBy("fecha","desc")));
-          setFaenas(snap.docs.map(d=>({id:d.id,...d.data()})));
-        } catch(e) { console.error(e); setFaenas([]); }
+          const lista = snap.docs.map(d=>({id:d.id,...d.data()}));
+          setFaenas(lista);
+          return lista;
+        } catch(e) { setFaenas(prev=>prev||[]); avisoError("No se pudo cargar la faena. Probá de nuevo.", e); return null; }
       }
       useEffect(()=>{ if(tab==="faena"){ if(window.__fbReady) cargarFaenas(); else document.addEventListener("fbReady",cargarFaenas); } },[tab]);
 
@@ -540,15 +778,19 @@
           setFaenaForm({fecha:item.fecha,tipo:item.tipo,cantidad:item.cantidad,pesoTotal:item.pesoTotal||"",pesoPromedio:item.pesoPromedio||"",obs:item.obs||""});
         } else {
           setEditFaena(null);
-          const hoy = new Date().toISOString().split("T")[0];
+          const hoy = SersaleBase.hoy();
           setFaenaForm({fecha:hoy,tipo:"Cerdo",cantidad:"",pesoTotal:"",pesoPromedio:"",obs:""});
         }
         setModalFaena(true);
       }
-      async function guardarFaena() {
-        if (!faenaForm.fecha) return alert("Seleccioná una fecha");
-        if (!faenaForm.cantidad) return alert("Ingresá la cantidad de animales");
-        setGuardandoFaena(true);
+      // Peso promedio = peso total / cabezas. Se recalcula cuando cambia cualquiera de los dos.
+      function promedioFaena(cabezas, pesoTotal) {
+        const c = parseFloat(cabezas)||0, pt = parseFloat(pesoTotal)||0;
+        return c>0 && pt>0 ? Math.round(pt/c*10)/10 : "";
+      }
+      const [guardarFaena, guardandoFaena] = SersaleBase.useAccion(async () => {
+        if (!faenaForm.fecha) return avisoError("Seleccioná una fecha");
+        if (!(parseInt(faenaForm.cantidad)>0)) return avisoError("Ingresá la cantidad de animales");
         try {
           const { db, collection, addDoc, doc, updateDoc } = getFirebase();
           const data = {
@@ -557,32 +799,37 @@
             cantidad: parseInt(faenaForm.cantidad)||0,
             pesoTotal: parseFloat(faenaForm.pesoTotal)||0,
             pesoPromedio: parseFloat(faenaForm.pesoPromedio)||0,
-            obs: faenaForm.obs.trim(),
-            createdAt: new Date().toISOString()
+            obs: faenaForm.obs.trim()
           };
+          const ahora = new Date().toISOString();
           if(editFaena) {
-            await updateDoc(doc(db,"faenas",editFaena), data);
-            setFaenas(faenas.map(f=>f.id===editFaena?{...f,...data}:f));
+            // createdAt no se toca al editar: es cuándo se cargó el registro.
+            await updateDoc(doc(db,"faenas",editFaena), {...data, updatedAt: ahora});
+            setFaenas(prev=>ordenarFaenas((prev||[]).map(f=>f.id===editFaena?{...f,...data,updatedAt:ahora}:f)));
           } else {
-            const ref = await addDoc(collection(db,"faenas"), data);
-            setFaenas([{id:ref.id,...data},...(faenas||[])]);
+            const nueva = {...data, createdAt: ahora};
+            const ref = await addDoc(collection(db,"faenas"), nueva);
+            setFaenas(prev=>ordenarFaenas([{id:ref.id,...nueva},...(prev||[])]));
           }
           setModalFaena(false);
-        } catch(e) { alert("Error al guardar"); console.error(e); }
-        setGuardandoFaena(false);
-      }
-      async function eliminarFaena(id) {
-        if(!confirm("¿Eliminar este registro de faena?")) return;
+          SersaleUI.toast("Faena guardada", { tipo:"ok" });
+        } catch(e) { avisoError(msgNoGuardo(), e); }
+      });
+      const [eliminarFaena] = SersaleBase.useAccion(async (id) => {
+        const f = (faenas||[]).find(x=>x.id===id);
+        const ok = await SersaleUI.confirmar({ titulo:"¿Eliminar este registro de faena?", cuerpo: f ? `${fmt(f.fecha)} · ${f.cantidad} ${f.tipo||""}` : "", aceptar:"Eliminar", peligro:true });
+        if(!ok) return;
         try {
           const { db, doc, deleteDoc } = getFirebase();
           await deleteDoc(doc(db,"faenas",id));
-          setFaenas(faenas.filter(f=>f.id!==id));
-        } catch(e) { alert("Error"); }
-      }
+          setFaenas(prev=>(prev||[]).filter(x=>x.id!==id));
+        } catch(e) { avisoError("No se pudo eliminar. Probá de nuevo.", e); }
+      });
 
       /* ── TRAZABILIDAD ── */
+      const loteVacio = () => ({fechaElab:"",fechaVenc:"",operario:"",materiasPrimas:[{tipo:"cerdo",corte:"",proveedor:"",kg:""}],productos:[{nombre:"",cantidad:"",unidad:"piezas"}],obs:""});
       function generarNumeroLote(fecha, seq) {
-        const d = fecha || new Date().toISOString().split("T")[0];
+        const d = fecha || SersaleBase.hoy();
         const num = String(seq).padStart(3,"0");
         return d.replace(/-/g,"") + "-" + num;
       }
@@ -590,11 +837,24 @@
         try {
           const { db, collection, getDocs, query, orderBy } = getFirebase();
           const snap = await getDocs(query(collection(db,"trazabilidad_lotes"), orderBy("fechaElab","desc")));
-          setLotes(snap.docs.map(d=>({id:d.id,...d.data()})));
-        } catch(e){ console.error(e); setLotes([]); }
+          const lista = snap.docs.map(d=>({id:d.id,...d.data()}));
+          setLotes(lista);
+          return lista;
+        } catch(e){ setLotes(prev=>prev||[]); avisoError("No se pudieron cargar los lotes. Probá de nuevo.", e); return null; }
       }
       useEffect(()=>{ if(tab==="trazabilidad"){ if(window.__fbReady) cargarLotes(); else document.addEventListener("fbReady",cargarLotes); } },[tab]);
 
+      function abrirModalLote() {
+        // Formulario sin fecha: se propone hoy, con vencimiento a 30 días (las dos se pueden cambiar).
+        if (!loteForm.fechaElab) { const hoy = SersaleBase.hoy(); setLoteForm({...loteForm, fechaElab:hoy, fechaVenc:loteForm.fechaVenc||SersaleBase.sumarDias(hoy,30)}); }
+        setModalLote(true);
+      }
+      // El vencimiento propuesto (elaboración + 30 días) acompaña a la fecha de elaboración
+      // mientras no se haya escrito un vencimiento a mano.
+      function cambiarFechaElab(d) {
+        const propuesto = d ? SersaleBase.sumarDias(d,30) : "";
+        setLoteForm({...loteForm, fechaElab:d, fechaVenc:(loteForm.vencManual&&loteForm.fechaVenc) ? loteForm.fechaVenc : propuesto});
+      }
       function addMateriaPrima(){ setLoteForm({...loteForm,materiasPrimas:[...loteForm.materiasPrimas,{tipo:"cerdo",corte:"",proveedor:"",kg:""}]}); }
       function updMP(i,f,v){ const a=[...loteForm.materiasPrimas]; a[i][f]=v; setLoteForm({...loteForm,materiasPrimas:a}); }
       function remMP(i){ setLoteForm({...loteForm,materiasPrimas:loteForm.materiasPrimas.filter((_,idx)=>idx!==i)}); }
@@ -602,20 +862,22 @@
       function updProd(i,f,v){ const a=[...loteForm.productos]; a[i][f]=v; setLoteForm({...loteForm,productos:a}); }
       function remProd(i){ setLoteForm({...loteForm,productos:loteForm.productos.filter((_,idx)=>idx!==i)}); }
 
-      async function guardarLote() {
-        if(!loteForm.fechaElab) return alert("Ingresá la fecha de elaboración");
-        if(!loteForm.fechaVenc) return alert("Ingresá la fecha de vencimiento");
-        if(!loteForm.operario.trim()) return alert("Ingresá el operario responsable");
-        if(loteForm.materiasPrimas.some(m=>!m.proveedor||!m.kg)) return alert("Completá todas las materias primas");
-        if(loteForm.productos.some(p=>!p.nombre||!p.cantidad)) return alert("Completá todos los productos");
-        setGuardandoLote(true);
+      const [guardarLote, guardandoLote] = SersaleBase.useAccion(async () => {
+        if(!loteForm.fechaElab) return avisoError("Ingresá la fecha de elaboración");
+        if(!loteForm.fechaVenc) return avisoError("Ingresá la fecha de vencimiento");
+        if(loteForm.fechaVenc < loteForm.fechaElab) return avisoError("El vencimiento no puede ser anterior a la elaboración");
+        if(!loteForm.operario.trim()) return avisoError("Ingresá el operario responsable");
+        if(loteForm.materiasPrimas.some(m=>!m.proveedor||!m.kg)) return avisoError("Completá todas las materias primas");
+        if(loteForm.productos.some(p=>!p.nombre||!p.cantidad)) return avisoError("Completá todos los productos");
         try {
           const { db, collection, addDoc, getDocs, query, orderBy } = getFirebase();
           // Generar número de lote automático
           const hoy = loteForm.fechaElab.replace(/-/g,"");
           const snap = await getDocs(query(collection(db,"trazabilidad_lotes"), orderBy("nroLote","desc")));
           const existing = snap.docs.map(d=>d.data().nroLote||"").filter(n=>n.startsWith(hoy));
-          const seq = existing.length + 1;
+          // Siguiente número del día: el más alto ya usado + 1 (contar los lotes repetía un número si faltaba alguno).
+          const usados = existing.map(n=>parseInt(String(n).split("-")[1],10)||0);
+          const seq = Math.max(existing.length, ...usados) + 1;
           const nroLote = generarNumeroLote(loteForm.fechaElab, seq);
           await addDoc(collection(db,"trazabilidad_lotes"), {
             nroLote, fechaElab: loteForm.fechaElab, fechaVenc: loteForm.fechaVenc,
@@ -627,10 +889,30 @@
           });
           setLotes(null); cargarLotes();
           setModalLote(false);
-          setLoteForm({fechaElab:"",fechaVenc:"",operario:"",materiasPrimas:[{tipo:"cerdo",corte:"",proveedor:"",kg:""}],productos:[{nombre:"",cantidad:"",unidad:"piezas"}],obs:""});
-        } catch(e){ alert("Error al guardar"); console.error(e); }
-        setGuardandoLote(false);
-      }
+          setLoteForm(loteVacio());
+          SersaleUI.toast("Lote " + nroLote + " registrado", { tipo:"ok" });
+        } catch(e){ avisoError(msgNoGuardo(), e); }
+      });
+
+      /* ── EXPORTAR ── */
+      // El PDF y el Excel se arman con lo que haya en la base, no con lo que se haya abierto en pantalla:
+      // antes, sin entrar a Stock, Faena y Lotes, el archivo salía vacío.
+      const [exportar, exportando] = SersaleBase.useAccion(async (tipo) => {
+        try {
+          const stock = getChk("rep-stock")||getChk("rep-stockalerta") ? ((await cargarStock()) || stockItems) : null;
+          const fa = getChk("rep-faena") ? ((await cargarFaenas()) || faenas) : null;
+          const lo = getChk("rep-lotes") ? ((await cargarLotes()) || lotes) : null;
+          const datos = {
+            stock: getChk("rep-stock") ? stock : null,
+            alerta: getChk("rep-stockalerta") && stock ? stock.filter(s=>s.minimo>0&&s.cantidad<=s.minimo) : null,
+            faenas: fa ? fa.filter(f=>f.fecha&&f.fecha.startsWith(filtroFaenaMes)) : null, // solo el mes elegido, como dice el título
+            lotes: lo
+          };
+          if (!datos.stock && !datos.alerta && !datos.faenas && !datos.lotes) return avisoError("Elegí al menos una sección (o no se pudieron cargar los datos)");
+          if (tipo==="pdf") generarPDFProd(datos); else generarExcelProd(datos);
+          setShowReportModal(false);
+        } catch(e) { avisoError("No se pudo generar el reporte. Probá de nuevo.", e); }
+      });
 
       /* ── TOTALES DIA ── */
       const totalesDia = {};
@@ -651,7 +933,7 @@
       /* ── MODAL EDIT REPORTE ── */
       if (editando) {
         const area = reportes?.find(r=>r.id===editando.id)?.area;
-        const A = area ? AREAS[area] : null;
+        const A = (area && AREAS[area]) || null;
         return (
           <div style={{minHeight:"100vh",background:"#F2F3F5",maxWidth:"var(--app-max-w)",margin:"0 auto"}}>
             <div className="chapa" style={{background:"#12161A",borderBottom:"2px solid #A4232A",color:"#fff",padding:"16px 20px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:10,boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}>
@@ -682,7 +964,7 @@
                   )}
                   <div style={{display:"flex",gap:8,marginTop:8}}>
                     <input style={{flex:1,padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
-                      type="number" placeholder="Cantidad" value={item.cantidad} onChange={e=>updEditItem(i,"cantidad",e.target.value)} />
+                      type="number" inputMode="decimal" min="0" step="any" placeholder="Cantidad" value={item.cantidad} onChange={e=>updEditItem(i,"cantidad",e.target.value)} />
                     <select style={{width:120,padding:"12px 10px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                       value={item.unidad} onChange={e=>updEditItem(i,"unidad",e.target.value)}>
                       {UNIDADES.map(u=><option key={u} value={u}>{u}</option>)}
@@ -722,17 +1004,12 @@
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:12,color:"#3A424A",marginBottom:5}}>Fecha elaboración *</label>
                 <input type="date" style={{width:"100%",padding:"10px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
-                  value={loteForm.fechaElab} onChange={e=>{
-                    const d=e.target.value;
-                    const venc=new Date(d); venc.setDate(venc.getDate()+30);
-                    const vencStr=venc.toISOString().split("T")[0];
-                    setLoteForm({...loteForm,fechaElab:d,fechaVenc:loteForm.fechaVenc||vencStr});
-                  }} />
+                  value={loteForm.fechaElab} onChange={e=>cambiarFechaElab(e.target.value)} />
               </div>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:12,color:"#3A424A",marginBottom:5}}>Fecha vencimiento *</label>
                 <input type="date" style={{width:"100%",padding:"10px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
-                  value={loteForm.fechaVenc} onChange={e=>setLoteForm({...loteForm,fechaVenc:e.target.value})} />
+                  value={loteForm.fechaVenc} onChange={e=>setLoteForm({...loteForm,fechaVenc:e.target.value,vencManual:!!e.target.value})} />
               </div>
             </div>
             <div style={{marginBottom:12}}>
@@ -762,7 +1039,7 @@
                   <input style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                     placeholder="Proveedor / tropa" value={mp.proveedor} onChange={e=>updMP(i,"proveedor",e.target.value)} />
                   <div style={{display:"flex",alignItems:"center",gap:4}}>
-                    <input type="number" style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
+                    <input type="number" inputMode="decimal" style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                       placeholder="Kg" value={mp.kg} onChange={e=>updMP(i,"kg",e.target.value)} />
                     <span style={{fontSize:11,color:"#79828B"}}>kg</span>
                   </div>
@@ -784,7 +1061,7 @@
                 <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:8}}>
                   <input style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                     placeholder="Nombre del producto" value={p.nombre} onChange={e=>updProd(i,"nombre",e.target.value)} />
-                  <input type="number" style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
+                  <input type="number" inputMode="decimal" style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                     placeholder="Cant." value={p.cantidad} onChange={e=>updProd(i,"cantidad",e.target.value)} />
                   <select style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                     value={p.unidad} onChange={e=>updProd(i,"unidad",e.target.value)}>
@@ -852,6 +1129,8 @@
               </div>
             )}
             <p style={{fontWeight:700,fontSize:13,color:"#5C666F",textTransform:"uppercase",letterSpacing:1,margin:"0 0 10px"}}>Productos</p>
+            {/* Sugerencias con los nombres de Stock, para no tener que escribirlos enteros */}
+            <datalist id="stock-nombres">{(stockItems||[]).map(s=><option key={s.id} value={s.nombre} />)}</datalist>
             {salidaForm.items.map((it,i)=>(
               <div key={i} style={{background:"#F7F8F9",borderRadius:10,padding:12,marginBottom:8}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
@@ -859,10 +1138,10 @@
                   {salidaForm.items.length>1&&<button onClick={()=>remSalidaItem(i)} style={{background:"#fee",color:"#A4232A",border:"1px solid #fcc",borderRadius:6,padding:"2px 8px",cursor:"pointer",fontSize:12}}>✕</button>}
                 </div>
                 <input style={{width:"100%",padding:"10px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",marginBottom:8}}
-                  placeholder="Nombre del producto (debe coincidir con stock)" value={it.nombre}
+                  placeholder="Nombre del producto (como figura en Stock)" value={it.nombre} list="stock-nombres" autoComplete="off"
                   onChange={e=>updSalidaItem(i,"nombre",e.target.value)} />
                 <div style={{display:"flex",gap:8}}>
-                  <input type="number" style={{flex:1,padding:"10px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                  <input type="number" inputMode="decimal" style={{flex:1,padding:"10px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                     placeholder="Cantidad" value={it.cantidad} onChange={e=>updSalidaItem(i,"cantidad",e.target.value)} />
                   <select style={{width:110,padding:"10px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                     value={it.unidad} onChange={e=>updSalidaItem(i,"unidad",e.target.value)}>
@@ -911,17 +1190,17 @@
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Cabezas *</label>
-                <input type="number" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
-                  placeholder="0" value={faenaForm.cantidad} onChange={e=>setFaenaForm({...faenaForm,cantidad:e.target.value})} />
+                <input type="number" inputMode="numeric" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                  placeholder="0" value={faenaForm.cantidad} onChange={e=>{ const c=e.target.value; setFaenaForm({...faenaForm,cantidad:c,pesoPromedio:faenaForm.pesoTotal?promedioFaena(c,faenaForm.pesoTotal):faenaForm.pesoPromedio}); }} />
               </div>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Peso total (kg)</label>
-                <input type="number" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
-                  placeholder="0" value={faenaForm.pesoTotal} onChange={e=>{ const pt=e.target.value; const cant=parseFloat(faenaForm.cantidad)||0; const pp=cant>0&&pt?Math.round(parseFloat(pt)/cant*10)/10:""; setFaenaForm({...faenaForm,pesoTotal:pt,pesoPromedio:pp}); }} />
+                <input type="number" inputMode="decimal" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                  placeholder="0" value={faenaForm.pesoTotal} onChange={e=>{ const pt=e.target.value; setFaenaForm({...faenaForm,pesoTotal:pt,pesoPromedio:promedioFaena(faenaForm.cantidad,pt)}); }} />
               </div>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Peso prom. (kg)</label>
-                <input type="number" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <input type="number" inputMode="decimal" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   placeholder="0" value={faenaForm.pesoPromedio} onChange={e=>setFaenaForm({...faenaForm,pesoPromedio:e.target.value})} />
               </div>
             </div>
@@ -967,12 +1246,12 @@
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Cantidad actual *</label>
-                <input type="number" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <input type="number" inputMode="decimal" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   placeholder="0" value={stockForm.cantidad} onChange={e=>setStockForm({...stockForm,cantidad:e.target.value})} />
               </div>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Mínimo alerta</label>
-                <input type="number" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <input type="number" inputMode="decimal" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   placeholder="0 = sin alerta" value={stockForm.minimo} onChange={e=>setStockForm({...stockForm,minimo:e.target.value})} />
               </div>
             </div>
@@ -1009,8 +1288,8 @@
             );
           }),
           React.createElement("div",{style:{display:"flex",gap:10,marginTop:20}},
-            React.createElement("button",{onClick:()=>generarPDFProd(),style:{flex:1,padding:14,borderRadius:12,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}},"📄 PDF"),
-            React.createElement("button",{onClick:()=>generarExcelProd(),style:{flex:1,padding:14,borderRadius:12,border:"none",background:"#1E4257",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}},"📊 Excel")
+            React.createElement("button",{onClick:()=>exportar("pdf"),disabled:exportando,style:{flex:1,padding:14,borderRadius:12,border:"none",background:exportando?"#A3ABB3":"#A4232A",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}},exportando?"Generando...":"📄 PDF"),
+            React.createElement("button",{onClick:()=>exportar("excel"),disabled:exportando,style:{flex:1,padding:14,borderRadius:12,border:"none",background:exportando?"#A3ABB3":"#1E4257",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}},exportando?"Generando...":"📊 Excel")
           )
         )
       );
@@ -1018,94 +1297,115 @@
       function getChk(id){return document.getElementById(id)?.checked;}
       function fmt$(n){return "$"+Math.round(n).toLocaleString("es-AR");}
       function fmtF(d){return d?d.split("-").reverse().join("/"):"—";}
+      const hoyTexto = () => SersaleBase.fmtFecha(SersaleBase.hoy());
 
-      function generarPDFProd(){
+      // datos: { stock, alerta, faenas, lotes } ya cargados por exportar(); null = sección no pedida.
+      function generarPDFProd(datos){
         const {jsPDF}=window.jspdf;
         const pdf=new jsPDF({orientation:"portrait",unit:"pt",format:"a4"});
         const PW=595,M=40,CW=PW-2*M;
         let y=40;
+        const num=n=>SersaleBase.fmtNumero(parseFloat(n)||0,3);
         // Header
         pdf.setFillColor(192,57,43);pdf.rect(0,0,PW,70,"F");
         pdf.setFontSize(18);pdf.setTextColor(255,255,255);
         pdf.text("FRIGORÍFICO SERSALE",M,30);
         pdf.setFontSize(10);
-        pdf.text("Reporte de Producción — "+new Date().toLocaleDateString("es-AR"),M,48);
+        pdf.text("Reporte de Producción - "+hoyTexto(),M,48);
         pdf.setFontSize(8);
         pdf.text("24 de Noviembre 1926, Parque Patricios · CUIT 30-70227633-7",M,62);
         y=90;
         function checkP(n){if(y+n>800){pdf.addPage();y=40;}}
+        // Los títulos van sin emoji: la letra del PDF no los tiene y salían como símbolos sueltos.
         function secTitle(t){checkP(40);pdf.setFillColor(44,62,80);pdf.rect(M,y,CW,22,"F");pdf.setFontSize(11);pdf.setTextColor(255,255,255);pdf.text(t,M+8,y+15);y+=30;pdf.setTextColor(0,0,0);}
-        function tRow(cols,widths,bold,bg){checkP(18);if(bg){pdf.setFillColor(bg[0],bg[1],bg[2]);pdf.rect(M,y,CW,16,"F");}pdf.setFontSize(9);if(bold)pdf.setFont(undefined,"bold");else pdf.setFont(undefined,"normal");let x=M+4;cols.forEach((c,i)=>{pdf.text(String(c||""),x,y+11);x+=widths[i];});y+=16;}
+        // Cada celda se corta al ancho de su columna para que un nombre largo no se imprima encima de la columna siguiente.
+        function celda(c,ancho){const t=String(c==null?"":c).replace(/—/g,"-");const l=pdf.splitTextToSize(t,Math.max(10,ancho-6));return l.length>1?String(l[0]).replace(/\s+$/,"")+"...":t;}
+        function tRow(cols,widths,bold,bg){checkP(18);if(bg){pdf.setFillColor(bg[0],bg[1],bg[2]);pdf.rect(M,y,CW,16,"F");}pdf.setFontSize(9);if(bold)pdf.setFont(undefined,"bold");else pdf.setFont(undefined,"normal");let x=M+4;cols.forEach((c,i)=>{pdf.text(celda(c,widths[i]),x,y+11);x+=widths[i];});y+=16;}
+        function vacio(){tRow(["Sin registros"],[CW],false,null);}
 
-        if(getChk("rep-stock")&&stockItems){
-          secTitle("📦 STOCK ACTUAL");
+        if(datos.stock){
+          secTitle("STOCK ACTUAL");
           tRow(["Producto","Categoría","Cantidad","Unidad"],[200,120,80,CW-400],true,[220,220,220]);
-          stockItems.forEach((s,i)=>tRow([s.nombre,s.categoria,String(s.cantidad),s.unidad],[200,120,80,CW-400],false,i%2?[248,248,248]:null));
+          datos.stock.forEach((s,i)=>tRow([s.nombre,s.categoria,num(s.cantidad),s.unidad],[200,120,80,CW-400],false,i%2?[248,248,248]:null));
+          if(!datos.stock.length) vacio();
           y+=10;
         }
-        if(getChk("rep-stockalerta")&&stockAlerta.length){
-          secTitle("⚠️ STOCK BAJO MÍNIMO");
+        if(datos.alerta){
+          secTitle("STOCK BAJO MÍNIMO");
           tRow(["Producto","Actual","Mínimo","Unidad"],[200,80,80,CW-360],true,[220,220,220]);
-          stockAlerta.forEach((s,i)=>tRow([s.nombre,String(s.cantidad),String(s.minimo),s.unidad],[200,80,80,CW-360],false,i%2?[248,248,248]:null));
+          datos.alerta.forEach((s,i)=>tRow([s.nombre,num(s.cantidad),num(s.minimo),s.unidad],[200,80,80,CW-360],false,i%2?[248,248,248]:null));
+          if(!datos.alerta.length) vacio();
           y+=10;
         }
-        if(getChk("rep-faena")&&faenas){
-          secTitle("🐖 FAENA — "+filtroFaenaMes);
+        if(datos.faenas){
+          secTitle("FAENA - "+filtroFaenaMes.split("-").reverse().join("/"));
           tRow(["Fecha","Tipo","Cabezas","Peso Total","Peso Prom."],[110,80,70,80,CW-340],true,[220,220,220]);
-          faenas.forEach((f,i)=>tRow([fmtF(f.fecha),f.tipo,String(f.cantidad),String(f.pesoTotal||0)+" kg",String(f.pesoPromedio||0)+" kg"],[110,80,70,80,CW-340],false,i%2?[248,248,248]:null));
+          datos.faenas.forEach((f,i)=>tRow([fmtF(f.fecha),f.tipo,num(f.cantidad),num(f.pesoTotal)+" kg",num(f.pesoPromedio)+" kg"],[110,80,70,80,CW-340],false,i%2?[248,248,248]:null));
+          if(!datos.faenas.length) vacio();
           y+=10;
         }
-        if(getChk("rep-lotes")&&lotes){
-          secTitle("🏷️ LOTES DE TRAZABILIDAD");
+        if(datos.lotes){
+          secTitle("LOTES DE TRAZABILIDAD");
           // Mismo criterio que el CSV: una fila por producto del lote, repitiendo nro de lote, fechas y operario.
-          const anchosLote=[75,60,60,80,CW-395,120];
+          const anchosLote=[68,52,52,72,CW-332,88];
           tRow(["Nro Lote","Elaborac.","Vencim.","Operario","Producto","Cantidad"],anchosLote,true,[220,220,220]);
-          lotes.flatMap(l=>((l.productos||[]).length?l.productos:[{nombre:"—",cantidad:"",unidad:""}]).map(p=>[
+          datos.lotes.flatMap(l=>((l.productos||[]).length?l.productos:[{nombre:"-",cantidad:"",unidad:""}]).map(p=>[
             l.nroLote||"",fmtF(l.fechaElab),fmtF(l.fechaVenc),l.operario||"",p.nombre||"",
-            (p.cantidad===""||p.cantidad==null?"":(parseFloat(p.cantidad)||0).toLocaleString("es-AR")+" "+(p.unidad||""))
+            (p.cantidad===""||p.cantidad==null?"":num(p.cantidad)+" "+(p.unidad||""))
           ])).forEach((fila,i)=>tRow(fila,anchosLote,false,i%2?[248,248,248]:null));
+          if(!datos.lotes.length) vacio();
         }
         const tp=pdf.internal.getNumberOfPages();
-        for(let i=1;i<=tp;i++){pdf.setPage(i);pdf.setFontSize(8);pdf.setTextColor(150,150,150);pdf.text("Frigorífico Sersale · Producción · "+new Date().toLocaleDateString("es-AR")+" · Pág "+i+"/"+tp,PW/2,830,{align:"center"});}
-        pdf.save("Sersale_Produccion_"+new Date().toISOString().slice(0,10)+".pdf");
-        setShowReportModal(false);
+        for(let i=1;i<=tp;i++){pdf.setPage(i);pdf.setFontSize(8);pdf.setTextColor(150,150,150);pdf.text("Frigorífico Sersale · Producción · "+hoyTexto()+" · Pág "+i+"/"+tp,PW/2,830,{align:"center"});}
+        pdf.save("Sersale_Produccion_"+SersaleBase.hoy()+".pdf");
       }
 
-      function generarExcelProd(){
+      function generarExcelProd(datos){
+        // Texto: entre comillas si trae ; " o salto de línea (si no, corre las columnas) y con apóstrofo
+        // adelante si empieza con = + - @ (Excel lo tomaría como fórmula).
+        const txt=v=>{let t=String(v==null?"":v);if(/^[=+\-@\t\r]/.test(t))t="'"+t;return /[;"\n\r]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t;};
+        // Números con coma decimal y sin separador de miles, como los lee un Excel configurado en Argentina.
+        const num=n=>(parseFloat(n)||0).toLocaleString("es-AR",{useGrouping:false,maximumFractionDigits:3});
+        const fila=cols=>cols.join(";")+"\n";
         let csv="sep=;\n";
-        if(getChk("rep-stock")&&stockItems){
+        if(datos.stock){
           csv+="\nSTOCK ACTUAL\n";
           csv+="Producto;Categoría;Cantidad;Unidad;Mínimo\n";
-          stockItems.forEach(s=>csv+=s.nombre+";"+s.categoria+";"+s.cantidad+";"+s.unidad+";"+(s.minimo||"")+"\n");
+          datos.stock.forEach(s=>csv+=fila([txt(s.nombre),txt(s.categoria),num(s.cantidad),txt(s.unidad),s.minimo?num(s.minimo):""]));
+          if(!datos.stock.length) csv+="Sin registros\n";
         }
-        if(getChk("rep-stockalerta")&&stockAlerta.length){
+        if(datos.alerta){
           csv+="\nSTOCK BAJO MÍNIMO\n";
           csv+="Producto;Actual;Mínimo;Unidad\n";
-          stockAlerta.forEach(s=>csv+=s.nombre+";"+s.cantidad+";"+s.minimo+";"+s.unidad+"\n");
+          datos.alerta.forEach(s=>csv+=fila([txt(s.nombre),num(s.cantidad),num(s.minimo),txt(s.unidad)]));
+          if(!datos.alerta.length) csv+="Sin registros\n";
         }
-        if(getChk("rep-faena")&&faenas){
+        if(datos.faenas){
           csv+="\nFAENA — "+filtroFaenaMes+"\n";
           csv+="Fecha;Tipo;Cabezas;Peso Total;Peso Promedio;Observaciones\n";
-          faenas.forEach(f=>csv+=fmtF(f.fecha)+";"+f.tipo+";"+f.cantidad+";"+(f.pesoTotal||0)+";"+(f.pesoPromedio||0)+";"+(f.obs||"")+"\n");
+          datos.faenas.forEach(f=>csv+=fila([fmtF(f.fecha),txt(f.tipo),num(f.cantidad),num(f.pesoTotal),num(f.pesoPromedio),txt(f.obs)]));
+          if(!datos.faenas.length) csv+="Sin registros\n";
         }
-        if(getChk("rep-lotes")&&lotes){
+        if(datos.lotes){
           // Criterio: una fila por producto del lote (repitiendo nroLote/fechas/operario) para poder filtrar y pivotear en Excel; las materias primas van concatenadas en una sola columna para no multiplicar filas.
           csv+="\nLOTES DE TRAZABILIDAD\n";
           csv+="Nro Lote;Elaboración;Vencimiento;Operario;Producto;Cantidad;Unidad;Materias primas;Observaciones\n";
-          lotes.forEach(l=>{
-            const mp=(l.materiasPrimas||[]).map(m=>[m.tipo,m.corte,m.proveedor,(parseFloat(m.kg)||0).toLocaleString("es-AR")+" kg"].filter(Boolean).join(" ")).join(" | ");
+          datos.lotes.forEach(l=>{
+            const mp=(l.materiasPrimas||[]).map(m=>[m.tipo,m.corte,m.proveedor,num(m.kg)+" kg"].filter(Boolean).join(" ")).join(" | ");
             const prods=(l.productos||[]).length?l.productos:[{nombre:"—",cantidad:"",unidad:""}];
             prods.forEach(p=>{
-              csv+=(l.nroLote||"")+";"+fmtF(l.fechaElab)+";"+fmtF(l.fechaVenc)+";"+(l.operario||"")+";"+(p.nombre||"")+";"+(p.cantidad===""||p.cantidad==null?"":(parseFloat(p.cantidad)||0).toLocaleString("es-AR"))+";"+(p.unidad||"")+";"+mp+";"+(l.obs||"")+"\n";
+              csv+=fila([txt(l.nroLote),fmtF(l.fechaElab),fmtF(l.fechaVenc),txt(l.operario),txt(p.nombre),(p.cantidad===""||p.cantidad==null?"":num(p.cantidad)),txt(p.unidad),txt(mp),txt(l.obs)]);
             });
           });
+          if(!datos.lotes.length) csv+="Sin registros\n";
         }
-        const BOM="\uFEFF";
+        const BOM="﻿";
         const blob=new Blob([BOM+csv],{type:"text/csv;charset=utf-8;"});
         const url=URL.createObjectURL(blob);
-        const a=document.createElement("a");a.href=url;a.download="Sersale_Produccion_"+new Date().toISOString().slice(0,10)+".csv";
-        document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
-        setShowReportModal(false);
+        const a=document.createElement("a");a.href=url;a.download="Sersale_Produccion_"+SersaleBase.hoy()+".csv";
+        document.body.appendChild(a);a.click();document.body.removeChild(a);
+        // El iPhone empieza la descarga un instante después del toque: si el enlace se libera enseguida, no baja nada.
+        setTimeout(()=>URL.revokeObjectURL(url),60000);
       }
 
 
@@ -1144,9 +1444,9 @@
             {/* ─ TAB REPORTES ─ */}
             {tab==="reportes" && (<>
               <div style={{display:"flex",gap:8,marginBottom:16}}>
-                <input type="date" style={{flex:1,padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <input type="date" style={{flex:1,minWidth:0,padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   value={filtroFecha} onChange={e=>setFiltroFecha(e.target.value)} />
-                <select style={{flex:1,padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <select style={{flex:1,minWidth:0,padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   value={filtroArea} onChange={e=>setFiltroArea(e.target.value)}>
                   <option value="todos">Todas las áreas</option>
                   {Object.entries(AREAS).map(([k,a])=><option key={k} value={k}>{a.icon} {a.label}</option>)}
@@ -1160,10 +1460,10 @@
                 </div>
               ) : (<>
                 {Object.keys(totalesDia).length>0 && (<>
-                  <p style={{fontWeight:700,fontSize:13,color:"#5C666F",textTransform:"uppercase",letterSpacing:1,margin:"0 0 10px"}}>Resumen del día</p>
+                  <p style={{fontWeight:700,fontSize:13,color:"#5C666F",textTransform:"uppercase",letterSpacing:1,margin:"0 0 10px"}}>{filtroFecha?"Resumen del día":"Resumen de todas las fechas"}</p>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
                     {Object.entries(totalesDia).map(([ak,data])=>{
-                      const a=AREAS[ak];
+                      const a=areaDe(ak);
                       return (
                         <div key={ak} style={{borderRadius:12,border:`1.5px solid ${a.color}`,background:a.light,padding:12}}>
                           <div style={{fontWeight:700,color:a.color,marginBottom:4,fontSize:13,lineHeight:1.3}}>{a.icon} {a.label}</div>
@@ -1181,13 +1481,13 @@
                 </>)}
                 <p style={{fontWeight:700,fontSize:13,color:"#5C666F",textTransform:"uppercase",letterSpacing:1,margin:"0 0 10px"}}>Reportes ({reportes.length})</p>
                 {reportes.map(r=>{
-                  const a=AREAS[r.area]; const isOpen=expanded===r.id;
+                  const a=areaDe(r.area); const isOpen=expanded===r.id;
                   return (
                     <div key={r.id} style={{background:"#fff",borderRadius:12,border:`1.5px solid ${a.color}`,padding:14,marginBottom:10}}>
                       <div onClick={()=>setExpanded(isOpen?null:r.id)} style={{cursor:"pointer"}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                           <span style={{background:a.color,color:"#fff",borderRadius:6,padding:"3px 8px",fontSize:12,fontWeight:700}}>{a.icon} {a.label}</span>
-                          <span style={{fontSize:13,color:"#79828B",fontWeight:600}}>{fmtH(r.fechaISO)}</span>
+                          <span style={{fontSize:13,color:"#79828B",fontWeight:600}}>{!filtroFecha&&r.fechaISO?fmt(r.fechaISO)+" · ":""}{fmtH(r.fechaISO)}</span>
                         </div>
                         <div style={{fontWeight:700,fontSize:15,marginBottom:3}}>{r.encargado}</div>
                         <div style={{fontSize:12,color:"#5C666F",lineHeight:1.4}}>
@@ -1241,7 +1541,7 @@
                     <div style={{fontWeight:700,color:"#A8702A",fontSize:13,marginBottom:6}}>⚠️ Stock bajo en {stockAlerta.length} ítem{stockAlerta.length!==1?"s":""}</div>
                     {stockAlerta.map(s=>(
                       <div key={s.id} style={{fontSize:12,color:"#5C666F",paddingBottom:3}}>
-                        {s.nombre}: <strong style={{color:"#C33039"}}>{s.cantidad} {s.unidad}</strong> (mín. {s.minimo})
+                        {s.nombre}: <strong style={{color:"#C33039"}}>{fmtN(s.cantidad)} {s.unidad}</strong> (mín. {s.minimo})
                       </div>
                     ))}
                   </div>
@@ -1263,6 +1563,11 @@
                 </div>
                 {stockItems===null ? (
                   <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>
+                ) : stockItems.length>0 && stockFiltrado.length===0 ? (
+                  <div style={{textAlign:"center",color:"#A3ABB3",marginTop:60}}>
+                    <div style={{fontSize:48}}>📦</div>
+                    <p>No hay ítems en la categoría {filtroCategoria}</p>
+                  </div>
                 ) : stockFiltrado.length===0 ? (
                   <div style={{textAlign:"center",color:"#A3ABB3",marginTop:60}}>
                     <div style={{fontSize:48}}>📦</div>
@@ -1352,10 +1657,10 @@
             {tab==="faena" && (<>
               {(() => {
                 const faeanasMes = (faenas||[]).filter(f=>f.fecha&&f.fecha.startsWith(filtroFaenaMes));
-                const totalCabezas = faeanasMes.reduce((s,f)=>s+f.cantidad,0);
-                const totalPeso = faeanasMes.reduce((s,f)=>s+f.pesoTotal,0);
+                const totalCabezas = faeanasMes.reduce((s,f)=>s+(parseFloat(f.cantidad)||0),0);
+                const totalPeso = faeanasMes.reduce((s,f)=>s+(parseFloat(f.pesoTotal)||0),0);
                 const porTipo = {};
-                faeanasMes.forEach(f=>{ porTipo[f.tipo]=(porTipo[f.tipo]||0)+f.cantidad; });
+                faeanasMes.forEach(f=>{ porTipo[f.tipo]=(porTipo[f.tipo]||0)+(parseFloat(f.cantidad)||0); });
                 return (<>
                   <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
                     <input type="month" style={{flex:1,padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
@@ -1390,8 +1695,10 @@
                         + Registrar primera faena
                       </button>
                     </div>
+                  ) : faeanasMes.length===0 ? (
+                    <p style={{textAlign:"center",color:"#A3ABB3",marginTop:40}}>Sin faenas en este mes</p>
                   ) : (
-                    (faenas||[]).filter(f=>f.fecha&&f.fecha.startsWith(filtroFaenaMes)).map(f=>(
+                    faeanasMes.map(f=>(
                       <div key={f.id} style={{background:"#fff",borderRadius:12,border:"1.5px solid #E4E7EA",padding:14,marginBottom:10}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
                           <div style={{flex:1}}>
@@ -1427,7 +1734,7 @@
               <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
                 <input type="month" style={{flex:1,padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   value={filtroLoteMes} onChange={e=>setFiltroLoteMes(e.target.value)} />
-                <button onClick={()=>setModalLote(true)}
+                <button onClick={abrirModalLote}
                   style={{padding:"10px 16px",borderRadius:10,border:"none",background:"#2A333B",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>
                   + Nuevo Lote
                 </button>
@@ -1438,12 +1745,13 @@
                 <div style={{textAlign:"center",color:"#A3ABB3",marginTop:60}}>
                   <div style={{fontSize:48}}>🏷️</div>
                   <p style={{marginBottom:16}}>Sin lotes registrados este mes</p>
-                  <button onClick={()=>setModalLote(true)} style={{padding:"12px 24px",borderRadius:10,border:"none",background:"#2A333B",color:"#fff",fontWeight:700,cursor:"pointer"}}>
+                  <button onClick={abrirModalLote} style={{padding:"12px 24px",borderRadius:10,border:"none",background:"#2A333B",color:"#fff",fontWeight:700,cursor:"pointer"}}>
                     + Registrar primer lote
                   </button>
                 </div>
               ) : lotes.filter(l=>l.fechaElab&&l.fechaElab.startsWith(filtroLoteMes)).map(l=>{
-                const diasVenc = l.fechaVenc ? Math.ceil((new Date(l.fechaVenc)-new Date())/(1000*60*60*24)) : null;
+                const dv = l.fechaVenc ? SersaleBase.diasEntre(SersaleBase.hoy(), l.fechaVenc) : NaN; // días de calendario en Buenos Aires
+                const diasVenc = isNaN(dv) ? null : dv;
                 const vencColor = diasVenc===null?"#79828B":diasVenc<0?"#C33039":diasVenc<=7?"#A8702A":"#2F6B4F";
                 const expanded = loteDetalle===l.id;
                 return (
@@ -1488,7 +1796,7 @@
                         ))}
                         {l.obs&&<div style={{fontSize:12,color:"#79828B",marginTop:8,fontStyle:"italic"}}>📝 {l.obs}</div>}
                         <div style={{marginTop:10,padding:"8px 12px",borderRadius:8,background:"#F7F8F9",fontSize:11,color:"#5C666F",textAlign:"center"}}>
-                          Lote registrado el {l.createdAt?new Date(l.createdAt).toLocaleDateString("es-AR"):"—"}
+                          Lote registrado el {(l.createdAt&&fmt(l.createdAt))||"—"}
                         </div>
                       </div>
                     )}

@@ -31,9 +31,9 @@
   <script src="vendor/react.production.min.js"></script>
   <script src="vendor/react-dom.production.min.js"></script>
   <script type="module">
-    import { db, collection, addDoc, getDocs, getDoc, updateDoc, deleteDoc, doc, query, orderBy, where, Timestamp, setDoc } from "./js/fb.js";
+    import { db, collection, addDoc, getDocs, getDoc, updateDoc, deleteDoc, doc, query, orderBy, where, Timestamp, setDoc, runTransaction } from "./js/fb.js";
     window.__db = db;
-    window.__firebase = { collection, addDoc, getDocs, getDoc, updateDoc, deleteDoc, doc, query, orderBy, where, Timestamp, setDoc };
+    window.__firebase = { collection, addDoc, getDocs, getDoc, updateDoc, deleteDoc, doc, query, orderBy, where, Timestamp, setDoc, runTransaction };
     window.__fbReady = true;
     document.dispatchEvent(new Event("fbReady"));
   </script>
