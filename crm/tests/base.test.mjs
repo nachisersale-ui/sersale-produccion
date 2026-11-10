@@ -15,7 +15,7 @@ function cargar(ahoraISO) {
       return new RealDate(ahoraISO).getTime();
     }
   }
-  const window = {};
+  const window = { addEventListener() {} };
   const ctx = vm.createContext({ window, Intl, Math, Number, String, isFinite, isNaN, parseFloat, encodeURIComponent, Date: ahoraISO ? FechaFija : RealDate });
   vm.runInContext(fs.readFileSync(new URL("../src/js/base.js", import.meta.url), "utf8"), ctx);
   return window.SersaleBase;

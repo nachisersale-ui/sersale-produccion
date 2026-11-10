@@ -149,8 +149,11 @@
         });
         caja.appendChild(fila);
         fondo.appendChild(caja);
+        // Un doble toque sobre el botón que abre la hoja no debe cerrarla: los
+        // toques fuera de la hoja se ignoran durante el primer instante.
+        var abiertaEn = Date.now();
         fondo.addEventListener("click", function (e) {
-          if (e.target === fondo) cerrar(cfg.valorAlCancelar);
+          if (e.target === fondo && Date.now() - abiertaEn > 400) cerrar(cfg.valorAlCancelar);
         });
         document.addEventListener("keydown", tecla, true);
         document.body.appendChild(fondo);

@@ -40,7 +40,7 @@ test("abre y navega sin señal con los datos guardados", async () => {
     await h.page.getByText("Clientes", { exact: false }).first().click();
     await h.page.getByText("Almacén Don Pepe").first().waitFor();
     await h.page.locator(".ss-sin-conexion").waitFor();
-    assert.deepEqual(erroresReales(h.errores).filter((e) => !/ERR_INTERNET_DISCONNECTED|Could not reach Cloud Firestore|WebChannel|offline/i.test(e.texto)), []);
+    assert.deepEqual(erroresReales(h.errores).filter((e) => !/ERR_INTERNET_DISCONNECTED|Could not reach Cloud Firestore|WebChannel|offline|Sin conexión y sin datos guardados/i.test(e.texto)), []);
   } finally {
     await h.close();
   }

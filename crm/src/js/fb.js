@@ -77,7 +77,10 @@ function vigilar(nombre) {
       { includeMetadataChanges: true },
       (snap) => {
         st.sincronizado = !snap.metadata.fromCache;
-        if (st.sincronizado) listo();
+        if (st.sincronizado) {
+          marcarGuardada(nombre);
+          listo();
+        }
         avisar();
       },
       (err) => {
@@ -93,6 +96,29 @@ function vigilar(nombre) {
   });
   escuchas.set(nombre, st);
   return st;
+}
+
+// Se anota en el teléfono qué colecciones se bajaron completas alguna vez.
+// Sin señal y sin esa marca no hay nada guardado para mostrar: es mejor decir
+// "sin conexión" que mostrar listas vacías o saldos en cero como si fueran reales.
+const claveGuardada = (nombre) => "sersale_copia_" + app.options.projectId + "_" + nombre;
+function marcarGuardada(nombre) {
+  try {
+    localStorage.setItem(claveGuardada(nombre), String(Date.now()));
+  } catch (e) {}
+}
+function hayCopiaGuardada(nombre) {
+  try {
+    return !!localStorage.getItem(claveGuardada(nombre));
+  } catch (e) {
+    return true;
+  }
+}
+function errorSinDatos(nombre) {
+  const e = new Error("Sin conexión y sin datos guardados de " + nombre + ". Conectate para cargarlos.");
+  e.code = "unavailable";
+  e.name = "FirebaseError";
+  return e;
 }
 
 /** Empieza a traer estas colecciones apenas carga la página. */
@@ -131,7 +157,10 @@ async function copiaAlDia(nombre) {
   const st = vigilar(nombre);
   if (Date.now() < cuarentenaHasta) return null;
   if (st.sincronizado) return st;
-  if (sinConexion()) return st; // sin señal: lo guardado es lo mejor que hay
+  if (sinConexion()) {
+    if (!hayCopiaGuardada(nombre)) throw errorSinDatos(nombre);
+    return st; // sin señal: lo guardado es lo mejor que hay
+  }
   await Promise.race([st.primeraSync, espera(ESPERA_PRIMERA_SYNC_MS)]);
   if (Date.now() < cuarentenaHasta) return null;
   return st.sincronizado ? st : null;

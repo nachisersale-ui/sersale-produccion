@@ -209,7 +209,8 @@ export function buildSeed({ today = "2026-11-10" } = {}) {
   let reloj = 0;
   const iso = () => { const s = new Date(reloj).toISOString(); reloj += 173; return s; };
   const ts = () => ({ __ts: iso() });
-  const hoyUTC = () => new Date(reloj).toISOString().split("T")[0];
+  // Día de Buenos Aires (UTC-3) del momento simulado; el nombre quedó de cuando la app usaba el día UTC.
+  const hoyUTC = () => new Date(new Date(reloj).getTime() - 3 * 3600 * 1000).toISOString().split("T")[0];
   const eventos = [];
   const en = (cuando, fn) => eventos.push({ t: cuando.getTime(), n: eventos.length, fn });
 
