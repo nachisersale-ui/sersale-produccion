@@ -283,7 +283,7 @@ test("aviso de recontacto por WhatsApp: lleva la fecha del último pedido y lleg
   }
 });
 
-test("alertas: el campo Días guarda solo números válidos, y avisa cuando el límite es automático", async () => {
+test("alertas: el campo Días guarda solo números válidos, y el límite escrito a mano queda fijo", async () => {
   const h = await abrirDirector();
   try {
     const seed = h.seed;
@@ -316,13 +316,24 @@ test("alertas: el campo Días guarda solo números válidos, y avisa cuando el l
     await texto(h, "31d sin pedir (límite: 33d)").waitFor();
     assert.equal(await h.page.locator('input[aria-label="Días de alerta de Fiambrería El Vasquito"]').inputValue(), "33");
 
-    // Cliente con frecuencia automática: el campo no se edita y explica por qué
+    // Cliente con frecuencia automática (24): escribir un número lo deja fijo, y «↺» vuelve al automático
     const auto = h.page.locator('input[aria-label="Días de alerta de Carnicería Don Julio"]');
     assert.equal(await auto.inputValue(), "24");
-    assert.equal(await auto.evaluate((el) => el.readOnly), true);
-    await auto.click();
-    await toast(h, "se calcula solo").waitFor();
-    assert.equal((await h.doc("clientes/" + idJulio)).diasAlerta, 24);
+    assert.equal(await auto.evaluate((el) => el.readOnly), false);
+    await auto.fill("20");
+    await texto(h, /Requieren recontacto \(\d+\)/).click();
+    let julio = await esperarDoc(h, "clientes/" + idJulio, (d) => d && d.diasAlerta === 20 && d.diasAlertaManual === true);
+    assert.equal(julio.nombre, "Carnicería Don Julio");
+    const volver = h.page.getByRole("button", { name: "Volver al límite automático de Carnicería Don Julio" });
+    await volver.waitFor();
+    // Al volver a calcular las alertas el límite a mano se respeta (antes se pisaba con el automático)
+    await h.page.reload();
+    await h.esperarApp();
+    await boton(h, "Alertas").first().click();
+    await volver.waitFor();
+    assert.equal((await h.doc("clientes/" + idJulio)).diasAlerta, 20, "el límite a mano no se pisa al recargar");
+    await volver.click();
+    julio = await esperarDoc(h, "clientes/" + idJulio, (d) => d && d.diasAlerta === 24 && d.diasAlertaManual === false);
     assert.deepEqual(erroresReales(h.errores), []);
   } finally {
     await h.close();

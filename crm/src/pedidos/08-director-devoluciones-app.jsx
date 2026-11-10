@@ -42,6 +42,7 @@
         const btn = document.createElement('button');
         btn.id = 'btn-venta-rapida';
         btn.textContent = '⚡';
+        btn.setAttribute('aria-label', 'Venta rápida');
         Object.assign(btn.style, {
           position:'fixed',bottom:'90px',right:'24px',zIndex:'9990',
           width:'56px',height:'56px',borderRadius:'50%',border:'none',
@@ -111,6 +112,8 @@
                 id,
                 ultimoContacto: data.ultimoContacto || null,
                 ultimoPedidoRegistrado: data.ultimoPedidoRegistrado || null,
+                // Límite fijado a mano por la persona: el cálculo automático no lo pisa
+                _manual: data.diasAlertaManual === true,
                 // Lo que ya está guardado, para no volver a escribirlo si no cambió
                 _diasGuardado: data.diasAlerta,
                 _freqGuardada: data.freqCalculada
@@ -202,13 +205,18 @@
             const diasAlertaCalc = freqCalc + 3;
             const cfg = configCli[cliente];
             if(cfg && cfg.id) {
-              // Always recalculate from actual data
-              cfg.diasAlerta = diasAlertaCalc;
               cfg._freqCalc = freqCalc;
               cfg._totalPedidos = fechasUnicas.length;
-              // ...pero se escribe solo si cambió (antes: una escritura por cliente en cada carga)
-              if(cfg._diasGuardado !== diasAlertaCalc || cfg._freqGuardada !== freqCalc) {
-                updatesBatch.push({ id: cfg.id, diasAlerta: diasAlertaCalc, freqCalculada: freqCalc });
+              if(cfg._manual) {
+                // El límite lo puso la persona: se respeta. Solo se anota la frecuencia calculada.
+                if(cfg._freqGuardada !== freqCalc) updatesBatch.push({ id: cfg.id, freqCalculada: freqCalc });
+              } else {
+                // Automático: frecuencia de compra + 3 días de margen
+                cfg.diasAlerta = diasAlertaCalc;
+                // ...pero se escribe solo si cambió (antes: una escritura por cliente en cada carga)
+                if(cfg._diasGuardado !== diasAlertaCalc || cfg._freqGuardada !== freqCalc) {
+                  updatesBatch.push({ id: cfg.id, diasAlerta: diasAlertaCalc, freqCalculada: freqCalc });
+                }
               }
             }
           });
@@ -218,11 +226,9 @@
             const { doc, updateDoc } = fb();
             const ahora = new Date().toISOString();
             updatesBatch.forEach(upd => {
-              updateDoc(doc(db,"clientes",upd.id), {
-                diasAlerta: upd.diasAlerta,
-                freqCalculada: upd.freqCalculada,
-                freqActualizado: ahora
-              }).catch(e => console.error("Error updating",upd.id,e));
+              const cambios = { freqCalculada: upd.freqCalculada, freqActualizado: ahora };
+              if(upd.diasAlerta != null) cambios.diasAlerta = upd.diasAlerta;
+              updateDoc(doc(db,"clientes",upd.id), cambios).catch(e => console.error("Error updating",upd.id,e));
             });
           }
           // Only track REGISTERED clients (from clientes collection)
@@ -259,6 +265,7 @@
             const enAlerta = diasSinPedir >= cfg.diasAlerta;
             alertas.push({ cliente, diasSinPedir, enAlerta, diasAlerta: cfg.diasAlerta,
               freqCalc: cfg._freqCalc || null,
+              manual: !!cfg._manual,
               telefono: cfg.telefono, clienteId: cfg.id,
               ultimoPedido: pedido || { items:[], _fechaDisplay: fechaStr },
               diasRestantes: cfg.diasAlerta - diasSinPedir,
@@ -297,26 +304,30 @@
         try { await cargar(); } catch(e) { console.error(e); }
       }
 
+      // Límite de días sin pedir antes de avisar. Lo que la persona escribe queda fijo
+      // (diasAlertaManual) y el cálculo automático deja de pisarlo; con `dias` vacío (null)
+      // se vuelve al automático: frecuencia de compra + 3.
       async function actualizarDiasAlerta(clienteId, dias) {
         if (!clienteId) return;
-        const n = parseInt(dias, 10);
-        // Campo vacío o fuera de rango: antes se guardaba NaN (o 0) en la ficha
-        if (!(n >= 1 && n <= 365)) {
-          SersaleUI.toast("Los días de alerta tienen que ser un número entre 1 y 365.", { tipo: "error" });
-          return;
-        }
         const actual = alertasData ? alertasData.alertas.find(a => a.clienteId === clienteId) : null;
-        if (actual && Number(actual.diasAlerta) === n) return; // se tocó el campo sin cambiarlo: nada que guardar
-        if (actual && actual.freqCalc) {
-          // Con historial, el límite se recalcula solo en cada carga (frecuencia + 3) y pisa lo
-          // que se escriba a mano: se avisa en vez de aparentar que quedó guardado.
-          SersaleUI.toast(actual.cliente+" suele pedir cada "+actual.freqCalc+" días: su límite se calcula solo ("+(actual.freqCalc+3)+" días) y no se puede fijar a mano.", { tipo: "info", ms: 7000 });
-          return;
+        let cambios;
+        if (dias == null) {
+          if (!actual || !actual.freqCalc) return;
+          cambios = { diasAlerta: actual.freqCalc + 3, diasAlertaManual: false };
+        } else {
+          const n = parseInt(dias, 10);
+          // Campo vacío o fuera de rango: antes se guardaba NaN (o 0) en la ficha
+          if (!(n >= 1 && n <= 365)) {
+            SersaleUI.toast("Los días de alerta tienen que ser un número entre 1 y 365.", { tipo: "error" });
+            return;
+          }
+          if (actual && Number(actual.diasAlerta) === n) return; // se tocó el campo sin cambiarlo: nada que guardar
+          cambios = { diasAlerta: n, diasAlertaManual: true };
         }
         try {
           const { db, doc, updateDoc } = fb();
           // No se espera al servidor (sin señal queda en cola); si falla, se avisa.
-          updateDoc(doc(db,"clientes",clienteId), { diasAlerta: n }).catch(e => {
+          updateDoc(doc(db,"clientes",clienteId), cambios).catch(e => {
             console.error(e);
             SersaleUI.toast("No se pudo guardar el límite de días. Probá de nuevo.", { tipo: "error" });
           });

@@ -411,13 +411,13 @@ test("alertas: los días sin pedir se cuentan con el día argentino del último 
     await toast(h, "entre 1 y 365", "error").waitFor();
     assert.equal((await h.dump()).clientes.cli_06.diasAlerta, 21);
 
-    // Cliente con historial: el límite se calcula solo, se avisa en vez de aparentar que se guardó
+    // Cliente con historial: el límite escrito a mano queda fijo y el cálculo automático ya no lo pisa
     const trebol = tarjetaAlerta(h, TREBOL);
     const limite = despues.clientes.cli_03.diasAlerta;
     await trebol.locator('input[type="number"]').fill("45");
     await trebol.locator('input[type="number"]').blur();
-    await toast(h, "se calcula solo", "info").waitFor();
-    assert.equal((await h.dump()).clientes.cli_03.diasAlerta, limite);
+    await esperarBase(h, (db) => db.clientes.cli_03.diasAlerta === 45 && db.clientes.cli_03.diasAlertaManual === true);
+    assert.notEqual(limite, 45);
 
     // Cliente sin historial: el límite a mano se guarda y la alerta se recalcula
     await guemes.locator('input[type="number"]').fill("60");

@@ -75,12 +75,13 @@
 
     // Campo "Días" de una alerta (cuántos días sin pedir antes de avisar).
     // - Guarda solo un número entero de 1 a 365, y solo si cambió.
-    // - Si el cliente tiene frecuencia automática (freqCalc), el límite se recalcula
-    //   en cada carga del Director y pisa lo que se escriba: se muestra pero no se edita.
+    // - Sin tocar, el límite es automático: lo que el cliente suele tardar entre pedidos,
+    //   más 3 días. Si se escribe un número queda fijo (ya no se recalcula) y aparece
+    //   "↺" para volver al automático.
     function P7CampoDias({ alerta, onGuardar }) {
       const [valor, setValor] = useState(String(alerta.diasAlerta));
       useEffect(()=>{ setValor(String(alerta.diasAlerta)); }, [alerta.diasAlerta]);
-      const auto = !!alerta.freqCalc;
+      const auto = !!alerta.freqCalc && !alerta.manual;
       const [guardar, guardando] = SersaleBase.useAccion(async () => {
         const txt = String(valor).trim();
         const n = /^\d{1,3}$/.test(txt) ? parseInt(txt, 10) : NaN;
@@ -91,17 +92,27 @@
         }
         if (n === alerta.diasAlerta) { setValor(String(n)); return; }
         await onGuardar(alerta.clienteId, n);
+        if (alerta.freqCalc) SersaleUI.toast("Límite fijado en "+n+" días (suele pedir cada "+alerta.freqCalc+").", { tipo: "ok" });
       });
-      const avisarAuto = () => SersaleUI.toast("Este límite se calcula solo: suele pedir cada "+alerta.freqCalc+" días, más 3 de margen. No se cambia a mano.", { tipo: "info" });
+      const [volverAuto, volviendo] = SersaleBase.useAccion(async () => {
+        await onGuardar(alerta.clienteId, null);
+        SersaleUI.toast("Límite automático: "+(alerta.freqCalc+3)+" días.", { tipo: "ok" });
+      });
       return (
         <div style={{display:"flex",alignItems:"center",gap:4,background:"#EDEEF0",borderRadius:8,padding:"4px 8px"}}>
-          <span style={{fontSize:11,color:"#5C666F"}}>{auto?"Auto:":"Dias:"}</span>
+          <span style={{fontSize:11,color:"#5C666F"}}>{auto?"Auto:":"Días:"}</span>
           <input type="number" inputMode="numeric" pattern="[0-9]*" min="1" max="365" value={valor}
-            readOnly={auto} disabled={guardando} aria-label={"Días de alerta de "+alerta.cliente}
+            disabled={guardando||volviendo} aria-label={"Días de alerta de "+alerta.cliente}
             onChange={e=>setValor(e.target.value)}
-            onBlur={auto?undefined:guardar}
-            onClick={auto?avisarAuto:undefined}
-            style={{width:48,padding:"4px",borderRadius:6,border:"1.5px solid #D8DCE0",fontSize:16,textAlign:"center",background:auto?"#F2F3F5":"#fff",color:auto?"#79828B":"#191E23"}}/>
+            onBlur={guardar}
+            onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }}
+            enterKeyHint="done"
+            style={{width:48,padding:"4px",borderRadius:6,border:"1.5px solid #D8DCE0",fontSize:16,textAlign:"center",background:"#fff",color:auto?"#5C666F":"#191E23"}}/>
+          {alerta.manual && !!alerta.freqCalc && (
+            <button type="button" onClick={volverAuto} disabled={guardando||volviendo}
+              aria-label={"Volver al límite automático de "+alerta.cliente} title="Volver al automático"
+              style={{border:"none",background:"transparent",fontSize:16,lineHeight:1,padding:"6px 4px",cursor:"pointer",color:"#26536E"}}>↺</button>
+          )}
         </div>
       );
     }

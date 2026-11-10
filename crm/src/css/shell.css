@@ -148,6 +148,16 @@ html.ss-con-nav body {
   padding-bottom: calc(var(--ss-nav-alto) + var(--ss-abajo) + 8px) !important;
 }
 
+/* Botón flotante de venta rápida (panel Director): siempre por encima de la
+   barra, y la lista deja lugar al final para que no tape el último renglón. */
+#btn-venta-rapida {
+  bottom: calc(var(--ss-nav-alto) + var(--ss-abajo) + 18px) !important;
+  right: 18px !important;
+}
+html.ss-con-nav body:has(#btn-venta-rapida) {
+  padding-bottom: calc(var(--ss-nav-alto) + var(--ss-abajo) + 86px) !important;
+}
+
 /* ── Avisos breves ── */
 .ss-toasts {
   position: fixed;
