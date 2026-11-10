@@ -87,7 +87,7 @@
         var input = null;
         var cerrado = false;
         var fondo = el("div", { class: "ss-fondo" });
-        var caja = el("div", { class: "ss-hoja", role: "dialog", "aria-modal": "true" });
+        var caja = el("div", { class: "ss-hoja", role: "dialog", "aria-modal": "true", tabindex: "-1" });
 
         function cerrar(valor) {
           if (cerrado) return;
@@ -111,7 +111,7 @@
           if (e.key === "Escape") {
             e.preventDefault();
             cerrar(cfg.valorAlCancelar);
-          } else if (e.key === "Enter" && input && document.activeElement === input) {
+          } else if (e.key === "Enter" && (input ? document.activeElement === input : document.activeElement === caja)) {
             e.preventDefault();
             var principal = cfg.botones[cfg.botones.length - 1];
             aceptar(principal);
@@ -154,7 +154,8 @@
         });
         document.addEventListener("keydown", tecla, true);
         document.body.appendChild(fondo);
-        var foco = input || fila.lastChild;
+        // Con un campo, el cursor va al campo; si no, a la hoja (sin marcar un botón).
+        var foco = input || caja;
         setTimeout(function () {
           try {
             foco.focus({ preventScroll: true });

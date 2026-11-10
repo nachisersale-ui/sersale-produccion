@@ -26,8 +26,6 @@ export const JAR_URL = `https://storage.googleapis.com/firebase-preview-drop/emu
 function localJarCandidates() {
   return [
     process.env.SERSALE_EMULATOR_JAR,
-    // Pre-downloaded copy of the session that created this harness.
-    "/tmp/claude-0/-home-user-sersale-produccion/6ddd4064-049b-57c4-83c8-0a6a9ff45000/scratchpad/emu/" + JAR_NAME,
     // firebase-tools cache, if the Firebase CLI was ever used on this machine.
     path.join(os.homedir(), ".cache", "firebase", "emulators", JAR_NAME),
   ].filter(Boolean);

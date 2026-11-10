@@ -159,6 +159,14 @@ html.ss-con-nav body {
 html.ss-con-nav .ss-toasts {
   bottom: calc(var(--ss-nav-alto) + var(--ss-abajo) + 14px);
 }
+/* Con una hoja abierta los avisos van arriba, para no tapar sus botones. */
+body:has(.ss-fondo) .ss-toasts {
+  bottom: auto;
+  top: calc(var(--ss-arriba) + 12px);
+}
+.ss-hoja:focus {
+  outline: none;
+}
 .ss-toast {
   pointer-events: auto;
   max-width: 440px;

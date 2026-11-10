@@ -1,0 +1,9 @@
+# Publicación del CRM en Netlify cuando el sitio está conectado a este repositorio.
+# Netlify instala las dependencias de crm/package.json y arma crm/dist.
+[build]
+  base = "crm"
+  command = "node build.mjs"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
