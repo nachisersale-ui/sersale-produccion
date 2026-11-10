@@ -497,10 +497,15 @@
         const nombre = inputProd.trim();
         const cat = modalCat;
         if(!nombre || !cat) return;
+        // Si la señal se corta justo al confirmar, la transacción se repite y encuentra el producto
+        // que ella misma acaba de guardar: eso no es "ya existe" (antes avisaba ese error y dejaba
+        // la ventana abierta, con el producto ya agregado).
+        let puesto = false;
         const ok = await aplicarCambio(c => {
           const lista = p1ProductosDe(c, cat);
-          if(lista.some(p=>SersaleBase.mismoNombre(p, nombre))) return "Ya existe ese producto en esta categoría";
+          if(lista.some(p=>SersaleBase.mismoNombre(p, nombre))) return puesto ? undefined : "Ya existe ese producto en esta categoría";
           c[cat] = [...(Array.isArray(c[cat]) ? c[cat] : []), nombre];
+          puesto = true;
         });
         // Solo se cierra y se limpia si quedó guardado: si falló, lo escrito sigue ahí.
         if(ok){ setInputProd(""); setModalCat(null); SersaleUI.toast("Producto agregado", { tipo:"ok" }); }
@@ -522,9 +527,11 @@
       async function agregarCategoria() {
         const nombre = inputCat.trim();
         if(!nombre) return;
+        let puesta = false; // igual que al agregar un producto: la repetición encuentra la categoría recién creada
         const ok = await aplicarCambio(c => {
-          if(Object.keys(c).some(k=>SersaleBase.mismoNombre(k, nombre))) return "Ya existe esa categoría";
+          if(Object.keys(c).some(k=>SersaleBase.mismoNombre(k, nombre))) return puesta ? undefined : "Ya existe esa categoría";
           c[nombre] = [];
+          puesta = true;
         });
         if(ok){ setInputCat(""); setModalNuevaCat(false); SersaleUI.toast("Categoría creada", { tipo:"ok" }); }
       }

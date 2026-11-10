@@ -6,14 +6,32 @@
       ["pedidos","cliente"], ["remitos","cliente"], ["devoluciones","cliente"],
     ];
 
-    /** Documentos de esas colecciones que nombran al cliente (misma regla que la cuenta corriente: sin mirar mayúsculas ni acentos). */
+    /**
+     * Colecciones enteras leídas del SERVIDOR: { coleccion: [{ id, ...datos }] }. Si el
+     * servidor no contesta, falla (no devuelve lo guardado en el teléfono).
+     * Cambiar un nombre, eliminar un cliente o abrirle una cuenta se deciden con lo que
+     * hay guardado a su nombre: con señal entrecortada la copia del teléfono puede estar
+     * atrasada (sin lo que cargó otro teléfono) y con eso quedaban registros sueltos con
+     * el nombre viejo, movimientos sin cuenta o una segunda cuenta del mismo cliente.
+     */
+    async function rvpedidosDelServidor(colecciones) {
+      const { db, collection, getDocsFromServer } = fb();
+      const snaps = await Promise.all(colecciones.map(col => getDocsFromServer(collection(db, col))));
+      const out = {};
+      colecciones.forEach((col, i) => { out[col] = snaps[i].docs.map(d => ({ id: d.id, ...d.data() })); });
+      return out;
+    }
+
+    /**
+     * Documentos de esas colecciones que nombran al cliente (misma regla que la cuenta corriente:
+     * sin mirar mayúsculas ni acentos). Se leen del servidor (ver rvpedidosDelServidor).
+     */
     async function p2GuardadoANombreDe(nombre, colecciones) {
-      const { db, collection, getDocs } = fb();
+      const leido = await rvpedidosDelServidor(colecciones.map(([col]) => col));
       const out = [];
       for (const [col, campo] of colecciones) {
-        const snap = await getDocs(collection(db, col));
-        snap.docs.forEach(d => {
-          const valor = d.data()[campo];
+        leido[col].forEach(d => {
+          const valor = d[campo];
           if (ccMismoCliente(valor, nombre)) out.push({ col, id: d.id, campo, valor });
         });
       }
@@ -22,18 +40,19 @@
 
     /**
      * Guarda muchas escrituras de a tandas. Cada tanda se guarda entera o no se
-     * guarda; `alFinal` va en la última (ahí se escribe la ficha del cliente, así
-     * si algo falla antes la ficha queda como estaba y se puede reintentar).
+     * guarda; `alFinal` (opcional) va en la última (ahí se escribe la ficha del cliente,
+     * así si algo falla antes la ficha queda como estaba y se puede reintentar).
      */
     async function p2GuardarEnTandas(pasos, alFinal) {
       const { db, runTransaction } = fb();
       const TANDA = 400; // una transacción admite hasta 500 escrituras
+      if (!pasos.length && !alFinal) return;
       let i = 0;
       do {
         const tanda = pasos.slice(i, i + TANDA);
         i += TANDA;
         const ultima = i >= pasos.length;
-        await runTransaction(db, async tx => { tanda.forEach(p => p(tx)); if (ultima) alFinal(tx); });
+        await runTransaction(db, async tx => { tanda.forEach(p => p(tx)); if (ultima && alFinal) alFinal(tx); });
       } while (i < pasos.length);
     }
 
@@ -42,14 +61,22 @@
      * guardado con el anterior. Si hay otra ficha con el mismo nombre no se sabe
      * de cuál de las dos es cada cosa: ahí solo se cambia la ficha.
      * `guardado` es lo que devolvió p2GuardadoANombreDe para el nombre anterior.
+     *
+     * Orden: primero precios, remitos y devoluciones; al final, juntos, los pedidos, la
+     * cuenta corriente con sus movimientos y la ficha. Si se corta en el medio, el cliente
+     * sigue con el nombre viejo Y con su cuenta (antes la cuenta se renombraba primero y el
+     * cliente quedaba sin cuenta hasta repetir el cambio: un remito le abría otra).
      */
     async function p2RenombrarCliente(actual, datos, guardado) {
       const { db, doc } = fb();
       const ref = doc(db, "clientes", actual.id);
-      const pasos = guardado
-        .filter(g => g.valor !== datos.nombre)
-        .map(g => tx => tx.update(doc(db, g.col, g.id), { [g.campo]: datos.nombre }));
-      await p2GuardarEnTandas(pasos, tx => tx.update(ref, datos));
+      const paso = g => tx => tx.update(doc(db, g.col, g.id), { [g.campo]: datos.nombre });
+      const JUNTO_A_LA_FICHA = ["pedidos", "cc_movimientos", "cuentas_corrientes"]; // en este orden: la cuenta, lo más cerca de la ficha
+      const pendientes = guardado.filter(g => g.valor !== datos.nombre);
+      const antes = pendientes.filter(g => !JUNTO_A_LA_FICHA.includes(g.col));
+      const conLaFicha = JUNTO_A_LA_FICHA.flatMap(col => pendientes.filter(g => g.col === col));
+      await p2GuardarEnTandas(antes.map(paso), null);
+      await p2GuardarEnTandas(conLaFicha.map(paso), tx => tx.update(ref, datos));
       await esperarCopiaLocal(ref, d => !!d && d.nombre === datos.nombre);
     }
 
@@ -94,9 +121,18 @@
         const nom = nombre.trim();
         if (!nom) { SersaleUI.toast("Ingresá el nombre del cliente", { tipo: "error" }); return; }
         const { db, collection, addDoc, doc, updateDoc, getDocs, Timestamp } = fb();
+        let consultando = false; // leyendo del servidor lo que decide un cambio de nombre
         try {
-          const todos = (await getDocs(collection(db,"clientes"))).docs.map(d=>({id:d.id,...d.data()}));
-          const actual = editando ? todos.find(c=>c.id===editando) : null;
+          let todos = (await getDocs(collection(db,"clientes"))).docs.map(d=>({id:d.id,...d.data()}));
+          let actual = editando ? todos.find(c=>c.id===editando) : null;
+          if (actual && actual.nombre !== nom) {
+            // Cambio de nombre: las fichas (y más abajo todo lo guardado a nombre del cliente) se leen
+            // del servidor. Si no contesta, no se cambia nada (ver rvpedidosDelServidor).
+            consultando = true;
+            todos = (await rvpedidosDelServidor(["clientes"])).clientes;
+            actual = todos.find(c=>c.id===editando) || null;
+            consultando = false;
+          }
           if (editando && !actual) {
             SersaleUI.toast("Ese cliente ya no existe: lo eliminaron desde otro teléfono.", { tipo: "error" });
             cancelarEdicion();
@@ -113,7 +149,9 @@
           let aviso = actual ? "Cliente actualizado" : "Cliente guardado";
           if (cambiaNombre) {
             const hayOtroIgual = todos.some(c => c.id !== actual.id && ccMismoCliente(c.nombre, actual.nombre));
+            consultando = true;
             const guardado = hayOtroIgual ? [] : (await p2GuardadoANombreDe(actual.nombre, P2_DONDE_FIGURA_EL_CLIENTE)).filter(g => g.valor !== nom);
+            consultando = false;
             if (guardado.length) {
               const ok = await SersaleUI.confirmar({
                 titulo: "¿Cambiar el nombre del cliente?",
@@ -141,24 +179,37 @@
           await cargar();
         } catch(e) {
           console.error("[Clientes] Error al guardar:", e);
-          SersaleUI.toast("No se pudo guardar. Probá de nuevo.", { tipo: "error" });
+          SersaleUI.toast(consultando ? "No se pudo consultar el servidor: el nombre no se cambió. Revisá la conexión y probá de nuevo." : "No se pudo guardar. Probá de nuevo.", { tipo: "error", ms: consultando ? 6000 : undefined });
         }
       });
 
-      const [eliminar, eliminando] = SersaleBase.useAccion(async (c) => {
-        const { db, doc, collection, getDocs } = fb();
+      const [eliminar, eliminando] = SersaleBase.useAccion(async (fila) => {
+        const { db, doc } = fb();
+        let consultando = true; // leyendo del servidor lo que se va a borrar
         try {
-          const todos = (await getDocs(collection(db,"clientes"))).docs.map(d=>({id:d.id,...d.data()}));
-          const hayOtroIgual = todos.some(x => x.id !== c.id && ccMismoCliente(x.nombre, c.nombre));
-          let cuerpo, borrar = [];
+          // Qué se borra (y la deuda que se avisa) se decide con lo que hay en el servidor, no con la
+          // copia del teléfono: si no contesta, no se elimina nada (ver rvpedidosDelServidor).
+          const srv = await rvpedidosDelServidor(["clientes","cuentas_corrientes","cc_movimientos","precios_cliente"]);
+          consultando = false;
+          const c = srv.clientes.find(x => x.id === fila.id);
+          if (!c) {
+            SersaleUI.toast("Ese cliente ya no existe: lo eliminaron desde otro teléfono.", { tipo: "error" });
+            if (editando === fila.id) cancelarEdicion();
+            await cargar();
+            return;
+          }
+          const hayOtroIgual = srv.clientes.some(x => x.id !== c.id && ccMismoCliente(x.nombre, c.nombre));
+          let cuerpo, precios = [], deLaCuenta = [];
           if (hayOtroIgual) {
             // Los precios y la cuenta se unen por nombre: con dos fichas iguales son de la que queda.
             cuerpo = "Hay otro cliente cargado con el mismo nombre: se borra solo esta ficha. Los precios, la cuenta corriente y sus movimientos quedan para el otro.";
           } else {
-            const cuenta = await ccBuscarCuenta(c.nombre);
-            const movs = await ccMovimientosDe(c.nombre, cuenta);
-            const resto = await p2GuardadoANombreDe(c.nombre, [["precios_cliente","cliente"],["cuentas_corrientes","nombre"]]);
-            borrar = [...movs.map(m=>({ col:"cc_movimientos", id:m.id })), ...resto];
+            const cuenta = ccElegirCuenta(srv.cuentas_corrientes, c.nombre);
+            const clienteId = cuenta && cuenta.clienteId;
+            // Misma regla que ccMovimientosDe: por nombre del cliente, por nombre de la cuenta o por clienteId.
+            const movs = srv.cc_movimientos.filter(m => ccMismoCliente(m.cliente, c.nombre) || (cuenta && ccMismoCliente(m.cliente, cuenta.nombre)) || (!!clienteId && m.clienteId === clienteId));
+            precios = srv.precios_cliente.filter(p => ccMismoCliente(p.cliente, c.nombre)).map(p => ({ col:"precios_cliente", id:p.id }));
+            deLaCuenta = [...movs.map(m=>({ col:"cc_movimientos", id:m.id })), ...srv.cuentas_corrientes.filter(x => ccMismoCliente(x.nombre, c.nombre)).map(x => ({ col:"cuentas_corrientes", id:x.id }))];
             const saldo = cuenta ? Math.round(Number(cuenta.saldo)||0) : 0;
             cuerpo = "Se borran también sus precios guardados, su cuenta corriente y los movimientos de la cuenta."
               + (saldo>0 ? ` Hoy debe ${ccFmtSaldo(saldo)}: esa deuda deja de figurar.` : saldo<0 ? ` Tiene ${ccFmtSaldo(-saldo)} a favor: ese saldo deja de figurar.` : "")
@@ -166,15 +217,19 @@
           }
           const ok = await SersaleUI.confirmar({ titulo: `¿Eliminar a "${c.nombre}"?`, cuerpo, aceptar: "Eliminar", peligro: true });
           if (!ok) return;
-          // Todo junto y la ficha al final: si se corta, el cliente sigue en la lista y se puede volver a eliminar.
+          // Primero los precios; al final, juntos, los movimientos, la cuenta y la ficha. Si se corta en
+          // el medio el cliente sigue en la lista con su cuenta entera y se puede volver a eliminar
+          // (antes se borraban primero los movimientos: quedaba la deuda sin un solo movimiento).
           const ref = doc(db,"clientes",c.id);
-          await p2GuardarEnTandas(borrar.map(b => tx => tx.delete(doc(db,b.col,b.id))), tx => tx.delete(ref));
+          const borrar = b => tx => tx.delete(doc(db,b.col,b.id));
+          await p2GuardarEnTandas(precios.map(borrar), null);
+          await p2GuardarEnTandas(deLaCuenta.map(borrar), tx => tx.delete(ref));
           await esperarCopiaLocal(ref, d => d === null);
           if (editando === c.id) cancelarEdicion();
           SersaleUI.toast("Cliente eliminado", { tipo: "ok" });
         } catch(e) {
           console.error("[Clientes] Error al eliminar:", e);
-          SersaleUI.toast("No se pudo eliminar el cliente. Probá de nuevo.", { tipo: "error" });
+          SersaleUI.toast(consultando ? "No se pudo consultar el servidor: no se eliminó nada. Revisá la conexión y probá de nuevo." : "No se pudo eliminar el cliente. Probá de nuevo.", { tipo: "error", ms: consultando ? 6000 : undefined });
         }
         await cargar();
       });
