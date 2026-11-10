@@ -166,7 +166,7 @@ html.ss-con-nav .ss-toasts {
   bottom: calc(var(--ss-nav-alto) + var(--ss-abajo) + 14px);
 }
 /* Con una hoja abierta los avisos van arriba, para no tapar sus botones. */
-body:has(.ss-fondo) .ss-toasts {
+body:has(.ss-fondo:not(.ss-sale)) .ss-toasts {
   bottom: auto;
   top: calc(var(--ss-arriba) + 12px);
 }
@@ -306,6 +306,11 @@ body:has(.ss-fondo) .ss-toasts {
   background: var(--ss-lacre);
   border-color: var(--ss-lacre);
   color: #fff;
+}
+/* Recién abierta, los botones todavía no responden: el segundo toque de un
+   doble toque sobre el botón que abrió la hoja no tiene que contestarla. */
+.ss-hoja.ss-recien .ss-btn {
+  pointer-events: none;
 }
 .ss-fondo.ss-sale {
   opacity: 0;

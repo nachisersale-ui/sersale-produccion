@@ -94,13 +94,16 @@
           cerrado = true;
           document.removeEventListener("keydown", tecla, true);
           fondo.classList.add("ss-sale");
+          // El fondo (ya invisible) se queda un instante más: el segundo toque de un
+          // doble toque sobre «Confirmar» no tiene que caer en lo que hay debajo
+          // (la barra de secciones cambiaba de página con la operación en curso).
           setTimeout(function () {
             if (fondo.parentNode) fondo.parentNode.removeChild(fondo);
             if (previo && previo.focus)
               try {
                 previo.focus({ preventScroll: true });
               } catch (e) {}
-          }, 170);
+          }, 450);
           resolver(valor);
         }
         function aceptar(b) {
@@ -111,7 +114,7 @@
           if (e.key === "Escape") {
             e.preventDefault();
             cerrar(cfg.valorAlCancelar);
-          } else if (e.key === "Enter" && (input ? document.activeElement === input : document.activeElement === caja)) {
+          } else if (e.key === "Enter" && !e.repeat && (input ? document.activeElement === input : document.activeElement === caja)) {
             e.preventDefault();
             var principal = cfg.botones[cfg.botones.length - 1];
             aceptar(principal);
@@ -149,9 +152,16 @@
         });
         caja.appendChild(fila);
         fondo.appendChild(caja);
-        // Un doble toque sobre el botón que abre la hoja no debe cerrarla: los
-        // toques fuera de la hoja se ignoran durante el primer instante.
+        // Un doble toque sobre el botón que abre la hoja no debe cerrarla ni
+        // contestarla: durante el primer instante se ignoran los toques fuera de
+        // la hoja y sus botones todavía no responden (css: .ss-recien). Sin esto,
+        // si el botón que la abre queda donde aparece «Confirmar», el segundo
+        // toque confirmaba sin que la persona llegara a leer la pregunta.
         var abiertaEn = Date.now();
+        caja.classList.add("ss-recien");
+        setTimeout(function () {
+          caja.classList.remove("ss-recien");
+        }, 400);
         fondo.addEventListener("click", function (e) {
           if (e.target === fondo && Date.now() - abiertaEn > 400) cerrar(cfg.valorAlCancelar);
         });
@@ -291,7 +301,7 @@
   // ── Sin conexión y cambios sin enviar ────────────────────────────────────
 
   var cartel = null;
-  var estadoRed = { sin: navigator.onLine === false, pendientes: 0, deAntes: false };
+  var estadoRed = { sin: navigator.onLine === false, pendientes: 0, deAntes: false, atrasado: false };
   function textoCartel() {
     var n = estadoRed.pendientes;
     var cambios = n === 1 ? "1 cambio guardado en el teléfono" : n + " cambios guardados en el teléfono";
@@ -300,6 +310,11 @@
       if (estadoRed.deAntes) return "Sin conexión · hay cambios guardados en el teléfono sin enviar";
       // Las páginas con copia local (js/fb.js) siguen mostrando lo guardado; las demás necesitan señal.
       return window.__sersaleDatos ? "Sin conexión · se muestran los datos guardados" : "Sin conexión · esta pantalla necesita señal";
+    }
+    // Hay conexión pero el servidor no contesta: js/fb.js respondió con la copia guardada.
+    if (estadoRed.atrasado) {
+      if (n > 0) return "Señal débil · lo que se ve puede estar desactualizado · " + (n === 1 ? "1 cambio sin enviar" : n + " cambios sin enviar");
+      return "Señal débil · lo que se ve puede estar desactualizado";
     }
     if (n > 0) return "Enviando " + (n === 1 ? "1 cambio" : n + " cambios") + "…";
     if (estadoRed.deAntes) return "Enviando cambios guardados…";
@@ -315,7 +330,7 @@
       if (cartel) {
         if (texto) {
           cartel.textContent = texto;
-          cartel.classList.toggle("ss-enviando", !estadoRed.sin);
+          cartel.classList.toggle("ss-enviando", !estadoRed.sin && !estadoRed.atrasado);
         } else {
           cartel.parentNode.removeChild(cartel);
           cartel = null;
@@ -340,6 +355,14 @@
     pintarCartel();
     if (antes > 0 && estadoRed.pendientes === 0 && !estadoRed.deAntes) toast("Cambios enviados", { tipo: "ok", ms: 2200 });
   });
+  window.addEventListener("sersale:datos", function (e) {
+    var atrasado = !!(e.detail && e.detail.atrasado);
+    if (atrasado === estadoRed.atrasado) return;
+    estadoRed.atrasado = atrasado;
+    pintarCartel();
+    // Igual que al volver la conexión: la pantalla abierta no se vuelve a leer sola.
+    if (!atrasado && !estadoRed.sin) toast("Conexión recuperada", { tipo: "ok", ms: 1800 });
+  });
   window.addEventListener("sersale:cambio-rechazado", function () {
     aviso("Un cambio que se había guardado en el teléfono no se pudo enviar al servidor. Revisá lo último que cargaste.", { titulo: "Cambio no enviado" });
   });
@@ -355,7 +378,7 @@
   document.addEventListener("change", function () { seEscribio = true; }, true);
   function escribiendo() {
     var a = document.activeElement;
-    return seEscribio || !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || !!document.querySelector(".ss-fondo");
+    return seEscribio || !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || !!document.querySelector(".ss-fondo:not(.ss-sale)");
   }
   function registrarSW() {
     if (!("serviceWorker" in navigator)) return;
