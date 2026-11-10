@@ -149,7 +149,37 @@ export async function launch(opts = {}) {
     });
   }
 
+  /**
+   * Señal que se corta en el peor momento. Las transacciones van al servidor en
+   * dos pedidos: leer (batchGet) y confirmar (commit).
+   *   red.perder = n     las próximas n confirmaciones LLEGAN al servidor y se guardan, pero la
+   *                      respuesta no vuelve al teléfono (Firestore reintenta la transacción).
+   *   red.luegoSinSenal  después de eso no pasa ningún pedido de transacción (hasta red.caida = false).
+   */
+  async function redQueSeCorta(p = page) {
+    const red = { perder: 0, luegoSinSenal: false, caida: false, perdidas: 0 };
+    await p.route(/documents:(commit|batchGet)/, async (route) => {
+      if (red.caida) return route.abort("connectionfailed");
+      if (red.perder > 0 && /documents:commit/.test(route.request().url())) {
+        red.perder--;
+        red.perdidas++;
+        if (red.luegoSinSenal) red.caida = true;
+        await route.fetch().catch(() => null);
+        return route.abort("connectionreset");
+      }
+      return route.continue();
+    });
+    return red;
+  }
+  /** El canal por el que la página escucha los cambios no conecta; los pedidos sueltos sí pasan. */
+  async function cortarEscucha(p = page) {
+    const corte = { activo: true };
+    await p.route(/\/Listen\/channel/, (route) => (corte.activo ? route.abort("connectionfailed") : route.continue()));
+    return corte;
+  }
+
   return {
+    redQueSeCorta, cortarEscucha,
     browser, context, page, origin: server.origin, projectId, llamadas, errores, inesperados,
     ir, sesion, esperarApp, sincronizar,
     abiertos: (p = page) => p.evaluate(() => window.__abiertos),

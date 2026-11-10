@@ -372,7 +372,9 @@
         loginExitoso(encontrado.usuario || encontrado.id, encontrado.nombre || encontrado.id);
       } catch(err) {
         console.error(err);
-        soltar(navigator.onLine === false ? "Sin conexión. Probá de nuevo cuando haya señal." : "Error al conectar. Reintentá.");
+        // "unavailable": el servidor no respondió y en este teléfono no hay usuarios guardados.
+        if (err && err.code === "unavailable") soltar("Sin conexión con el servidor. Probá de nuevo cuando haya señal.");
+        else soltar(navigator.onLine === false ? "Sin conexión. Probá de nuevo cuando haya señal." : "Error al conectar. Reintentá.");
       }
     }
 

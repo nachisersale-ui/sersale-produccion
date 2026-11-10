@@ -236,3 +236,33 @@ test("con señal, guardar espera la confirmación del servidor y los errores se 
     await h.close();
   }
 });
+
+test("con el servidor inalcanzable y sin copia en el teléfono, leer falla en vez de devolver una lista vacía", async () => {
+  const h = await launch({
+    rol: "director",
+    etiqueta: "datos",
+    seed: SEED,
+  });
+  try {
+    // El teléfono cree tener red, pero no llega al servidor (señal muy mala).
+    await h.context.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, "onLine", { configurable: true, get: () => true });
+    });
+    await h.sinRed(false);
+    await h.context.route("**/google.firestore.v1.Firestore/**", (r) => r.abort());
+    await h.ir("index.html");
+    const r = await h.page.evaluate(async () => {
+      const m = await import("/js/fb.js");
+      try {
+        const snap = await m.getDocs(m.collection(m.db, "usuarios"));
+        return { ok: true, cantidad: snap.size };
+      } catch (e) {
+        return { ok: false, mensaje: e.message, code: e.code };
+      }
+    });
+    assert.equal(r.ok, false, "no debe responder con una lista vacía: " + JSON.stringify(r));
+    assert.equal(r.code, "unavailable");
+  } finally {
+    await h.close();
+  }
+});

@@ -347,9 +347,15 @@
 
   // ── App instalada: archivos guardados en el teléfono y actualizaciones ───
 
+  // ¿Hay algo a medio cargar? Alcanza con que se haya tocado un campo en esta
+  // página: un cierre de caja o un presupuesto a medias no puede perderse por
+  // una actualización.
+  var seEscribio = false;
+  document.addEventListener("input", function () { seEscribio = true; }, true);
+  document.addEventListener("change", function () { seEscribio = true; }, true);
   function escribiendo() {
     var a = document.activeElement;
-    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || !!document.querySelector(".ss-fondo");
+    return seEscribio || !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || !!document.querySelector(".ss-fondo");
   }
   function registrarSW() {
     if (!("serviceWorker" in navigator)) return;
@@ -363,9 +369,11 @@
         var buscar = function () {
           reg.update().catch(function () {});
         };
+        // Al volver a la app se busca si hay versión nueva. Nunca se recarga una
+        // página ya abierta por su cuenta: la versión nueva entra al tocar
+        // "Actualizar" o al pasar a otra sección.
         document.addEventListener("visibilitychange", function () {
           if (document.visibilityState === "visible") buscar();
-          else if (pendiente && !escribiendo()) location.reload();
         });
       })
       .catch(function (e) {

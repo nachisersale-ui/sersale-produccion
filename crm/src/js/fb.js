@@ -170,14 +170,24 @@ export async function getDocs(q) {
   const nombre = origen.get(q);
   if (!nombre) return fs.getDocs(q);
   const st = await copiaAlDia(nombre);
-  if (!st) return fs.getDocs(q);
+  if (!st) return delServidor(q, nombre);
   try {
     const snap = await fs.getDocsFromCache(q);
     st.lecturas++;
     return snap;
   } catch (e) {
-    return fs.getDocs(q);
+    return delServidor(q, nombre);
   }
+}
+
+// Lectura normal del SDK. Si el servidor no responde, el SDK contesta con lo
+// que tenga guardado; si en este teléfono esa colección no se bajó nunca, eso
+// es una lista vacía que NO significa "no hay nada" (con eso, por ejemplo, el
+// ingreso creía que no existía ningún usuario). En ese caso se informa el error.
+async function delServidor(q, nombre) {
+  const snap = await fs.getDocs(q);
+  if (snap.metadata.fromCache && !hayCopiaGuardada(nombre)) throw errorSinDatos(nombre);
+  return snap;
 }
 
 export async function getDoc(ref) {

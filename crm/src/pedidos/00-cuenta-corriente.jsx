@@ -204,7 +204,10 @@
     /** Lecturas del asiento dentro de la transacción (antes de cualquier escritura). */
     async function ccLeerAsiento(tx, plan) {
       plan.cuentaSnap = plan.cuentaRef ? await tx.get(plan.cuentaRef) : null;
-      plan.movSnap = plan.movConocido ? await tx.get(plan.movRef) : null;
+      // Se lee siempre, también cuando el movimiento es nuevo: si se cortó la señal justo al
+      // confirmar, Firestore vuelve a ejecutar la transacción y el movimiento ya está guardado.
+      // Al verlo, el saldo se ajusta solo por la diferencia (cero) y no se cobra dos veces.
+      plan.movSnap = await tx.get(plan.movRef);
     }
 
     /**
