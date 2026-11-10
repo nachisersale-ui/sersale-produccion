@@ -76,26 +76,109 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 <li>📦 Pedidos</li><li>📄 Remitos</li><li>👥 Clientes</li><li>💳 Cuentas Corrientes</li>
 <li>📒 Movimientos CC</li><li>💰 Ventas Diarias</li><li>🏭 Stock</li><li>🐖 Faenas</li>
 <li>🏷️ Lotes</li><li>💲 Precios por Cliente</li>
+<li>↩️ Devoluciones</li><li>📊 Movimientos de Stock</li><li>📝 Reportes de Producción</li>
 </ul>
-<button class="btn btn-primary" onclick="generarBackup()">💾 Generar Backup Excel</button>
+<button class="btn btn-primary" id="btnBackup" onclick="generarBackup()">💾 Generar Backup Excel</button>
 <button class="btn btn-back" onclick="location.href='index.html'">← Volver al CRM</button>
 </div>
 <div id="status"></div>
 <script>
 var db;
-try{db=window.sersaleDbCompat();document.getElementById('status').innerHTML='✅ Conectado a Firebase';}catch(e){document.getElementById('status').innerHTML='❌ Error: '+e.message;}
+function estado_index(texto){document.getElementById('status').textContent=texto;}
+try{db=window.sersaleDbCompat();estado_index('✅ Conectado a Firebase');}catch(e){estado_index('❌ Error: '+e.message);}
 
-function fbGet(p){return db.collection(p).get().then(function(s){return s.docs.map(function(d){return{id:d.id,data:d.data()};});});}
-function fbOrd(p,f,dir){return db.collection(p).orderBy(f,dir||'asc').get().then(function(s){return s.docs.map(function(d){return{id:d.id,data:d.data()};});});}
+// Siempre del servidor. Sin señal, get() a secas contesta con una lista vacía
+// (esta página no guarda copia en el teléfono) y el backup salía en blanco,
+// con el cartel de "Backup generado".
+function fbGet(p){return db.collection(p).get({source:'server'}).then(function(s){return s.docs.map(function(d){return{id:d.id,data:d.data()};});});}
 
+// Colecciones que entran en el backup (todas las que usa el CRM, menos usuarios y configuración).
+var COLECCIONES_index=['pedidos','remitos','clientes','cuentas_corrientes','cc_movimientos','devoluciones','ventas_diarias','stock_produccion','stock_movimientos','reportes','faenas','trazabilidad_lotes','precios_cliente'];
+
+// Lo que va a una celda: texto o número. Una fecha guardada como Timestamp sale
+// como día y hora de Buenos Aires; cualquier otro objeto, como texto.
+function celda_index(v){
+  if(v==null)return '';
+  if(typeof v==='number')return isFinite(v)?v:'';
+  if(typeof v==='string'||typeof v==='boolean')return v;
+  if(v instanceof Date||typeof v.toDate==='function'||typeof v.seconds==='number'){var d=SersaleBase.diaDe(v);return d?d+' '+SersaleBase.fmtHora(v):'';}
+  try{return JSON.stringify(v);}catch(e){return String(v);}
+}
+function lista_index(v){return Array.isArray(v)?v:[];}
+// Día (AAAA-MM-DD, Buenos Aires) del primer valor que sea una fecha válida.
+function dia_index(){for(var i=0;i<arguments.length;i++){var d=SersaleBase.diaDe(arguments[i]);if(d)return d;}return '';}
+function momento_index(){for(var i=0;i<arguments.length;i++){var f=SersaleBase.aFecha(arguments[i]);if(f)return f.getTime();}return 0;}
+// Kg que se facturan de un ítem: lo pesado (aunque sea 0) o, si no se pesó, lo pedido. Igual que el remito.
+function kgItem_index(it){if(it.kgReal!=null&&it.kgReal!=='')return Number(it.kgReal)||0;return parseFloat(it.cantidad)||0;}
+
+// Cada intento prueba la conexión de cero: si el anterior falló, Firestore queda un rato en
+// "sin conexión" y contestaría que no hay señal sin volver a probar.
+async function reiniciarRed_index(){try{await db.disableNetwork();await db.enableNetwork();}catch(e){console.warn(e);}}
+
+// Lee del servidor todas las colecciones del backup y avisa el avance. Con `limite` (ms): si
+// pasa ese tiempo sin que termine ninguna, falla con `trabada = true`. Sin límite, espera.
+function leerTodo_index(alAvanzar,limite){
+  return new Promise(function(ok,mal){
+    var hechas=0,fin=false,reloj=null;
+    function cerrar(fn,v){if(fin)return;fin=true;clearTimeout(reloj);fn(v);}
+    function vigilar(){if(!limite)return;clearTimeout(reloj);reloj=setTimeout(function(){var e=new Error('La lectura quedó trabada');e.trabada=true;cerrar(mal,e);},limite);}
+    vigilar();
+    Promise.all(COLECCIONES_index.map(function(n){return fbGet(n).then(function(r){hechas++;if(!fin){vigilar();alAvanzar(hechas);}return r;});}))
+      .then(function(r){cerrar(ok,r);},function(e){cerrar(mal,e);});
+  });
+}
+
+var generando_index=false;
 async function generarBackup(){
-  document.getElementById('status').innerHTML='⏳ Cargando datos de Firebase...';
+  if(generando_index)return; // doble toque: un solo archivo
+  var btn=document.getElementById('btnBackup');
+  function fallo(texto,e){if(e)console.error(e);estado_index('❌ '+texto);SersaleUI.toast(texto,{tipo:'error'});}
+  if(navigator.onLine===false){fallo('Sin conexión: el backup se arma con los datos del servidor. No se generó ningún archivo.');return;}
+  generando_index=true;btn.disabled=true;btn.style.opacity='.6';
+  estado_index('⏳ Leyendo los datos del servidor...');
   try{
+    // 1) Se lee todo antes de armar nada: si una colección no se pudo leer no hay
+    //    archivo (antes esa hoja se salteaba en silencio y el backup quedaba incompleto).
+    var base={};
+    try{
+      var avance=function(n){estado_index('⏳ Leyendo los datos del servidor... ('+n+' de '+COLECCIONES_index.length+')');};
+      var listas;
+      try{
+        await reiniciarRed_index();
+        listas=await leerTodo_index(avance,45000);
+      }catch(e){
+        if(!e||!e.trabada)throw e;
+        // Se vio a Firestore dejar una lectura colgada para siempre cuando la conexión vuelve
+        // justo en ese momento. Se reinicia la conexión y se lee todo de nuevo, ya sin límite
+        // (puede ser simplemente una conexión lenta).
+        console.warn('Backup: la lectura quedó trabada; se reintenta.');
+        estado_index('⏳ La lectura quedó trabada. Reintentando...');
+        await reiniciarRed_index();
+        listas=await leerTodo_index(avance,0);
+      }
+      COLECCIONES_index.forEach(function(n,i){base[n]=listas[i];});
+    }catch(e){
+      fallo('No se pudo leer la base. No se generó ningún archivo: probá de nuevo cuando haya señal.',e);
+      return;
+    }
+    estado_index('⏳ Armando el Excel...');
     var wb=XLSX.utils.book_new();
-    var hoy=new Date();
-    var fechaStr=hoy.toLocaleDateString('es-AR')+' '+hoy.toLocaleTimeString('es-AR');
+    var hoyDia=SersaleBase.hoy(); // día de Buenos Aires (con toISOString, después de las 21 ya era "mañana")
+    var fechaStr=SersaleBase.fmtFecha(hoyDia)+' '+SersaleBase.fmtHora(new Date());
     var conteos={};
+    var conError=0;
+    // Una fila por documento (o varias, con `varias`). Un registro con un formato
+    // inesperado no tira abajo su hoja: queda anotado en su fila y se avisa al final.
+    function filas(docs,fn,varias){
+      var out=[];
+      docs.forEach(function(d){
+        try{var r=fn(d);if(varias)r.forEach(function(x){out.push(x);});else out.push(r);}
+        catch(e){conError++;console.error('Backup: registro '+d.id,e);out.push([d.id,'⚠ No se pudo leer este registro: '+(e&&e.message||e)]);}
+      });
+      return out;
+    }
     function crearHoja(nombre,titulo,headers,datos){
+      datos=datos.map(function(row){return row.map(celda_index);});
       var ws=XLSX.utils.aoa_to_sheet([]);
       XLSX.utils.sheet_add_aoa(ws,[[titulo]],{origin:'A1'});
       XLSX.utils.sheet_add_aoa(ws,[['Generado: '+fechaStr]],{origin:'A2'});
@@ -106,34 +189,40 @@ async function generarBackup(){
       XLSX.utils.book_append_sheet(wb,ws,nombre);
       return datos.length;
     }
-    document.getElementById('status').innerHTML='⏳ Cargando pedidos...';
-    var docs=await fbOrd('pedidos','fechaPedido','desc');
+    // Pedidos: del más nuevo al más viejo. El orden se arma acá y no con orderBy('fechaPedido'),
+    // que deja afuera los pedidos que no tienen ese campo.
+    var pedidos=base.pedidos.slice().sort(function(a,b){return momento_index(b.data.fechaPedidoISO,b.data.fechaPedido,b.data.fechaEntrega)-momento_index(a.data.fechaPedidoISO,a.data.fechaPedido,a.data.fechaEntrega);});
     conteos.Pedidos=crearHoja('Pedidos','PEDIDOS',['ID','Cliente','Tipo','Estado','Fecha Pedido','Fecha Entrega','CC','Productos','Cantidades','Precios','Total','Obs'],
-      docs.map(function(d){var p=d.data;var fp=p.fechaPedidoISO?p.fechaPedidoISO.substring(0,10):(p.fechaPedido&&p.fechaPedido.toDate?p.fechaPedido.toDate().toISOString().substring(0,10):'');var items=p.items||[];var total=items.reduce(function(s,it){return s+((it.kgReal||parseFloat(it.cantidad)||0)*(parseFloat(it.precio)||0));},0);return[d.id,p.cliente||'',p.tipo||'',p.estado||'',fp,p.fechaEntrega||'',p.cuentaCorriente?'SI':'NO',items.map(function(it){return it.producto;}).join(', '),items.map(function(it){return it.cantidad;}).join(', '),items.map(function(it){return it.precio?'$'+it.precio:'-';}).join(', '),total>0?Math.round(total):'-',p.obs||''];}));
-    document.getElementById('status').innerHTML='⏳ Cargando remitos...';
-    try{docs=await fbGet('remitos');conteos.Remitos=crearHoja('Remitos','REMITOS',['ID','Nro','Cliente','Fecha','Productos','Kg','Precios','Total'],docs.map(function(d){var r=d.data;var it=r.items||[];return[d.id,r.nro||r.nroRemito||'',r.cliente||'',r.fecha||'',it.map(function(x){return x.producto;}).join(', '),it.map(function(x){return x.kg||x.kgReal||x.cantidad;}).join(', '),it.map(function(x){return '$'+(x.precio||0);}).join(', '),r.total||0];}));}catch(e){conteos.Remitos=0;}
-    document.getElementById('status').innerHTML='⏳ Cargando clientes...';
-    try{docs=await fbGet('clientes');conteos.Clientes=crearHoja('Clientes','CLIENTES',['ID','Nombre','Teléfono','Días Alerta','Dirección','Email'],docs.map(function(d){var c=d.data;return[d.id,c.nombre||'',c.telefono||'',c.diasAlerta||14,c.direccion||'',c.email||''];}));}catch(e){conteos.Clientes=0;}
-    document.getElementById('status').innerHTML='⏳ Cargando cuentas corrientes...';
-    try{docs=await fbGet('cuentas_corrientes');conteos['CC Saldos']=crearHoja('CC Saldos','CUENTAS CORRIENTES',['ID','Cliente','Saldo ($)','Último Mov'],docs.map(function(d){var c=d.data;return[d.id,c.nombre||'',c.saldo||0,c.ultimoMovimiento||''];}));}catch(e){conteos['CC Saldos']=0;}
-    try{docs=await fbGet('cc_movimientos');conteos['CC Mov']=crearHoja('CC Movimientos','MOVIMIENTOS CC',['ID','Cliente','Tipo','Monto ($)','Fecha','Detalle','Obs','Origen'],docs.map(function(d){var m=d.data;return[d.id,m.cliente||'',m.tipo||'',m.monto||0,m.fecha||'',m.detalle||'',m.obs||'',m.origen||''];}));}catch(e){conteos['CC Mov']=0;}
-    document.getElementById('status').innerHTML='⏳ Cargando ventas y stock...';
+      filas(pedidos,function(d){var p=d.data;var fp=dia_index(p.fechaPedidoISO,p.fechaPedido);var items=lista_index(p.items);var total=items.reduce(function(s,it){return s+(kgItem_index(it)*(parseFloat(it.precio)||0));},0);return[d.id,p.cliente||'',p.tipo||'',p.estado||'',fp,p.fechaEntrega||'',p.cuentaCorriente?'SI':'NO',items.map(function(it){return it.producto;}).join(', '),items.map(function(it){return it.cantidad;}).join(', '),items.map(function(it){return it.precio?'$'+it.precio:'-';}).join(', '),total>0?Math.round(total):'-',p.obs||''];}));
+    conteos.Remitos=crearHoja('Remitos','REMITOS',['ID','Nro','Cliente','Fecha','Productos','Kg','Precios','Total'],filas(base.remitos,function(d){var r=d.data;var it=lista_index(r.items);return[d.id,r.nro||r.nroRemito||'',r.cliente||'',r.fecha||'',it.map(function(x){return x.producto;}).join(', '),it.map(function(x){return x.kg||x.kgReal||x.cantidad;}).join(', '),it.map(function(x){return '$'+(x.precio||0);}).join(', '),r.total||0];}));
+    conteos.Clientes=crearHoja('Clientes','CLIENTES',['ID','Nombre','Teléfono','Días Alerta','Dirección','Email'],filas(base.clientes,function(d){var c=d.data;return[d.id,c.nombre||'',c.telefono||'',c.diasAlerta||14,c.direccion||'',c.email||''];}));
+    conteos['CC Saldos']=crearHoja('CC Saldos','CUENTAS CORRIENTES',['ID','Cliente','Saldo ($)','Último Mov'],filas(base.cuentas_corrientes,function(d){var c=d.data;return[d.id,c.nombre||'',c.saldo||0,c.ultimoMovimiento||''];}));
+    conteos['CC Mov']=crearHoja('CC Movimientos','MOVIMIENTOS CC',['ID','Cliente','Tipo','Monto ($)','Fecha','Detalle','Obs','Origen'],filas(base.cc_movimientos,function(d){var m=d.data;return[d.id,m.cliente||'',m.tipo||'',m.monto||0,m.fecha||'',m.detalle||'',m.obs||'',m.origen||''];}));
     // Campos reales de ventas_diarias: totalZ, cobEfec/cobTarj/cobMP/cobOtro, extraZ, gastos[], totalGasto, totalCobros, totalVentas, totalNeto, obs
-    try{docs=await fbGet('ventas_diarias');conteos.Ventas=crearHoja('Ventas Diarias','VENTAS DIARIAS',['ID','Fecha','Sucursal','Ticket Z','Efectivo','Tarjeta','Mercado Pago','Otro','Extra Z','Total Cobros','Total Ventas','Gastos','Neto','Detalle gastos','Obs'],docs.map(function(d){var v=d.data;var ef=parseFloat(v.cobEfec)||0,ta=parseFloat(v.cobTarj)||0,mp=parseFloat(v.cobMP)||0,ot=parseFloat(v.cobOtro)||0;var ga=v.totalGasto!=null?(parseFloat(v.totalGasto)||0):(v.gastos||[]).reduce(function(s,g){return s+(parseFloat(g.monto)||0);},0);var tz=parseFloat(v.totalZ)||0,ex=parseFloat(v.extraZ)||0;var tv=v.totalVentas!=null?(parseFloat(v.totalVentas)||0):tz+ex;var tc=v.totalCobros!=null?(parseFloat(v.totalCobros)||0):ef+ta+mp+ot;var det=(v.gastos||[]).map(function(g){return (g.desc||'')+' $'+(g.monto||0);}).join(', ');return[d.id,v.fecha||'',v.sucursal||'',tz,ef,ta,mp,ot,ex,tc,tv,ga,v.totalNeto!=null?(parseFloat(v.totalNeto)||0):tv-ga,det,v.obs||''];}));}catch(e){conteos.Ventas=0;}
+    conteos.Ventas=crearHoja('Ventas Diarias','VENTAS DIARIAS',['ID','Fecha','Sucursal','Ticket Z','Efectivo','Tarjeta','Mercado Pago','Otro','Extra Z','Total Cobros','Total Ventas','Gastos','Neto','Detalle gastos','Obs'],filas(base.ventas_diarias,function(d){var v=d.data;var gs=lista_index(v.gastos);var ef=parseFloat(v.cobEfec)||0,ta=parseFloat(v.cobTarj)||0,mp=parseFloat(v.cobMP)||0,ot=parseFloat(v.cobOtro)||0;var ga=v.totalGasto!=null?(parseFloat(v.totalGasto)||0):gs.reduce(function(s,g){return s+(parseFloat(g.monto)||0);},0);var tz=parseFloat(v.totalZ)||0,ex=parseFloat(v.extraZ)||0;var tv=v.totalVentas!=null?(parseFloat(v.totalVentas)||0):tz+ex;var tc=v.totalCobros!=null?(parseFloat(v.totalCobros)||0):ef+ta+mp+ot;var det=gs.map(function(g){return (g.desc||'')+' $'+(g.monto||0);}).join(', ');return[d.id,v.fecha||'',v.sucursal||'',tz,ef,ta,mp,ot,ex,tc,tv,ga,v.totalNeto!=null?(parseFloat(v.totalNeto)||0):tv-ga,det,v.obs||''];}));
     // La colección de stock es stock_produccion (no 'produccion')
-    try{docs=await fbGet('stock_produccion');conteos.Stock=crearHoja('Stock','STOCK PRODUCCIÓN',['ID','Producto','Categoría','Cantidad','Unidad','Mínimo','Estado'],docs.map(function(d){var p=d.data;return[d.id,p.nombre||'',p.categoria||'',p.cantidad||0,p.unidad||'',p.minimo||'-',(p.minimo&&p.cantidad<p.minimo)?'BAJO':'OK'];}));}catch(e){conteos.Stock=0;}
-    try{docs=await fbGet('faenas');conteos.Faenas=crearHoja('Faenas','FAENAS',['ID','Fecha','Tipo','Cabezas','Peso Total','Peso Prom','Obs'],docs.map(function(d){var f=d.data;var ff=f.fecha&&f.fecha.toDate?f.fecha.toDate().toISOString().substring(0,10):(f.fecha||'');return[d.id,ff,f.tipo||'',f.cantidad||0,f.pesoTotal||0,f.pesoPromedio||0,f.obs||''];}));}catch(e){conteos.Faenas=0;}
+    conteos.Stock=crearHoja('Stock','STOCK PRODUCCIÓN',['ID','Producto','Categoría','Cantidad','Unidad','Mínimo','Estado'],filas(base.stock_produccion,function(d){var p=d.data;var cant=parseFloat(p.cantidad)||0,min=parseFloat(p.minimo)||0;return[d.id,p.nombre||'',p.categoria||'',p.cantidad||0,p.unidad||'',p.minimo||'-',(min&&cant<min)?'BAJO':'OK'];}));
+    conteos.Faenas=crearHoja('Faenas','FAENAS',['ID','Fecha','Tipo','Cabezas','Peso Total','Peso Prom','Obs'],filas(base.faenas,function(d){var f=d.data;return[d.id,dia_index(f.fecha)||f.fecha||'',f.tipo||'',f.cantidad||0,f.pesoTotal||0,f.pesoPromedio||0,f.obs||''];}));
     // La colección real es trazabilidad_lotes: nroLote, fechaElab, fechaVenc, operario, productos[], materiasPrimas[]. Una fila por producto del lote.
-    try{docs=await fbGet('trazabilidad_lotes');var filasLotes=[];docs.forEach(function(d){var l=d.data;var prods=l.productos&&l.productos.length?l.productos:[{}];var mp=(l.materiasPrimas||[]).map(function(m){return [m.tipo,m.corte,m.proveedor,(m.kg!=null?m.kg+'kg':'')].filter(Boolean).join(' ');}).join(' | ');prods.forEach(function(pr){filasLotes.push([d.id,l.nroLote||'',l.fechaElab||'',l.fechaVenc||'',l.operario||'',pr.nombre||'-',pr.cantidad!=null?pr.cantidad:'-',pr.unidad||'',mp,l.obs||'']);});});conteos.Lotes=crearHoja('Lotes','LOTES DE TRAZABILIDAD',['ID','Nro Lote','Elaboración','Vencimiento','Operario','Producto','Cantidad','Unidad','Materias primas','Obs'],filasLotes);}catch(e){conteos.Lotes=0;}
-    try{docs=await fbGet('precios_cliente');conteos.Precios=crearHoja('Precios','PRECIOS POR CLIENTE',['ID','Cliente','Producto','Precio ($)'],docs.map(function(d){var pc=d.data;return[d.id,pc.cliente||'',pc.producto||'',pc.precio||0];}));}catch(e){conteos.Precios=0;}
+    conteos.Lotes=crearHoja('Lotes','LOTES DE TRAZABILIDAD',['ID','Nro Lote','Elaboración','Vencimiento','Operario','Producto','Cantidad','Unidad','Materias primas','Obs'],filas(base.trazabilidad_lotes,function(d){var l=d.data;var prods=lista_index(l.productos).length?l.productos:[{}];var mp=lista_index(l.materiasPrimas).map(function(m){return [m.tipo,m.corte,m.proveedor,(m.kg!=null?m.kg+'kg':'')].filter(Boolean).join(' ');}).join(' | ');return prods.map(function(pr){return[d.id,l.nroLote||'',l.fechaElab||'',l.fechaVenc||'',l.operario||'',pr.nombre||'-',pr.cantidad!=null?pr.cantidad:'-',pr.unidad||'',mp,l.obs||''];});},true));
+    conteos.Precios=crearHoja('Precios','PRECIOS POR CLIENTE',['ID','Cliente','Producto','Precio ($)'],filas(base.precios_cliente,function(d){var pc=d.data;return[d.id,pc.cliente||'',pc.producto||'',pc.precio||0];}));
+    // Estas tres colecciones no entraban en el backup.
+    conteos.Devoluciones=crearHoja('Devoluciones','DEVOLUCIONES',['ID','Fecha','Cliente','Producto','Cantidad','Unidad','Motivo','Descripción','Pedido original','Monto ($)','Estado'],filas(base.devoluciones,function(d){var v=d.data;return[d.id,dia_index(v.fecha,v.createdAt),v.cliente||'',v.producto||'',v.cantidad!=null?v.cantidad:'',v.unidad||'',v.motivo||'',v.descripcion||'',v.fechaPedidoOrig||'',v.monto||0,v.estado||''];}));
+    var movsStock=base.stock_movimientos.slice().sort(function(a,b){return momento_index(b.data.createdAt,b.data.fecha)-momento_index(a.data.createdAt,a.data.fecha);});
+    conteos['Stock Mov']=crearHoja('Stock Movimientos','MOVIMIENTOS DE STOCK',['ID','Fecha','Producto','Tipo','Subtipo','Cantidad','Unidad','Destino','Encargado','Reporte','Obs'],filas(movsStock,function(d){var m=d.data;return[d.id,dia_index(m.fecha,m.createdAt),m.nombre||'',m.tipo||'',m.subtipo||'',m.cantidad!=null?m.cantidad:'',m.unidad||'',m.destino||'',m.encargado||'',m.ref||'',m.obs||''];}));
+    var reportes=base.reportes.slice().sort(function(a,b){return momento_index(b.data.fechaISO,b.data.fecha)-momento_index(a.data.fechaISO,a.data.fecha);});
+    conteos.Reportes=crearHoja('Reportes Producción','REPORTES DE PRODUCCIÓN',['ID','Fecha','Área','Encargado','Producto','Cantidad','Unidad','Obs ítem','Obs'],filas(reportes,function(d){var r=d.data;var its=lista_index(r.items).length?r.items:[{}];var f=dia_index(r.fechaISO,r.fecha);return its.map(function(it){return[d.id,f,r.area||'',r.encargado||'',it.producto||'-',it.cantidad!=null?it.cantidad:'',it.unidad||'',it.obs||'',r.obs||''];});},true));
     var wsRes=XLSX.utils.aoa_to_sheet([]);
     XLSX.utils.sheet_add_aoa(wsRes,[['BACKUP CRM — FRIGORÍFICO SERSALE'],['CUIT 30-70227633-7'],[],['Fecha:',fechaStr],[],['MÓDULO','REGISTROS']],{origin:'A1'});
     var fila=7;Object.entries(conteos).forEach(function(e){XLSX.utils.sheet_add_aoa(wsRes,[[e[0],e[1]]],{origin:'A'+fila});fila++;});
     wsRes['!cols']=[{wch:28},{wch:14}];
     wb.SheetNames.unshift('Resumen');wb.Sheets['Resumen']=wsRes;
-    var fechaFile=hoy.toISOString().substring(0,10);
-    XLSX.writeFile(wb,'Backup_CRM_Sersale_'+fechaFile+'.xlsx');
-    document.getElementById('status').innerHTML='✅ Backup generado: Backup_CRM_Sersale_'+fechaFile+'.xlsx';
-  }catch(e){document.getElementById('status').innerHTML='❌ Error: '+e.message;console.error(e);}
+    var archivo='Backup_CRM_Sersale_'+hoyDia+'.xlsx';
+    XLSX.writeFile(wb,archivo);
+    var total=Object.keys(conteos).reduce(function(s,k){return s+conteos[k];},0);
+    estado_index('✅ Backup generado: '+archivo+' ('+total+' registros)'+(conError?' · ⚠️ '+conError+' registro'+(conError===1?'':'s')+' con formato inesperado: figuran con ⚠ en su hoja':''));
+    if(conError)SersaleUI.toast(conError+' registro'+(conError===1?'':'s')+' no se pudieron leer bien. Revisá las filas con ⚠ en el Excel.',{tipo:'error'});
+  }catch(e){fallo('No se pudo generar el backup: '+(e&&e.message||e),e);}
+  finally{generando_index=false;btn.disabled=false;btn.style.opacity='';}
 }
 </script></body></html>

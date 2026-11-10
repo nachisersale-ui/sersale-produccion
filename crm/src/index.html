@@ -124,9 +124,9 @@
   </style>
 
   <script type="module">
-    import { db, collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot } from "./js/fb.js";
+    import { db, collection, addDoc, getDocs, getDocsFromServer, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot } from "./js/fb.js";
     window.__db = db;
-    window.__fb = { collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot };
+    window.__fb = { collection, addDoc, getDocs, getDocsFromServer, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot };
     window.__fbReady = true;
     document.dispatchEvent(new Event("fbReady"));
   </script>
@@ -239,6 +239,8 @@
 
     // ===== ACCIÓN: ABRIR MODAL DE LOGIN DIRECTOR =====
     window.abrirLoginDirector = function() {
+      if (document.getElementById("__login_modal")) return; // doble toque: una sola ventana
+      var abierto = Date.now();
       var modal = document.createElement("div");
       modal.className = "modal-bg";
       modal.id = "__login_modal";
@@ -261,13 +263,18 @@
             '<button type="button" class="btn-secondary" onclick="cerrarLoginModal()">Cancelar</button>' +
           '</form>' +
         '</div>';
-      modal.onclick = cerrarLoginModal;
+      // El segundo toque de un doble toque cae en el fondo: no tiene que cerrar lo que recién se abrió.
+      modal.onclick = function(){ if (Date.now() - abierto > 400) cerrarLoginModal(); };
       document.body.appendChild(modal);
       document.getElementById("__login_form").onsubmit = function(e) {
         e.preventDefault();
         intentarLogin();
       };
-      setTimeout(function(){ document.getElementById("__login_user").focus(); }, 100);
+      setTimeout(function(){
+        // Si la persona (o el autocompletado) ya está en otro campo del formulario, no se le saca el cursor.
+        var u = document.getElementById("__login_user"), a = document.activeElement;
+        if (u && !(a && a !== u && a.form && a.form.id === "__login_form")) u.focus();
+      }, 100);
     };
 
     window.cerrarLoginModal = function() {
@@ -281,26 +288,57 @@
       var pwd = document.getElementById("__login_pwd").value;
       var msg = document.getElementById("__login_msg");
       var btn = document.getElementById("__login_btn");
+      if (btn.disabled) return; // ya hay un intento en curso
       msg.textContent = "";
       msg.className = "err-msg";
       if (!usuario || !pwd) {
         msg.textContent = "Completá usuario y contraseña";
         return;
       }
-      if (!window.__fbReady) {
-        msg.textContent = "Conectando con la base de datos...";
-        await new Promise(function(r){ document.addEventListener("fbReady", r, {once:true}); });
+      // Deja el formulario listo para otro intento, con lo que la persona escribió.
+      function soltar(texto, conShake) {
+        msg.className = "err-msg";
+        msg.textContent = texto;
+        if (conShake) shake();
+        btn.disabled = false;
+        btn.textContent = "Ingresar";
       }
       btn.disabled = true;
       btn.textContent = "Verificando...";
+      if (!window.__fbReady) {
+        msg.textContent = "Conectando con la base de datos...";
+        var conectado = await new Promise(function(r){
+          document.addEventListener("fbReady", function(){ r(true); }, {once:true});
+          setTimeout(function(){ r(!!window.__fbReady); }, 10000);
+        });
+        if (!conectado) { soltar("No se pudo conectar. Revisá la conexión y volvé a abrir la app."); return; }
+        msg.textContent = "";
+      }
       try {
         var f = fb();
         var col = f.collection(f.db, "usuarios");
         var snap = await f.getDocs(col);
         var pwdHash = await hashPassword(pwd);
+        if (!btn.isConnected) return; // tocó "Cancelar" mientras se verificaba
+
+        // Una lista de usuarios vacía solo vale si la contestó el servidor. Con mala
+        // señal en un teléfono sin datos guardados la copia local viene vacía, y acá
+        // se creaba (o se pisaba) un Director con lo que se hubiera escrito.
+        if (snap.empty) {
+          try {
+            snap = await f.getDocsFromServer(col);
+          } catch (errServ) {
+            console.error(errServ);
+            soltar("Sin conexión con el servidor. Probá de nuevo cuando haya señal.");
+            return;
+          }
+          if (!btn.isConnected) return;
+        }
 
         // ¿Bootstrap? Si la colección está vacía, creo el primer Director con estas credenciales
         if (snap.empty) {
+          if (!/^[a-z0-9_.-]+$/.test(usuario)) { soltar("Para el primer usuario usá solo letras minúsculas, números, _ . -"); return; }
+          if (pwd.length < 4) { soltar("La contraseña debe tener al menos 4 caracteres"); return; }
           msg.className = "ok-msg";
           msg.textContent = "Creando primer usuario Director...";
           var nuevo = {
@@ -319,31 +357,22 @@
         // Buscar usuario
         var encontrado = null;
         snap.forEach(function(d){
-          if (d.id === usuario || (d.data().usuario || "").toLowerCase() === usuario) {
+          if (d.id === usuario || String(d.data().usuario || "").toLowerCase() === usuario) {
             encontrado = Object.assign({id: d.id}, d.data());
           }
         });
-        if (!encontrado) {
-          msg.textContent = "Usuario o contraseña incorrectos";
-          shake(); btn.disabled = false; btn.textContent = "Ingresar";
+        if (!encontrado || encontrado.passwordHash !== pwdHash) {
+          soltar("Usuario o contraseña incorrectos", true);
           return;
         }
         if (encontrado.activo === false) {
-          msg.textContent = "Usuario desactivado";
-          shake(); btn.disabled = false; btn.textContent = "Ingresar";
-          return;
-        }
-        if (encontrado.passwordHash !== pwdHash) {
-          msg.textContent = "Usuario o contraseña incorrectos";
-          shake(); btn.disabled = false; btn.textContent = "Ingresar";
+          soltar("Usuario desactivado", true);
           return;
         }
         loginExitoso(encontrado.usuario || encontrado.id, encontrado.nombre || encontrado.id);
       } catch(err) {
         console.error(err);
-        msg.textContent = "Error al conectar. Reintentá.";
-        btn.disabled = false;
-        btn.textContent = "Ingresar";
+        soltar(navigator.onLine === false ? "Sin conexión. Probá de nuevo cuando haya señal." : "Error al conectar. Reintentá.");
       }
     }
 
@@ -378,6 +407,70 @@
       render();
     };
 
+    // ===== SESIÓN VIGENTE =====
+    // "Desactivar" o "Eliminar" un usuario no le cortaba el acceso: la sesión
+    // recordada en su teléfono seguía entrando 30 días. Al abrir el panel se
+    // controla contra la lista de usuarios; sin señal o sin datos no se cierra nada.
+    var verificando_index = false;
+    async function verificarSesion_index() {
+      if (sesionRole !== "director" || !sesionUsuario || verificando_index) return;
+      var f = fb();
+      if (!f) return;
+      verificando_index = true;
+      try {
+        var revisado = sesionUsuario;
+        var snap = await f.getDocs(f.collection(f.db, "usuarios"));
+        if (snap.empty) return; // todavía no hay usuarios cargados (o no hay datos): no se puede afirmar nada
+        var existe = false, activo = false;
+        snap.forEach(function(d){
+          var u = d.data();
+          if (d.id === revisado || (u.usuario || d.id) === revisado) { existe = true; if (u.activo !== false) activo = true; }
+        });
+        if (sesionRole !== "director" || sesionUsuario !== revisado) return; // salió o entró otro mientras tanto
+        if (activo) return;
+        window.cerrarUsrModal();
+        window.cerrarSesion();
+        SersaleUI.toast(existe ? "Tu usuario fue desactivado. Pedile a otro director que lo active." : "Tu usuario ya no existe. Ingresá con otro usuario.", { tipo: "error", ms: 8000 });
+      } catch (err) {
+        console.warn("No se pudo controlar la sesión:", err && (err.code || err.message));
+      } finally {
+        verificando_index = false;
+      }
+    }
+
+    // Saludo y fecha del panel, siempre en hora de Buenos Aires.
+    function saludoDelDia_index() {
+      var ahora = new Date();
+      var h = (parseInt(SersaleBase.fmtHora(ahora), 10) || 0) % 24;
+      return {
+        saludo: h < 12 ? "Buenos d\u00edas" : (h < 19 ? "Buenas tardes" : "Buenas noches"),
+        hoy: ahora.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long", timeZone: SersaleBase.ZONA })
+      };
+    }
+    var panelMostrado_index = "";
+
+    // Al volver a la pantalla (gesto "atrás", o la app que quedó abierta desde ayer)
+    // se vuelve a leer la sesión, y el panel no queda con el saludo y la fecha viejos.
+    function alVolver_index() {
+      if (document.visibilityState === "hidden") return;
+      var rol = sessionStorage.getItem("sersale_role");
+      var cambioSesion = rol !== sesionRole;
+      if (cambioSesion) {
+        sesionRole = rol;
+        sesionUsuario = sessionStorage.getItem("sersale_usuario") || "";
+        sesionNombre = sessionStorage.getItem("sersale_nombre") || "";
+      }
+      if (sesionRole !== "director") {
+        if (cambioSesion) { window.cerrarUsrModal(); render(); }
+        return;
+      }
+      var d = saludoDelDia_index();
+      if (!document.querySelector(".modal-bg") && (cambioSesion || d.saludo + d.hoy !== panelMostrado_index)) render();
+      verificarSesion_index();
+    }
+    window.addEventListener("pageshow", function(e){ if (e.persisted) alVolver_index(); });
+    document.addEventListener("visibilitychange", alVolver_index);
+
     // ===== DASHBOARD DIRECTOR =====
     function renderDashboardDirector() {
       var modulos = [
@@ -397,9 +490,10 @@
           '<span style="font-size:11.5px;color:var(--acero);line-height:1.4;display:block">'+m.desc+'</span></a>';
       });
 
-      var h = new Date().getHours();
-      var saludo = h < 12 ? "Buenos d\u00edas" : (h < 19 ? "Buenas tardes" : "Buenas noches");
-      var hoy = new Date().toLocaleDateString("es-AR",{weekday:"long",day:"2-digit",month:"long"});
+      var delDia = saludoDelDia_index();
+      var saludo = delDia.saludo;
+      var hoy = delDia.hoy;
+      panelMostrado_index = saludo + hoy;
 
       function rapido(icono, texto, href, color) {
         return '<a href="'+href+'" class="qa"><span style="color:'+color+';flex-shrink:0">'+ico(icono,19)+'</span>'+texto+'</a>';
@@ -443,6 +537,10 @@
     // ===== GESTIÓN DE USUARIOS (Director only) =====
     window.abrirGestionUsuarios = async function() {
       if (sesionRole !== "director") return;
+      // "Volver" y "Crear usuario" vuelven a llamar acá: se saca la ventana anterior
+      // para no apilar una arriba de la otra (quedaban botones que no respondían).
+      window.cerrarUsrModal();
+      var abierto = Date.now();
       var modal = document.createElement("div");
       modal.className = "modal-bg";
       modal.id = "__usr_modal";
@@ -453,20 +551,19 @@
         '<div class="modal-box fade-in" style="max-width:520px;padding:22px" onclick="event.stopPropagation()">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
             '<h2 style="font-size:18px;font-weight:800;color:#191E23">👥 Gestión de Usuarios</h2>' +
-            '<button onclick="cerrarUsrModal()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#79828B;line-height:1">×</button>' +
+            '<button onclick="cerrarUsrModal()" aria-label="Cerrar" style="background:none;border:none;font-size:22px;cursor:pointer;color:#79828B;line-height:1;min-width:44px;min-height:44px">×</button>' +
           '</div>' +
           '<button onclick="abrirFormUsuario()" class="btn-primary" style="margin-bottom:14px">➕ Nuevo Director</button>' +
           '<div id="__usr_lista" style="min-height:80px"><p style="text-align:center;color:#79828B;font-size:13px">Cargando...</p></div>' +
           '<button class="btn-secondary" onclick="cerrarUsrModal()">Cerrar</button>' +
         '</div>';
-      modal.onclick = function(){ cerrarUsrModal(); };
+      modal.onclick = function(){ if (Date.now() - abierto > 400) window.cerrarUsrModal(); };
       document.body.appendChild(modal);
       await cargarListaUsuarios();
     };
 
     window.cerrarUsrModal = function() {
-      var m = document.getElementById("__usr_modal");
-      if (m) m.remove();
+      document.querySelectorAll('[id="__usr_modal"]').forEach(function(m){ m.remove(); });
     };
 
     async function cargarListaUsuarios() {
@@ -481,25 +578,39 @@
         }
         var html = '<div style="border:1px solid #E8E8E8;border-radius:10px;overflow:hidden">';
         var arr = [];
-        snap.forEach(function(d){ arr.push(Object.assign({id:d.id}, d.data())); });
-        arr.sort(function(a,b){ return (a.usuario||a.id).localeCompare(b.usuario||b.id); });
+        snap.forEach(function(d){ arr.push(Object.assign({}, d.data(), {id:d.id})); });
+        arr.sort(function(a,b){ return String(a.usuario||a.id).localeCompare(String(b.usuario||b.id)); });
+        var btnCss = 'border:none;border-radius:8px;min-width:44px;min-height:44px;cursor:pointer;font-size:16px;flex-shrink:0';
         arr.forEach(function(u, i){
           var nombre = escapeHtml(u.nombre || u.id);
           var usr = escapeHtml(u.usuario || u.id);
           var activo = u.activo !== false;
-          var esActual = (u.usuario || u.id) === sesionUsuario;
-          html += '<div style="display:flex;align-items:center;gap:10px;padding:12px;'+(i>0?"border-top:1px solid #E4E7EA":"")+';background:'+(activo?"#fff":"#F7F8F9")+'">' +
+          var esActual = (u.usuario || u.id) === sesionUsuario || u.id === sesionUsuario;
+          // Los botones llevan el id del documento como dato (no dentro de un onclick armado
+          // a mano): el id puede no ser igual al nombre de usuario y puede traer comillas.
+          var datos = ' data-usr-id="' + escapeHtml(u.id) + '" data-usr-nombre="' + usr + '"';
+          html += '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;'+(i>0?"border-top:1px solid #E4E7EA":"")+';background:'+(activo?"#fff":"#F7F8F9")+'">' +
             '<div style="flex:1;min-width:0">' +
               '<div style="font-weight:700;font-size:14px;color:#191E23">' + nombre + (esActual?' <span style="font-size:10px;color:#2F6B4F;font-weight:600">(vos)</span>':'') + '</div>' +
               '<div style="font-size:11px;color:#79828B">@'+usr+' · '+(activo?"Activo":"Desactivado")+'</div>' +
             '</div>' +
-            '<button onclick="cambiarPwdUsuario(\'' + usr + '\')" title="Cambiar contraseña" style="background:#E7EDF1;border:none;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px">🔑</button>' +
-            (esActual ? '' : '<button onclick="toggleActivoUsuario(\'' + usr + '\',' + (!activo) + ')" title="' + (activo?"Desactivar":"Activar") + '" style="background:' + (activo?"#F3EEE2":"#E9F0EC") + ';border:none;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px">' + (activo?"🚫":"✅") + '</button>') +
-            (esActual ? '' : '<button onclick="eliminarUsuario(\'' + usr + '\')" title="Eliminar" style="background:#F7EAEA;border:none;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px">🗑️</button>') +
+            '<button data-usr-accion="clave"' + datos + ' title="Cambiar contraseña" aria-label="Cambiar contraseña" style="background:#E7EDF1;' + btnCss + '">🔑</button>' +
+            (esActual ? '' : '<button data-usr-accion="' + (activo?"desactivar":"activar") + '"' + datos + ' title="' + (activo?"Desactivar":"Activar") + '" aria-label="' + (activo?"Desactivar":"Activar") + '" style="background:' + (activo?"#F3EEE2":"#E9F0EC") + ';' + btnCss + '">' + (activo?"🚫":"✅") + '</button>') +
+            (esActual ? '' : '<button data-usr-accion="eliminar"' + datos + ' title="Eliminar" aria-label="Eliminar" style="background:#F7EAEA;' + btnCss + '">🗑️</button>') +
           '</div>';
         });
         html += '</div>';
         cont.innerHTML = html;
+        cont.onclick = function(e) {
+          var b = e.target.closest ? e.target.closest("button[data-usr-accion]") : null;
+          if (!b) return;
+          var id = b.getAttribute("data-usr-id");
+          var etiqueta = b.getAttribute("data-usr-nombre");
+          var accion = b.getAttribute("data-usr-accion");
+          if (accion === "clave") window.cambiarPwdUsuario(id, etiqueta);
+          else if (accion === "eliminar") window.eliminarUsuario(id, etiqueta);
+          else window.toggleActivoUsuario(id, accion === "activar");
+        };
       } catch(err) {
         console.error(err);
         cont.innerHTML = '<p style="text-align:center;color:#C33039;font-size:13px;padding:20px">Error al cargar usuarios</p>';
@@ -512,76 +623,125 @@
       var html =
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
           '<h2 style="font-size:18px;font-weight:800;color:#191E23">➕ Nuevo Director</h2>' +
-          '<button onclick="abrirGestionUsuarios()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#79828B;line-height:1">×</button>' +
+          '<button onclick="abrirGestionUsuarios()" aria-label="Volver" style="background:none;border:none;font-size:22px;cursor:pointer;color:#79828B;line-height:1;min-width:44px;min-height:44px">×</button>' +
         '</div>' +
         '<form id="__nuevo_usr_form" autocomplete="off">' +
-          '<input type="text" id="__nu_nombre" class="input-field" placeholder="Nombre completo (ej: Fernando García)" />' +
-          '<input type="text" id="__nu_usuario" class="input-field" placeholder="Usuario (sin espacios, ej: fernando)" autocapitalize="none" />' +
-          '<input type="password" id="__nu_pwd" class="input-field" placeholder="Contraseña" />' +
-          '<input type="password" id="__nu_pwd2" class="input-field" placeholder="Repetir contraseña" />' +
+          '<input type="text" id="__nu_nombre" class="input-field" placeholder="Nombre completo (ej: Fernando García)" autocomplete="off" />' +
+          '<input type="text" id="__nu_usuario" class="input-field" placeholder="Usuario (sin espacios, ej: fernando)" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" />' +
+          '<input type="password" id="__nu_pwd" class="input-field" placeholder="Contraseña" autocomplete="new-password" />' +
+          '<input type="password" id="__nu_pwd2" class="input-field" placeholder="Repetir contraseña" autocomplete="new-password" />' +
           '<div id="__nu_msg" class="err-msg"></div>' +
-          '<button type="submit" class="btn-primary">Crear usuario</button>' +
+          '<button type="submit" class="btn-primary" id="__nu_btn">Crear usuario</button>' +
           '<button type="button" class="btn-secondary" onclick="abrirGestionUsuarios()">Volver</button>' +
         '</form>';
       box.innerHTML = html;
+      var creando = false;
       document.getElementById("__nuevo_usr_form").onsubmit = async function(e) {
         e.preventDefault();
+        if (creando) return; // doble toque
         var nombre = document.getElementById("__nu_nombre").value.trim();
         var usr = document.getElementById("__nu_usuario").value.trim().toLowerCase();
         var p1 = document.getElementById("__nu_pwd").value;
         var p2 = document.getElementById("__nu_pwd2").value;
         var msg = document.getElementById("__nu_msg");
+        var btn = document.getElementById("__nu_btn");
         msg.textContent = "";
         if (!nombre || !usr || !p1) { msg.textContent = "Completá todos los campos"; return; }
         if (!/^[a-z0-9_.-]+$/.test(usr)) { msg.textContent = "Usuario solo con letras minúsculas, números, _ . -"; return; }
         if (p1.length < 4) { msg.textContent = "La contraseña debe tener al menos 4 caracteres"; return; }
         if (p1 !== p2) { msg.textContent = "Las contraseñas no coinciden"; return; }
+        if (navigator.onLine === false) { msg.textContent = "Sin conexión: probá de nuevo cuando haya señal"; return; }
+        creando = true;
+        btn.disabled = true;
+        btn.textContent = "Creando...";
         try {
           var f = fb();
           var ref = f.doc(f.db, "usuarios", usr);
-          var existe = await f.getDoc(ref);
-          if (existe.exists()) { msg.textContent = "Ya existe un usuario con ese nombre"; return; }
+          // Mismo criterio que el ingreso: el usuario puede estar en el id o en el campo "usuario".
+          var repetido = false;
+          var todos = await f.getDocs(f.collection(f.db, "usuarios"));
+          todos.forEach(function(d){
+            if (d.id.toLowerCase() === usr || String(d.data().usuario || "").toLowerCase() === usr) repetido = true;
+          });
+          if (!repetido) repetido = (await f.getDoc(ref)).exists();
+          if (repetido) { msg.textContent = "Ya existe un usuario con ese nombre"; return; }
           var pwdHash = await hashPassword(p1);
           await f.setDoc(ref, {
             usuario: usr, passwordHash: pwdHash, nombre: nombre, activo: true, creado: f.Timestamp.now()
           });
+          SersaleUI.toast("Usuario @" + usr + " creado", { tipo: "ok" });
           await window.abrirGestionUsuarios();
-        } catch(err) { console.error(err); msg.textContent = "Error al crear usuario"; }
+        } catch(err) {
+          console.error(err);
+          msg.textContent = "No se pudo crear el usuario. Probá de nuevo.";
+        } finally {
+          creando = false;
+          btn.disabled = false;
+          btn.textContent = "Crear usuario";
+        }
       };
     };
 
-    window.cambiarPwdUsuario = async function(usr) {
-      var nueva = prompt("Nueva contraseña para @"+usr+":");
+    // Cambios sobre un usuario: de a uno por vez, con señal, y si falla se avisa.
+    var usrOcupado_index = false;
+    async function usrOperacion_index(fn, textoError) {
+      if (usrOcupado_index) { SersaleUI.toast("Esperá: todavía se está guardando el cambio anterior.", { tipo: "info" }); return false; }
+      if (navigator.onLine === false) { SersaleUI.toast("Sin conexión: los usuarios se cambian con señal.", { tipo: "error" }); return false; }
+      usrOcupado_index = true;
+      try {
+        await fn(fb());
+        return true;
+      } catch(err) {
+        console.error(err);
+        SersaleUI.toast(textoError, { tipo: "error" });
+        return false;
+      } finally {
+        usrOcupado_index = false;
+      }
+    }
+
+    // `id` es el id del documento en "usuarios"; `etiqueta`, el nombre de usuario que se muestra.
+    window.cambiarPwdUsuario = async function(id, etiqueta) {
+      var pedido = SersaleUI.pedirTexto({ titulo: "Nueva contraseña", etiqueta: "Para @" + (etiqueta || id) + " (mínimo 4 caracteres)", aceptar: "Guardar" });
+      // Que el teclado del teléfono no le ponga mayúscula ni "corrija" la clave.
+      var campos = document.querySelectorAll(".ss-hoja .ss-campo");
+      var campo = campos[campos.length - 1];
+      if (campo) { campo.setAttribute("autocapitalize", "none"); campo.setAttribute("autocorrect", "off"); campo.setAttribute("spellcheck", "false"); }
+      var nueva = await pedido;
       if (!nueva) return;
-      if (nueva.length < 4) { alert("La contraseña debe tener al menos 4 caracteres"); return; }
-      try {
-        var f = fb();
+      if (nueva.length < 4) { SersaleUI.toast("La contraseña debe tener al menos 4 caracteres. No se cambió.", { tipo: "error" }); return; }
+      var ok = await usrOperacion_index(async function(f) {
         var pwdHash = await hashPassword(nueva);
-        await f.updateDoc(f.doc(f.db, "usuarios", usr), { passwordHash: pwdHash });
-        alert("Contraseña actualizada");
-      } catch(err) { console.error(err); alert("Error al actualizar"); }
+        await f.updateDoc(f.doc(f.db, "usuarios", id), { passwordHash: pwdHash });
+      }, "No se pudo cambiar la contraseña. Probá de nuevo.");
+      if (ok) SersaleUI.toast("Contraseña de @" + (etiqueta || id) + " actualizada", { tipo: "ok" });
     };
 
-    window.toggleActivoUsuario = async function(usr, nuevoEstado) {
-      try {
-        var f = fb();
-        await f.updateDoc(f.doc(f.db, "usuarios", usr), { activo: nuevoEstado });
-        await cargarListaUsuarios();
-      } catch(err) { console.error(err); alert("Error al actualizar"); }
+    window.toggleActivoUsuario = async function(id, nuevoEstado) {
+      await usrOperacion_index(async function(f) {
+        await f.updateDoc(f.doc(f.db, "usuarios", id), { activo: nuevoEstado });
+      }, "No se pudo actualizar el usuario. Probá de nuevo.");
+      await cargarListaUsuarios();
     };
 
-    window.eliminarUsuario = async function(usr) {
-      if (!confirm("¿Eliminar al usuario @"+usr+"? Esta acción no se puede deshacer.")) return;
-      try {
-        var f = fb();
-        await f.deleteDoc(f.doc(f.db, "usuarios", usr));
-        await cargarListaUsuarios();
-      } catch(err) { console.error(err); alert("Error al eliminar"); }
+    window.eliminarUsuario = async function(id, etiqueta) {
+      var si = await SersaleUI.confirmar({
+        titulo: "¿Eliminar al usuario @" + (etiqueta || id) + "?",
+        cuerpo: "No va a poder ingresar más. Esta acción no se puede deshacer.",
+        aceptar: "Eliminar", peligro: true
+      });
+      if (!si) return;
+      var ok = await usrOperacion_index(async function(f) {
+        await f.deleteDoc(f.doc(f.db, "usuarios", id));
+      }, "No se pudo eliminar el usuario. Probá de nuevo.");
+      if (ok) SersaleUI.toast("Usuario @" + (etiqueta || id) + " eliminado", { tipo: "ok" });
+      await cargarListaUsuarios();
     };
 
     // ===== INIT =====
     var LOGO = "assets/logo.png";
     render();
+    waitForFirebase(verificarSesion_index);
   </script>
 
   
