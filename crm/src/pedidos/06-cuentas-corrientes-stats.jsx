@@ -1,32 +1,43 @@
     function TabCuentasCorrientes({ refresh }) {
       const [clientes, setClientes] = useState(null);
+      const [errorCarga, setErrorCarga] = useState(false);
       const [clienteAbierto, setClienteAbierto] = useState(null);
       const [modalPago, setModalPago] = useState(null);
       const [pagoForm, setPagoForm] = useState({monto:"",formaPago:"transferencia",obs:""});
-      const [guardandoPago, setGuardandoPago] = useState(false);
       const [modalNuevo, setModalNuevo] = useState(false);
       const [nuevoNombre, setNuevoNombre] = useState("");
-      const [clientesDisponibles, setClientesDisponibles] = useState([]);
+      const [clientesDisponibles, setClientesDisponibles] = useState(null); // null = cargando
+      // Avisa al detalle abierto que hay movimientos nuevos (un pago recién cargado)
+      const [recargas, setRecargas] = useState(0);
+      // Id del pago que se está cargando: si hay que reintentar, no se duplica
+      const pagoId = React.useRef(null);
 
       async function cargarClientesDisponibles() {
+        setClientesDisponibles(null);
         try {
           const {db,collection,getDocs,query,orderBy} = fb();
           // Todos los clientes registrados
           const snapCli = await getDocs(query(collection(db,"clientes"),orderBy("nombre","asc")));
           const todos = snapCli.docs.map(d=>d.data().nombre).filter(Boolean);
-          // Quitar los que ya tienen CC
+          // Quitar los que ya tienen CC (mismo nombre aunque cambien mayúsculas o acentos)
           const snapCC = await getDocs(collection(db,"cuentas_corrientes"));
-          const yaCC = new Set(snapCC.docs.map(d=>d.data().nombre));
-          setClientesDisponibles(todos.filter(n=>!yaCC.has(n)));
-        } catch(e){ console.error(e); }
+          const yaCC = snapCC.docs.map(d=>d.data().nombre);
+          setClientesDisponibles(todos.filter(n=>!yaCC.some(c=>ccMismoCliente(c,n))));
+        } catch(e){
+          console.error(e);
+          setClientesDisponibles([]);
+          SersaleUI.toast("No se pudo cargar la lista de clientes.", { tipo: "error" });
+        }
       }
 
       async function cargar() {
         try {
           const {db,collection,getDocs,query,orderBy} = fb();
           const snap = await getDocs(query(collection(db,"cuentas_corrientes"),orderBy("nombre","asc")));
-          setClientes(snap.docs.map(d=>({id:d.id,...d.data()})));
-        } catch(e){ console.error(e); setClientes([]); }
+          // Las cuentas fusionadas por la migración (mergedInto) ya no se usan
+          setClientes(snap.docs.map(d=>({id:d.id,...d.data()})).filter(c=>!c.mergedInto));
+          setErrorCarga(false);
+        } catch(e){ console.error(e); setErrorCarga(true); }
       }
 
       useEffect(()=>{
@@ -40,69 +51,137 @@
         if(refresh !== refrescoVisto.current) { refrescoVisto.current = refresh; cargar(); }
       },[refresh]);
 
-      async function registrarPago() {
-        const monto = parseFloat(pagoForm.monto);
-        if(!monto||monto<=0) return alert("Ingresá un monto válido");
-        setGuardandoPago(true);
-        try {
-          const {db,collection,addDoc,doc,updateDoc,getDocs,query,where} = fb();
-          // 1. Registrar movimiento
-          await addDoc(collection(db,"cc_movimientos"),{
-            cliente:modalPago, tipo:"pago",
-            formaPago:pagoForm.formaPago,
-            monto, movimiento:-monto,
-            obs:pagoForm.obs.trim(),
-            fecha:new Date().toISOString().split("T")[0],
-            detalle:"Pago — "+pagoForm.formaPago,
-            createdAt:new Date().toISOString()
-          });
-          // 2. Recalcular saldo desde todos los movimientos (sin orderBy para evitar índice)
-          const snap = await getDocs(query(collection(db,"cc_movimientos"),where("cliente","==",modalPago)));
-          let saldo=0;
-          snap.docs.forEach(d=>{ const m=d.data(); saldo += m.tipo==="pedido"?m.monto:-m.monto; });
-          // 3. Actualizar saldo en cuenta corriente
-          const cSnap = await getDocs(query(collection(db,"cuentas_corrientes"),where("nombre","==",modalPago)));
-          if(!cSnap.empty) await updateDoc(doc(db,"cuentas_corrientes",cSnap.docs[0].id),{saldo:Math.round(saldo),ultimoMovimiento:new Date().toISOString().split("T")[0]});
-          setModalPago(null);
-          setPagoForm({monto:"",formaPago:"transferencia",obs:""});
-          cargar();
-          // Force detail to re-render by briefly closing and reopening
-          if(clienteAbierto===modalPago) {
-            const cli = clienteAbierto;
-            setClienteAbierto(null);
-            setTimeout(()=>setClienteAbierto(cli), 50);
-          }
-        } catch(e){ alert("Error al guardar: "+e.message); console.error(e); }
-        setGuardandoPago(false);
+      function abrirPago(nombre) {
+        pagoId.current = null;
+        setPagoForm({monto:"",formaPago:"transferencia",obs:""});
+        setModalPago(nombre);
+      }
+      function abrirNuevo() {
+        setNuevoNombre("");
+        setModalNuevo(true);
+        cargarClientesDisponibles();
       }
 
-      async function crearCliente() {
-        if(!nuevoNombre.trim()) return alert("Ingresá el nombre");
+      const [registrarPago, guardandoPago] = SersaleBase.useAccion(async () => {
+        const monto = SersaleBase.redondear(parseFloat(pagoForm.monto), 2);
+        if(!monto||monto<=0) { SersaleUI.toast("Ingresá un monto válido", { tipo: "error" }); return; }
         try {
-          const {db,collection,addDoc,Timestamp} = fb();
-          await addDoc(collection(db,"cuentas_corrientes"),{
-            nombre:nuevoNombre.trim(),saldo:0,
-            creadoEn:new Date().toISOString(),ultimoMovimiento:new Date().toISOString().split("T")[0]
+          const {db,collection,doc} = fb();
+          if(!pagoId.current) pagoId.current = doc(collection(db,"cc_movimientos")).id;
+          const hoy = SersaleBase.hoy();
+          // Movimiento y saldo se guardan juntos (o no se guarda nada)
+          const r = await ccAsentarMovimiento({
+            cliente: modalPago, movId: pagoId.current, ultimoMovimiento: hoy,
+            datos: {
+              tipo:"pago", formaPago:pagoForm.formaPago, monto,
+              obs:pagoForm.obs.trim(), fecha:hoy,
+              detalle:"Pago — "+pagoForm.formaPago
+            }
           });
+          if(!r.asentado) throw new Error("El cliente no tiene cuenta corriente: "+modalPago);
+          pagoId.current = null;
+          setModalPago(null);
+          setPagoForm({monto:"",formaPago:"transferencia",obs:""});
+          SersaleUI.toast("Pago de "+SersaleBase.fmtMonto(monto)+" registrado. Saldo: "+ccFmtSaldo(r.saldo), { tipo: "ok" });
+          setRecargas(n=>n+1);
+          cargar();
+        } catch(e){
+          console.error(e);
+          SersaleUI.toast("No se pudo registrar el pago. Revisá la conexión y probá de nuevo.", { tipo: "error" });
+        }
+      });
+
+      const [crearCliente, creando] = SersaleBase.useAccion(async () => {
+        const nombre = nuevoNombre.trim();
+        if(!nombre) { SersaleUI.toast("Elegí un cliente", { tipo: "error" }); return; }
+        try {
+          const {db,doc,runTransaction} = fb();
+          if(await ccBuscarCuenta(nombre)) {
+            SersaleUI.toast(nombre+" ya tiene cuenta corriente", { tipo: "info" });
+          } else {
+            // Id fijo por cliente: dos toques (o dos teléfonos) no abren dos cuentas.
+            const ref = doc(db,"cuentas_corrientes","cta_"+SersaleBase.norm(nombre).replace(/[^a-z0-9]+/g,"_").slice(0,80));
+            // Si el cliente ya tenía movimientos sueltos, la cuenta arranca con esa suma.
+            const saldoInicial = ccSaldoDeMovimientos(await ccMovimientosDe(nombre, null));
+            await runTransaction(db, async tx => {
+              const snap = await tx.get(ref);
+              if(snap.exists()) return;
+              tx.set(ref,{
+                nombre,saldo:saldoInicial,
+                creadoEn:new Date().toISOString(),ultimoMovimiento:SersaleBase.hoy()
+              });
+            });
+            await esperarCopiaLocal(ref, d => !!d);
+            SersaleUI.toast("Cuenta corriente creada", { tipo: "ok" });
+          }
           setNuevoNombre(""); setModalNuevo(false); cargar();
-        } catch(e){ alert("Error"); }
-      }
+        } catch(e){
+          console.error(e);
+          SersaleUI.toast("No se pudo crear la cuenta. Probá de nuevo.", { tipo: "error" });
+        }
+      });
 
       const fmt$ = n => "$"+Math.round(Math.abs(n)).toLocaleString("es-AR");
 
-      if(clienteAbierto) return <DetalleCuentaCorriente
-        cliente={clienteAbierto}
-        onBack={()=>{setClienteAbierto(null); cargar();}}
-        onPago={()=>setModalPago(clienteAbierto)}
-        onRefreshParent={cargar}
-        refresh={refresh}
-      />;
+      // Hoja de pago: se dibuja tanto sobre la lista como sobre el detalle de una cuenta
+      const hojaPago = modalPago && (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
+              onClick={e=>{if(e.target===e.currentTarget)setModalPago(null);}}>
+              <div style={{background:"#fff",borderRadius:"20px 20px 0 0",padding:"24px 20px calc(32px + env(safe-area-inset-bottom))",width:"100%",maxWidth:480}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                  <span style={{fontWeight:800,fontSize:16}}>Registrar pago</span>
+                  <button onClick={()=>setModalPago(null)} style={{background:"#EDEEF0",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:18}}>×</button>
+                </div>
+                <p style={{fontSize:13,color:"#79828B",marginBottom:16}}>{modalPago}</p>
+                <label style={{display:"block",fontWeight:700,fontSize:13,color:"#3A424A",marginBottom:6}}>Monto *</label>
+                <div style={{display:"flex",alignItems:"center",border:"1.5px solid #D8DCE0",borderRadius:12,overflow:"hidden",marginBottom:12}}>
+                  <span style={{padding:"0 12px",fontSize:16,color:"#79828B"}}>$</span>
+                  <InputMonto style={{flex:1,padding:"12px 8px",border:"none",fontSize:18,fontWeight:700,outline:"none"}}
+                    placeholder="0" value={pagoForm.monto} onChange={v=>setPagoForm({...pagoForm,monto:v})} />
+                </div>
+                <label style={{display:"block",fontWeight:700,fontSize:13,color:"#3A424A",marginBottom:6}}>Forma de pago</label>
+                <select style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:16,background:"#fff",marginBottom:12}}
+                  value={pagoForm.formaPago} onChange={e=>setPagoForm({...pagoForm,formaPago:e.target.value})}>
+                  <option value="transferencia">Transferencia</option>
+                  <option value="efectivo">Efectivo</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="otro">Otro</option>
+                </select>
+                <label style={{display:"block",fontWeight:700,fontSize:13,color:"#3A424A",marginBottom:6}}>Observaciones</label>
+                <input style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:16,marginBottom:16}}
+                  placeholder="Referencia, número de transferencia..." value={pagoForm.obs} onChange={e=>setPagoForm({...pagoForm,obs:e.target.value})} />
+                <button onClick={registrarPago} disabled={guardandoPago}
+                  style={{width:"100%",padding:16,borderRadius:12,border:"none",background:guardandoPago?"#B9BFC5":"#2F6B4F",color:"#fff",fontWeight:800,fontSize:15,cursor:"pointer"}}>
+                  {guardandoPago?"Guardando...":"✓ Confirmar pago"}
+                </button>
+              </div>
+            </div>
+      );
+
+      if(clienteAbierto) return (
+        <>
+          <DetalleCuentaCorriente
+            cliente={clienteAbierto}
+            onBack={()=>{setClienteAbierto(null); cargar();}}
+            onPago={()=>abrirPago(clienteAbierto)}
+            onRefreshParent={cargar}
+            refresh={String(refresh)+"/"+recargas}
+          />
+          {hojaPago}
+        </>
+      );
 
       const totalDeuda = (clientes||[]).filter(c=>c.saldo>0).reduce((s,c)=>s+c.saldo,0);
       const enDeuda = (clientes||[]).filter(c=>c.saldo>0).length;
 
       return (
         <div>
+          {errorCarga && (
+            <div style={{background:"#F7EAEA",border:"1px solid #E3B9BC",borderRadius:12,padding:"12px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+              <span style={{flex:1,fontSize:13,color:"#7E1A20",fontWeight:600}}>No se pudieron cargar las cuentas corrientes.</span>
+              <button onClick={cargar} style={{padding:"10px 14px",minHeight:44,borderRadius:10,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer"}}>Reintentar</button>
+            </div>
+          )}
           {/* Resumen total */}
           {clientes && clientes.length>0 && (
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
@@ -120,41 +199,42 @@
           {/* Header + botón nuevo */}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
             <span style={{fontWeight:700,fontSize:12,color:"#79828B",textTransform:"uppercase",letterSpacing:1}}>Cuentas Corrientes</span>
-            <button onClick={()=>{setModalNuevo(true);cargarClientesDisponibles();}}
+            <button onClick={abrirNuevo}
               style={{padding:"7px 14px",borderRadius:20,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
               + Nueva
             </button>
           </div>
 
           {/* Lista */}
-          {clientes===null ? <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>
+          {clientes===null ? (errorCarga ? null : <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>)
           : clientes.length===0 ? (
             <div style={{textAlign:"center",color:"#A3ABB3",marginTop:60}}>
               <div style={{fontSize:48}}>💳</div>
               <p style={{marginBottom:16}}>Sin cuentas corrientes</p>
-              <button onClick={()=>setModalNuevo(true)} style={{padding:"12px 24px",borderRadius:10,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Crear primera</button>
+              <button onClick={abrirNuevo} style={{padding:"12px 24px",borderRadius:10,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Crear primera</button>
             </div>
           ) : clientes.map(cl=>{
-            const deuda = cl.saldo>0;
-            const color = deuda?"#A4232A":cl.saldo===0?"#2F6B4F":"#26536E";
+            const estadoSaldo = ccEstadoSaldo(cl.saldo);
+            const deuda = estadoSaldo==="debe";
+            const color = deuda?"#A4232A":estadoSaldo==="al_dia"?"#2F6B4F":"#26536E";
             return (
               <div key={cl.id} style={{background:"#fff",borderRadius:14,borderLeft:`4px solid ${color}`,borderTop:"1px solid #EDEEF0",borderRight:"1px solid #EDEEF0",borderBottom:"1px solid #EDEEF0",padding:14,marginBottom:10,boxShadow:"0 2px 8px rgba(0,0,0,0.06)"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                   <div>
                     <div style={{fontWeight:800,fontSize:15,color:"#111",marginBottom:2}}>{cl.nombre}</div>
                     <div style={{fontSize:11,color:"#79828B"}}>
-                      {deuda?"⚠️ Saldo pendiente":"✅ Al día"}
-                      {cl.ultimoMovimiento&&` · Último: ${cl.ultimoMovimiento.split("-").reverse().join("/")}`}
+                      {deuda?"⚠️ Saldo pendiente":estadoSaldo==="a_favor"?"🔵 Saldo a favor del cliente":"✅ Al día"}
+                      {ccDia(cl.ultimoMovimiento)&&` · Último: ${SersaleBase.fmtFecha(ccDia(cl.ultimoMovimiento))}`}
                     </div>
                   </div>
-                  <div style={{fontWeight:900,fontSize:18,color}}>{fmt$(cl.saldo)}</div>
+                  <div data-saldo={cl.nombre} style={{fontWeight:900,fontSize:18,color,whiteSpace:"nowrap"}}>{ccFmtSaldo(cl.saldo)}</div>
                 </div>
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={()=>setClienteAbierto(cl.nombre)}
                     style={{flex:1,padding:"9px 0",borderRadius:10,border:"1.5px solid #D8DCE0",background:"#fff",color:"#262C32",fontWeight:700,fontSize:12,cursor:"pointer"}}>
                     📋 Ver movimientos
                   </button>
-                  <button onClick={()=>{setModalPago(cl.nombre);setPagoForm({monto:"",formaPago:"transferencia",obs:""}); }}
+                  <button onClick={()=>abrirPago(cl.nombre)}
                     style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:"#2F6B4F",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
                     💰 Registrar pago
                   </button>
@@ -172,56 +252,25 @@
                   <span style={{fontWeight:800,fontSize:16}}>+ Nueva cuenta corriente</span>
                   <button onClick={()=>setModalNuevo(false)} style={{background:"#EDEEF0",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:18}}>×</button>
                 </div>
-                {clientesDisponibles.length===0
+                {clientesDisponibles===null
+                  ? <p style={{textAlign:"center",color:"#79828B",marginBottom:16,fontSize:13}}>Cargando clientes...</p>
+                  : clientesDisponibles.length===0
                   ? <p style={{textAlign:"center",color:"#79828B",marginBottom:16,fontSize:13}}>Todos los clientes ya tienen cuenta corriente</p>
-                  : <select style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",marginBottom:12}}
+                  : <select style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:16,background:"#fff",marginBottom:12}}
                       value={nuevoNombre} onChange={e=>setNuevoNombre(e.target.value)}>
                       <option value="">— Seleccioná un cliente —</option>
                       {clientesDisponibles.map(n=><option key={n} value={n}>{n}</option>)}
                     </select>
                 }
-                <button onClick={crearCliente}
-                  style={{width:"100%",padding:14,borderRadius:12,border:"none",background:"#A4232A",color:"#fff",fontWeight:800,fontSize:15,cursor:"pointer"}}>
-                  Crear cuenta
+                <button onClick={crearCliente} disabled={creando||!nuevoNombre}
+                  style={{width:"100%",padding:14,borderRadius:12,border:"none",background:creando||!nuevoNombre?"#B9BFC5":"#A4232A",color:"#fff",fontWeight:800,fontSize:15,cursor:"pointer"}}>
+                  {creando?"Creando...":"Crear cuenta"}
                 </button>
               </div>
             </div>
           )}
 
-          {/* Modal pago */}
-          {modalPago&&(
-            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
-              onClick={e=>{if(e.target===e.currentTarget)setModalPago(null);}}>
-              <div style={{background:"#fff",borderRadius:"20px 20px 0 0",padding:"24px 20px 32px",width:"100%",maxWidth:480}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                  <span style={{fontWeight:800,fontSize:16}}>Registrar pago</span>
-                  <button onClick={()=>setModalPago(null)} style={{background:"#EDEEF0",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:18}}>×</button>
-                </div>
-                <p style={{fontSize:13,color:"#79828B",marginBottom:16}}>{modalPago}</p>
-                <label style={{display:"block",fontWeight:700,fontSize:13,color:"#3A424A",marginBottom:6}}>Monto *</label>
-                <div style={{display:"flex",alignItems:"center",border:"1.5px solid #D8DCE0",borderRadius:12,overflow:"hidden",marginBottom:12}}>
-                  <span style={{padding:"0 12px",fontSize:16,color:"#79828B"}}>$</span>
-                  <InputMonto style={{flex:1,padding:"12px 8px",border:"none",fontSize:18,fontWeight:700,outline:"none"}}
-                    placeholder="0" value={pagoForm.monto} onChange={v=>setPagoForm({...pagoForm,monto:v})} />
-                </div>
-                <label style={{display:"block",fontWeight:700,fontSize:13,color:"#3A424A",marginBottom:6}}>Forma de pago</label>
-                <select style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",marginBottom:12}}
-                  value={pagoForm.formaPago} onChange={e=>setPagoForm({...pagoForm,formaPago:e.target.value})}>
-                  <option value="transferencia">Transferencia</option>
-                  <option value="efectivo">Efectivo</option>
-                  <option value="cheque">Cheque</option>
-                  <option value="otro">Otro</option>
-                </select>
-                <label style={{display:"block",fontWeight:700,fontSize:13,color:"#3A424A",marginBottom:6}}>Observaciones</label>
-                <input style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,marginBottom:16}}
-                  placeholder="Referencia, número de transferencia..." value={pagoForm.obs} onChange={e=>setPagoForm({...pagoForm,obs:e.target.value})} />
-                <button onClick={registrarPago} disabled={guardandoPago}
-                  style={{width:"100%",padding:16,borderRadius:12,border:"none",background:guardandoPago?"#B9BFC5":"#2F6B4F",color:"#fff",fontWeight:800,fontSize:15,cursor:"pointer"}}>
-                  {guardandoPago?"Guardando...":"✓ Confirmar pago"}
-                </button>
-              </div>
-            </div>
-          )}
+          {hojaPago}
         </div>
       );
     }
@@ -229,29 +278,29 @@
     // ── DETALLE CUENTA CORRIENTE ─────────────────────────────
     // ── MODAL PDF CUENTA CORRIENTE ────────────────────────────────
     function ModalPdfCC({ cliente, movimientos, saldo, onClose }) {
-      const hoy = new Date().toISOString().split("T")[0];
-      const hace30 = new Date(Date.now()-30*24*60*60*1000).toISOString().split("T")[0];
+      const hoy = SersaleBase.hoy();
+      const hace30 = SersaleBase.sumarDias(hoy,-30);
       const [desde, setDesde] = useState(hace30);
       const [hasta, setHasta] = useState(hoy);
       const [generando, setGenerando] = useState(false);
 
-      const fmt$ = n => "$"+Math.round(Math.abs(n)).toLocaleString("es-AR");
+      // Importes de movimientos (ya llevan + o − adelante) y saldos (con su signo)
+      const fmt$ = n => "$"+Math.round(Math.abs(Number(n)||0)).toLocaleString("es-AR");
+      const fmtS = ccFmtSaldo;
       const fmtF = f => {
         if(!f) return "—";
-        const iso = f.substring(0,10);
-        if(!iso.match(/^\d{4}-\d{2}-\d{2}$/)) return f;
-        const [y,m,d] = iso.split("-");
-        return `${d}/${m}/${y}`;
+        const iso = ccDia(f);
+        if(!iso) return typeof f==="string" ? f : "—";
+        return SersaleBase.fmtFecha(iso);
       };
 
       const movsFiltrados = movimientos.filter(m=>{
-        const f = (m.fecha||"").substring(0,10);
+        const f = ccDia(m.fecha);
         return f >= desde && f <= hasta;
       });
 
-      const totalFact = movsFiltrados.filter(m=>m.tipo==="pedido").reduce((s,m)=>s+m.monto,0);
-      const totalPag  = movsFiltrados.filter(m=>m.tipo==="pago").reduce((s,m)=>s+m.monto,0);
-      const saldoPeriodo = totalFact - totalPag;
+      const totalFact = movsFiltrados.filter(m=>m.tipo==="pedido").reduce((s,m)=>s+(Number(m.monto)||0),0);
+      const totalPag  = movsFiltrados.filter(m=>m.tipo!=="pedido").reduce((s,m)=>s+(Number(m.monto)||0),0);
 
       function generarPDF() {
         setGenerando(true);
@@ -292,7 +341,7 @@
           const boxes = [
             {label:'Facturado en período', valor:fmt$(totalFact), color:[192,57,43]},
             {label:'Pagado en período',    valor:fmt$(totalPag),  color:[26,122,66]},
-            {label:'Saldo actual',         valor:fmt$(saldo),     color:saldo>0?[192,57,43]:[26,122,66]},
+            {label:saldo<0?'Saldo actual (a favor del cliente)':'Saldo actual', valor:fmtS(saldo), color:saldo>0?[192,57,43]:[26,122,66]},
           ];
           boxes.forEach((b,i)=>{
             const bx = M + i*(boxW+8);
@@ -327,12 +376,21 @@
             pdf.text('SALDO',        COL.saldoAc,  y+HDR_H/2+3, {align:'right'});
             y += HDR_H;
 
-            // Calcular saldo acumulado desde el inicio de todos los movimientos
-            // para mostrar saldo corrido en el período
-            let saldoAcum = 0;
-            // Primero sumar todos los movimientos ANTES del período
-            movimientos.filter(m=>(m.fecha||"").substring(0,10)<desde)
-              .forEach(m=>{ saldoAcum += m.tipo==="pedido"?m.monto:-m.monto; });
+            // Saldo corrido: arranca en lo que el cliente debía antes del período,
+            // y esa cifra se imprime para que las filas cierren con el saldo final.
+            const previos = movimientos.filter(m=>ccDia(m.fecha)<desde);
+            let saldoAcum = ccSaldoDeMovimientos(previos);
+            if(previos.length>0){
+              pdf.setFillColor(245,245,245); pdf.rect(M,y,W,ROW_H,'F');
+              pdf.setDrawColor(240,240,240); pdf.setLineWidth(0.3);
+              pdf.line(M,y+ROW_H,M+W,y+ROW_H);
+              pdf.setFont('helvetica','italic'); pdf.setFontSize(8.5); pdf.setTextColor(100,100,100);
+              pdf.text('Saldo anterior al '+fmtF(desde), COL.fecha+8, y+ROW_H/2+3.5);
+              pdf.setFont('helvetica','bold'); pdf.setFontSize(8.5);
+              pdf.setTextColor(saldoAcum>0?192:26, saldoAcum>0?57:122, saldoAcum>0?43:66);
+              pdf.text(fmtS(saldoAcum), COL.saldoAc, y+ROW_H/2+4, {align:'right'});
+              y += ROW_H;
+            }
 
             movsFiltrados.forEach((mov,i)=>{
               // Nueva página si no hay espacio
@@ -356,8 +414,8 @@
                 y += HDR_H;
               }
 
-              saldoAcum += mov.tipo==="pedido"?mov.monto:-mov.monto;
-              const esPago = mov.tipo==="pago";
+              saldoAcum = SersaleBase.redondear(saldoAcum + ccImporteFirmado(mov), 2);
+              const esPago = mov.tipo!=="pedido";
 
               if(i%2===0){pdf.setFillColor(252,252,252);}else{pdf.setFillColor(255,255,255);}
               pdf.rect(M,y,W,ROW_H,'F');
@@ -393,28 +451,35 @@
               // Saldo acumulado
               pdf.setFont('helvetica','normal'); pdf.setFontSize(8.5);
               pdf.setTextColor(saldoAcum>0?192:26, saldoAcum>0?57:122, saldoAcum>0?43:66);
-              pdf.text(fmt$(saldoAcum), COL.saldoAc, y+ROW_H/2+4, {align:'right'});
+              pdf.text(fmtS(saldoAcum), COL.saldoAc, y+ROW_H/2+4, {align:'right'});
 
               y += ROW_H;
             });
 
-            // Fila totales
+            // Fila totales (en otra hoja si no entra arriba del pie)
+            if(y+4+28 > PH-FTR_H-10){
+              drawFtrPDF(pdf,PW,PH,M,cliente);
+              pdf.addPage();
+              y = 40;
+            }
             y += 4;
             pdf.setFillColor(245,245,245); pdf.rect(M,y,W,28,'F');
             pdf.setDrawColor(200,200,200); pdf.setLineWidth(0.5); pdf.rect(M,y,W,28,'S');
             pdf.setFont('helvetica','bold'); pdf.setFontSize(9); pdf.setTextColor(60,60,60);
             pdf.text(`${movsFiltrados.length} movimiento${movsFiltrados.length!==1?'s':''}`, M+10, y+18);
-            pdf.setTextColor(192,57,43);
-            pdf.text('Saldo: '+fmt$(saldo), COL.saldoAc, y+18, {align:'right'});
+            // Saldo al cierre del período: es el de la última fila de arriba
+            pdf.setTextColor(saldoAcum>0?192:26, saldoAcum>0?57:122, saldoAcum>0?43:66);
+            pdf.text('Saldo al '+fmtF(hasta)+': '+fmtS(saldoAcum)+(saldoAcum<0?' (a favor del cliente)':''), COL.saldoAc, y+18, {align:'right'});
           }
 
           drawFtrPDF(pdf,PW,PH,M,cliente);
 
-          const fechaArchivo = new Date().toLocaleDateString('es-AR').replace(/\//g,'-');
-          pdf.save(`CC_Sersale_${cliente.replace(/\s+/g,'_')}_${fmtF(desde)}_${fmtF(hasta)}.pdf`);
+          // Nombre de archivo sin barras ni acentos; en el teléfono se abre el menú de compartir
+          const nombreArchivo = `CC_Sersale_${SersaleBase.norm(cliente).replace(/[^a-z0-9]+/g,'_')}_${desde}_a_${hasta}.pdf`;
+          window.compartirOdescargarPDF(pdf, nombreArchivo);
         } catch(e){
-          alert("Error al generar PDF: "+e.message);
           console.error(e);
+          SersaleUI.toast("No se pudo generar el PDF. Probá de nuevo.", { tipo: "error" });
         }
         setGenerando(false);
       }
@@ -428,9 +493,9 @@
       }
 
       return (
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
           onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-          <div style={{background:"#fff",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,padding:"24px 20px 36px"}}>
+          <div style={{background:"#fff",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,padding:"24px 20px calc(36px + env(safe-area-inset-bottom))"}}>
             {/* Header modal */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
               <div>
@@ -445,12 +510,12 @@
               <div>
                 <label style={{display:"block",fontSize:12,fontWeight:700,color:"#555",marginBottom:5}}>Desde</label>
                 <input type="date" value={desde} onChange={e=>setDesde(e.target.value)}
-                  style={{width:"100%",padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,fontFamily:"inherit"}} />
+                  style={{width:"100%",padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:16,fontFamily:"inherit"}} />
               </div>
               <div>
                 <label style={{display:"block",fontSize:12,fontWeight:700,color:"#555",marginBottom:5}}>Hasta</label>
                 <input type="date" value={hasta} onChange={e=>setHasta(e.target.value)}
-                  style={{width:"100%",padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,fontFamily:"inherit"}} />
+                  style={{width:"100%",padding:"10px 12px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:16,fontFamily:"inherit"}} />
               </div>
             </div>
 
@@ -470,7 +535,7 @@
               </div>
               <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid #E4E7EA",paddingTop:8}}>
                 <span style={{color:"#79828B"}}>Saldo actual</span>
-                <span style={{fontWeight:900,fontSize:15,color:saldo>0?"#A4232A":"#2F6B4F"}}>{fmt$(saldo)}</span>
+                <span style={{fontWeight:900,fontSize:15,color:saldo>0?"#A4232A":saldo<0?"#26536E":"#2F6B4F"}}>{fmtS(saldo)}{saldo<0?" a favor":""}</span>
               </div>
             </div>
 
@@ -489,27 +554,22 @@
     function DetalleCuentaCorriente({ cliente, onBack, onPago, onRefreshParent, refresh }) {
       const [movimientos, setMovimientos] = useState(null);
       const [saldo, setSaldo] = useState(0);
+      const [cuenta, setCuenta] = useState(null);
+      const [errorCarga, setErrorCarga] = useState(false);
       const [ventaOpen, setVentaOpen] = useState(false);
       const [pdfOpen, setPdfOpen] = useState(false);
 
       async function cargar() {
         try {
-          const {db,collection,getDocs,query,where} = fb();
-          const snap = await getDocs(query(
-            collection(db,"cc_movimientos"),
-            where("cliente","==",cliente)
-          ));
-          // Ordenar en cliente por fecha + createdAt
-          const movs = snap.docs.map(d=>({id:d.id,...d.data()}))
-            .sort((a,b)=>{
-              const fd = (a.fecha||"").localeCompare(b.fecha||"");
-              if(fd!==0) return fd;
-              return (a.createdAt||"").localeCompare(b.createdAt||"");
-            });
+          // Mismas reglas que al cobrar o facturar: el cliente se reconoce aunque
+          // el nombre esté escrito con otras mayúsculas o acentos.
+          const cta = await ccBuscarCuenta(cliente);
+          const movs = await ccMovimientosDe(cliente, cta);
+          setCuenta(cta);
           setMovimientos(movs);
-          let s=0; movs.forEach(m=>{ s += m.tipo==="pedido"?m.monto:-m.monto; });
-          setSaldo(Math.round(s));
-        } catch(e){ console.error(e); setMovimientos([]); }
+          setSaldo(Math.round(ccSaldoDeMovimientos(movs)));
+          setErrorCarga(false);
+        } catch(e){ console.error(e); setErrorCarga(true); }
       }
 
       useEffect(()=>{
@@ -522,17 +582,41 @@
         if(refresh !== refrescoVisto.current) { refrescoVisto.current = refresh; cargar(); }
       },[refresh]);
 
-      const fmt$ = n => "$"+Math.round(Math.abs(n)).toLocaleString("es-AR");
+      // El saldo guardado en la cuenta (el de la lista y el panel) y la suma de los
+      // movimientos deberían ser iguales. Si no lo son, se avisa y la persona decide.
+      const saldoGuardado = cuenta ? (Number(cuenta.saldo)||0) : null;
+      const saldoDistinto = movimientos!==null && saldoGuardado!==null && Math.abs(saldoGuardado - saldo) >= 1;
+      const [recalcular, recalculando] = SersaleBase.useAccion(async () => {
+        const ok = await SersaleUI.confirmar({
+          titulo: "¿Corregir el saldo guardado?",
+          cuerpo: "La cuenta de "+cliente+" tiene guardado "+ccFmtSaldo(saldoGuardado)+" y sus movimientos suman "+ccFmtSaldo(saldo)+". Si aceptás, el saldo de la cuenta pasa a ser "+ccFmtSaldo(saldo)+".",
+          aceptar: "Usar "+ccFmtSaldo(saldo), cancelar: "Dejar como está"
+        });
+        if(!ok) return;
+        try {
+          const r = await ccRecalcularSaldo(cliente);
+          if(r && r.cambio) SersaleUI.toast("Entró un movimiento mientras tanto. Revisá de nuevo.", { tipo: "info" });
+          else SersaleUI.toast("Saldo corregido", { tipo: "ok" });
+          await cargar();
+          if(onRefreshParent) onRefreshParent();
+        } catch(e){
+          console.error(e);
+          SersaleUI.toast("No se pudo corregir el saldo. Probá de nuevo.", { tipo: "error" });
+        }
+      });
+
+      const fmt$ = n => "$"+Math.round(Math.abs(Number(n)||0)).toLocaleString("es-AR");
       const fmtF = f => {
         if(!f) return "—";
-        // Tomar solo los primeros 10 chars (YYYY-MM-DD) e ignorar el resto
-        const iso = f.substring(0,10);
-        if(!iso.match(/^\d{4}-\d{2}-\d{2}$/)) return f;
-        const [y,m,d] = iso.split("-");
-        return `${d}/${m}/${y}`;
+        // Solo el día (AAAA-MM-DD); tolera fechas guardadas como Timestamp
+        const iso = ccDia(f);
+        if(!iso) return typeof f==="string" ? f : "—";
+        return SersaleBase.fmtFecha(iso);
       };
-      const totalPedidos = (movimientos||[]).filter(m=>m.tipo==="pedido").reduce((s,m)=>s+m.monto,0);
-      const totalPagos   = (movimientos||[]).filter(m=>m.tipo==="pago").reduce((s,m)=>s+m.monto,0);
+      const totalPedidos = (movimientos||[]).filter(m=>m.tipo==="pedido").reduce((s,m)=>s+(Number(m.monto)||0),0);
+      const totalPagos   = (movimientos||[]).filter(m=>m.tipo!=="pedido").reduce((s,m)=>s+(Number(m.monto)||0),0);
+      const estadoSaldo = ccEstadoSaldo(saldo);
+      const cargando = movimientos===null && !errorCarga;
 
       return (
         <>
@@ -569,23 +653,42 @@
                   <div style={{fontSize:10,color:"#79828B",marginTop:2}}>Pagado</div>
                 </div>
                 <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:13,fontWeight:800,color:saldo>0?"#A4232A":"#2F6B4F"}}>{fmt$(saldo)}</div>
+                  <div data-saldo-detalle style={{fontSize:13,fontWeight:800,color:estadoSaldo==="debe"?"#A4232A":estadoSaldo==="a_favor"?"#26536E":"#2F6B4F"}}>{movimientos===null?"…":ccFmtSaldo(saldo)}</div>
                   <div style={{fontSize:10,color:"#79828B",marginTop:2}}>Saldo</div>
                 </div>
               </div>
-              <div style={{background:saldo>0?"#F7EAEA":"#DDE9E2",borderRadius:10,padding:"8px 12px",textAlign:"center",fontSize:13,fontWeight:800,color:saldo>0?"#7E1A20":"#24523D"}}>
-                {saldo>0?`⚠️ Debe ${fmt$(saldo)}`:"✅ Al día"}
-              </div>
+              {movimientos===null
+                ? <div style={{background:"#EDEEF0",borderRadius:10,padding:"8px 12px",textAlign:"center",fontSize:13,fontWeight:800,color:"#5C666F"}}>{errorCarga?"No se pudo cargar":"Cargando..."}</div>
+                : <div data-estado-saldo={estadoSaldo} style={{background:estadoSaldo==="debe"?"#F7EAEA":estadoSaldo==="a_favor"?"#DCE5EB":"#DDE9E2",borderRadius:10,padding:"8px 12px",textAlign:"center",fontSize:13,fontWeight:800,color:estadoSaldo==="debe"?"#7E1A20":estadoSaldo==="a_favor"?"#26536E":"#24523D"}}>
+                    {estadoSaldo==="debe"?`⚠️ Debe ${fmt$(saldo)}`:estadoSaldo==="a_favor"?`🔵 Saldo a favor del cliente: ${fmt$(saldo)}`:"✅ Al día"}
+                  </div>
+              }
+              {saldoDistinto && (
+                <div data-aviso="saldo-distinto" style={{background:"#F0E7D9",border:"1px solid #D9B98A",borderRadius:10,padding:"10px 12px",marginTop:10,fontSize:12,color:"#784212"}}>
+                  <div style={{fontWeight:700,marginBottom:6}}>El saldo guardado de la cuenta ({ccFmtSaldo(saldoGuardado)}) no coincide con la suma de estos movimientos ({ccFmtSaldo(saldo)}).</div>
+                  <div style={{marginBottom:8}}>En la lista de cuentas y en el panel se ve el guardado.</div>
+                  <button onClick={recalcular} disabled={recalculando}
+                    style={{padding:"10px 14px",minHeight:44,borderRadius:10,border:"1.5px solid #A8702A",background:"#fff",color:"#784212",fontWeight:700,fontSize:13,cursor:"pointer"}}>
+                    {recalculando?"Corrigiendo...":"Corregir saldo guardado"}
+                  </button>
+                </div>
+              )}
             </div>
+            {errorCarga && (
+              <div style={{background:"#F7EAEA",border:"1px solid #E3B9BC",borderRadius:12,padding:"12px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+                <span style={{flex:1,fontSize:13,color:"#7E1A20",fontWeight:600}}>No se pudieron cargar los movimientos.</span>
+                <button onClick={cargar} style={{padding:"10px 14px",minHeight:44,borderRadius:10,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer"}}>Reintentar</button>
+              </div>
+            )}
 
             {/* Movimientos */}
             <p style={{fontWeight:700,fontSize:12,color:"#79828B",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>
               Movimientos ({(movimientos||[]).length})
             </p>
-            {movimientos===null?<p style={{textAlign:"center",color:"#79828B"}}>Cargando...</p>
+            {movimientos===null?(cargando?<p style={{textAlign:"center",color:"#79828B"}}>Cargando...</p>:null)
             :movimientos.length===0?<div style={{textAlign:"center",color:"#A3ABB3",marginTop:40}}><div style={{fontSize:48}}>📋</div><p>Sin movimientos</p></div>
             :[...movimientos].reverse().map((m,i)=>{
-              const esPago=m.tipo==="pago";
+              const esPago=m.tipo!=="pedido";
               return (
                 <div key={m.id||i} style={{background:"#fff",borderRadius:12,borderLeft:`4px solid ${esPago?"#2F6B4F":"#A4232A"}`,borderTop:"1px solid #EDEEF0",borderRight:"1px solid #EDEEF0",borderBottom:"1px solid #EDEEF0",padding:12,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -597,13 +700,13 @@
                         {m.formaPago&&<span style={{fontSize:11,color:"#79828B"}}>{m.formaPago}</span>}
                         {m.origen==="importado"&&<span style={{fontSize:10,color:"#B9BFC5"}}>hist.</span>}
                       </div>
-                      {m.detalle&&m.detalle!=="-"&&<div style={{fontSize:12,color:"#5C666F",marginBottom:2}}>📦 {m.detalle.substring(0,60)}{m.detalle.length>60?"...":""}</div>}
+                      {m.detalle&&m.detalle!=="-"&&<div style={{fontSize:12,color:"#5C666F",marginBottom:2}}>📦 {String(m.detalle).substring(0,60)}{String(m.detalle).length>60?"...":""}</div>}
                       {m.obs&&<div style={{fontSize:11,color:"#79828B"}}>📝 {m.obs}</div>}
                     </div>
                     <div style={{textAlign:"right",minWidth:90}}>
                       <div style={{fontWeight:800,fontSize:15,color:esPago?"#2F6B4F":"#A4232A"}}>{esPago?"-":"+"}{fmt$(m.monto)}</div>
                       <div style={{fontSize:11,color:"#A3ABB3",marginTop:2}}>{fmtF(m.fecha)}</div>
-                      {m.saldo!=null&&<div style={{fontSize:10,color:"#B9BFC5"}}>Saldo: {fmt$(m.saldo)}</div>}
+                      {m.saldo!=null&&<div style={{fontSize:10,color:"#B9BFC5"}}>Saldo: {ccFmtSaldo(m.saldo)}</div>}
                     </div>
                   </div>
                 </div>
@@ -632,10 +735,7 @@
       );
     }
     function TabStats({ pedidos }) {
-      const [periodo, setPeriodo] = useState(() => {
-        const n = new Date();
-        return n.getFullYear()+"-"+String(n.getMonth()+1).padStart(2,"0");
-      });
+      const [periodo, setPeriodo] = useState(() => SersaleBase.hoy().slice(0,7));
       const filtrados = pedidos.filter(p=>p.estado!=="cancelado"&&p.fechaEntrega&&p.fechaEntrega.startsWith(periodo));
       const prods = {};
       filtrados.forEach(p=>{
@@ -643,13 +743,15 @@
           const k = it.producto;
           if(!prods[k]) prods[k]={nombre:it.producto,unidades:0,kgTotal:0,pedidos:0,unidad:it.unidad||"kg"};
           const cant = parseFloat(it.cantidad)||0;
-          const kg   = it.kgReal!=null ? parseFloat(it.kgReal)||0 : cant;
-          if(it.unidad==="kg"){
-            prods[k].unidades += cant;
-            prods[k].kgTotal  += cant;
-          } else {
-            prods[k].unidades += cant;
-            prods[k].kgTotal  += kg;
+          const pesado = it.kgReal!=null && it.kgReal!=="" ? parseFloat(it.kgReal)||0 : null;
+          prods[k].unidades += cant;
+          if((it.unidad||"kg")==="kg"){
+            // Por kilo: lo que marcó la balanza; si no se pesó, lo pedido
+            prods[k].kgTotal += pesado!=null ? pesado : cant;
+          } else if(pesado!=null && p.origen!=="venta_rapida"){
+            // Por pieza, bolsa o unidad: solo suma kilos si se pesó de verdad
+            // (la venta rápida copia la cantidad en kgReal: eso no son kilos)
+            prods[k].kgTotal += pesado;
           }
           prods[k].pedidos++;
         });
@@ -658,14 +760,15 @@
       const maxP = rankP[0]?.kgTotal||1;
       const clis = {};
       filtrados.forEach(p=>{if(!clis[p.cliente])clis[p.cliente]={nombre:p.cliente,pedidos:0};clis[p.cliente].pedidos++;});
+      const totalClientes = Object.keys(clis).length;
       const rankC = Object.values(clis).sort((a,b)=>b.pedidos-a.pedidos).slice(0,8);
       const dias=["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"],porDiaS=[0,0,0,0,0,0,0];
-      filtrados.forEach(p=>{if(p.fechaEntrega)porDiaS[new Date(p.fechaEntrega+"T12:00:00").getDay()]++;});
+      filtrados.forEach(p=>{const ds=SersaleBase.diaSemana(p.fechaEntrega); if(ds>=0&&ds<=6)porDiaS[ds]++;});
       const maxD=Math.max(...porDiaS)||1;
       return (
         <div>
           <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
-            <input type="month" style={{flex:1,padding:"10px 12px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
+            <input type="month" style={{flex:1,padding:"10px 12px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:16,background:"#fff",outline:"none"}}
               value={periodo} onChange={e=>setPeriodo(e.target.value)} />
             <div style={{background:"#2A333B",color:"#fff",borderRadius:12,padding:"10px 14px",fontSize:13,fontWeight:700,whiteSpace:"nowrap"}}>{filtrados.length} pedidos</div>
           </div>
@@ -678,7 +781,7 @@
                 <div style={{fontSize:11,color:"#79828B",marginTop:2}}>Productos distintos</div>
               </div>
               <div style={{background:"#fff",borderRadius:14,padding:"14px 12px",border:"1.5px solid #6B4E8E",textAlign:"center"}}>
-                <div style={{fontSize:26,fontWeight:900,color:"#6B4E8E"}}>{rankC.length}</div>
+                <div style={{fontSize:26,fontWeight:900,color:"#6B4E8E"}}>{totalClientes}</div>
                 <div style={{fontSize:11,color:"#79828B",marginTop:2}}>Clientes activos</div>
               </div>
             </div>
