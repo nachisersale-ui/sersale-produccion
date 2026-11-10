@@ -87,8 +87,11 @@ async function hastaQue(h, cond, que, ms = 20000) {
   }
   throw new Error("La base no llegó al estado esperado: " + que);
 }
+// Ruido conocido: cortes de red que provoca la propia prueba, choques de transacciones que el SDK
+// reintenta solo (409) y el aviso de Firestore cuando el reloj fijo de la página queda unos
+// milisegundos detrás del emulador ("update time that is in the future").
 const sinRuidoDeRed = (errores) =>
-  erroresReales(errores).filter((e) => !/offline|unavailable|Could not reach|ERR_INTERNET|ERR_CONNECTION|Failed to fetch|WebChannel|status of 409|net::ERR/i.test(e.texto));
+  erroresReales(errores).filter((e) => !/offline|unavailable|Could not reach|ERR_INTERNET|ERR_CONNECTION|Failed to fetch|WebChannel|status of 409|net::ERR|update time that is in the future/i.test(e.texto));
 
 // ── Depósito: kg desde dos teléfonos a la vez ───────────────────────────────
 
@@ -253,6 +256,9 @@ test("depósito sin señal: la hoja de kg no se cierra ni pierde lo escrito, y a
     assert.deepEqual(doc.items.map((i) => i.kgReal), [2.1, 3.05, 4.2]);
     assert.equal(doc.historial.length, antes.historial.length + 1);
     await texto(h, "Anotar kg por ítem").waitFor({ state: "detached" });
+    // Con la señal normal la tarjeta pasa sola a «En preparación»: no hay aviso de "lista atrasada".
+    await texto(h, /2[.,]1 kg real/).first().waitFor({ state: "attached" }).catch(() => {});
+    assert.equal(await toast(h, /todavía no se actualizó/).count(), 0);
     assert.deepEqual(sinRuidoDeRed(h.errores), []);
   } finally {
     await h.close();
@@ -280,6 +286,7 @@ test("depósito: si la respuesta del servidor se pierde al marcar «Listo», no 
     await toast(h, /listo para despachar/).first().waitFor();
     assert.equal(red.perdidas, 1, "la prueba cortó la respuesta de la primera confirmación");
     assert.equal(await toast(h, /Otro teléfono|otro teléfono/).count(), 0, "nadie más tocó el pedido: no hay que decir que lo cambió otro teléfono");
+    assert.equal(await toast(h, /todavía no se actualizó/).count(), 0, "la lista ya muestra el pedido como listo");
     assert.equal(doc.historial.length, antes.historial.length + 1, "un solo cambio de estado en el historial");
     assert.deepEqual(doc.items, antes.items);
   } finally {
@@ -335,9 +342,54 @@ test("depósito: corregir kg con la señal cortada al confirmar no deja el cambi
   }
 });
 
-// ── Devoluciones ────────────────────────────────────────────────────────────
+// ── Depósito: las novedades no llegan pero el guardado sí ───────────────────
 
-const nuevos = (db, seed, col) => entradas(db[col]).filter(([id]) => !(id in (seed[col] || {}))).map(([id, d]) => ({ id, ...d }));
+test("depósito con las novedades cortadas: el cambio se guarda, se avisa que la lista está atrasada y repetirlo no culpa a otro teléfono", async () => {
+  const h = await abrir();
+  const p = h.page;
+  try {
+    const id = "ped_064"; // Almacén Doña Rosa, pendiente
+    const antes = copia(h.seed.pedidos[id]);
+    await texto(h, "Depósito · Vista Operario").waitFor();
+    await texto(h, ROSA, { exact: true }).first().waitFor();
+
+    // Señal entrecortada: el canal por el que llegan las novedades se cae; los guardados sí pasan.
+    await h.cortarEscucha();
+    await h.sinRed(true);
+    await pausa(300);
+    await h.sinRed(false);
+    for (let i = 0; i < 10; i++) { await p.clock.runFor(1500); await pausa(120); }
+
+    await texto(h, ROSA, { exact: true }).first().click();
+    await boton(h, "⚙️ En preparación").click();
+    await texto(h, "Anotar kg por ítem").waitFor();
+    await camposKg(h).nth(0).fill("2.1");
+    await boton(h, "Confirmar — En preparación").click();
+    await adelantandoHasta(p, async () => (await h.doc("pedidos/" + id)).estado === "preparando", "el cambio queda guardado en el servidor");
+    const guardado = await h.doc("pedidos/" + id);
+    assert.equal(guardado.items[0].kgReal, 2.1);
+
+    // La tarjeta sigue en «Pendientes» (la novedad no llegó): tiene que avisar que igual quedó guardado.
+    await adelantandoHasta(p, hay(toast(h, /Guardado.*todavía no se actualizó/)), "aviso de que quedó guardado aunque la lista no cambie");
+    await adelantandoHasta(p, async () => (await texto(h, "Anotar kg por ítem").count()) === 0, "la hoja se cierra");
+
+    // Si igual lo repite, no se le dice que fue otro teléfono ni que pruebe de nuevo (daría siempre lo mismo).
+    if (!(await boton(h, "⚙️ En preparación").count())) await texto(h, ROSA, { exact: true }).first().click();
+    await boton(h, "⚙️ En preparación").click();
+    await texto(h, "Anotar kg por ítem").waitFor();
+    await boton(h, "Confirmar — En preparación").click();
+    await adelantandoHasta(p, hay(toast(h, /ya está en preparación/)), "aviso de que ya estaba en preparación");
+    assert.equal(await toast(h, /Otro teléfono ya cambió/).count(), 0);
+    const final = await h.doc("pedidos/" + id);
+    assert.equal(final.historial.length, antes.historial.length + 1, "un solo cambio guardado");
+    assert.equal(final.items[0].kgReal, 2.1, "los kg del primer guardado siguen");
+  } finally {
+    await h.close();
+  }
+});
+
+// ── Depósito: teléfono sin datos guardados ──────────────────────────────────
+
 /** Adelanta el reloj de la página (las esperas y reintentos internos duran varios segundos) hasta que `fn` se cumpla. */
 async function adelantandoHasta(p, fn, que, pasos = 80) {
   for (let i = 0; i < pasos; i++) {
@@ -348,6 +400,33 @@ async function adelantandoHasta(p, fn, que, pasos = 80) {
   throw new Error("No se cumplió: " + que);
 }
 const hay = (loc) => async () => (await loc.count()) > 0;
+
+test("depósito: un teléfono sin pedidos guardados que no logra conectar no afirma «No hay pedidos»; al conectar la lista aparece sola", async () => {
+  const h = await launch({ rol: "operario", etiqueta: "rvdep", seed: buildSeed() });
+  const p = h.page;
+  try {
+    // Primer uso en este teléfono (nada guardado) y el canal de novedades no conecta.
+    const corte = await h.cortarEscucha();
+    await p.goto(h.origin + "/pedidos.html");
+    await texto(h, "Depósito · Vista Operario").waitFor();
+    const pantalla = () => p.locator("#root").innerText();
+    await adelantandoHasta(p, async () => /No hay pedidos en este estado|No se pudieron cargar/.test(await pantalla()), "la pantalla deja de decir «Cargando...»");
+    assert.ok(!/No hay pedidos en este estado/.test(await pantalla()), "en la base hay 10 pedidos activos: la pantalla no puede afirmar que no hay ninguno");
+    assert.match(await pantalla(), /No se pudieron cargar los pedidos/);
+    assert.equal(await boton(h, "Reintentar").count(), 1);
+
+    // Cuando el teléfono logra conectar, los pedidos aparecen sin tocar nada.
+    corte.activo = false;
+    await adelantandoHasta(p, hay(texto(h, ANGEL, { exact: true })), "la lista aparece sola al conectar");
+    assert.equal(await texto(h, "No se pudieron cargar los pedidos.").count(), 0);
+  } finally {
+    await h.close();
+  }
+});
+
+// ── Devoluciones ────────────────────────────────────────────────────────────
+
+const nuevos = (db, seed, col) => entradas(db[col]).filter(([id]) => !(id in (seed[col] || {}))).map(([id, d]) => ({ id, ...d }));
 const btnRegistrar = (h) => boton(h, "Registrar devolución");
 const campoCredito = (h) => h.page.locator('input[aria-label="Crédito a favor"]');
 async function abrirDevoluciones(h) {
