@@ -180,3 +180,59 @@ test("lo cargado sin señal sobrevive a cerrar y volver a abrir la app", async (
     await h.close();
   }
 });
+
+test("sin señal, guardar termina enseguida, se avisa que falta enviar y se envía al volver", async () => {
+  const h = await abrir();
+  try {
+    await h.sinRed(true);
+    await h.page.locator(".ss-sin-conexion").waitFor();
+    const r = await h.page.evaluate(async () => {
+      const m = await import("/js/fb.js");
+      const t0 = performance.now();
+      const ref = await m.addDoc(m.collection(m.db, "clientes"), { nombre: "Alta sin señal" });
+      await m.updateDoc(m.doc(m.db, "clientes", "c1"), { direccion: "Editada sin señal" });
+      const lote = m.writeBatch(m.db);
+      lote.set(m.doc(m.db, "clientes", "lote1"), { nombre: "En lote" });
+      await lote.commit();
+      await m.deleteDoc(m.doc(m.db, "clientes", "c2"));
+      const nombres = (await m.getDocs(m.collection(m.db, "clientes"))).docs.map((d) => d.data().nombre).sort();
+      return { ms: performance.now() - t0, id: ref.id, nombres, pendientes: m.cambiosPendientes().cantidad };
+    });
+    assert.ok(r.ms < 4000, "guardar sin señal tardó " + Math.round(r.ms) + " ms");
+    assert.ok(r.id && r.id.length > 10);
+    assert.deepEqual(r.nombres, ["Almacén Don Pepe", "Alta sin señal", "En lote"]);
+    assert.equal(r.pendientes, 4);
+    await h.page.getByText("4 cambios guardados en el teléfono", { exact: false }).waitFor();
+
+    await h.sinRed(false);
+    await h.page.waitForFunction(() => window.__sersaleDatos.pendientes().cantidad === 0, null, { timeout: 20000 });
+    await h.page.locator(".ss-sin-conexion").waitFor({ state: "detached" });
+    const clientes = (await h.dump()).clientes;
+    assert.deepEqual(Object.values(clientes).map((c) => c.nombre).sort(), ["Almacén Don Pepe", "Alta sin señal", "En lote"]);
+    assert.equal(clientes.c1.direccion, "Editada sin señal");
+  } finally {
+    await h.close();
+  }
+});
+
+test("con señal, guardar espera la confirmación del servidor y los errores se informan", async () => {
+  const h = await abrir();
+  try {
+    const r = await h.page.evaluate(async () => {
+      const m = await import("/js/fb.js");
+      const ref = await m.addDoc(m.collection(m.db, "clientes"), { nombre: "Con señal" });
+      let error = null;
+      try {
+        await m.updateDoc(m.doc(m.db, "clientes", "no-existe"), { x: 1 });
+      } catch (e) {
+        error = e.code;
+      }
+      return { id: ref.id, pendientes: m.cambiosPendientes().cantidad, error };
+    });
+    assert.equal(r.pendientes, 0);
+    assert.equal(r.error, "not-found");
+    assert.equal((await h.dump()).clientes[r.id].nombre, "Con señal", "al terminar el guardado ya está en el servidor");
+  } finally {
+    await h.close();
+  }
+});

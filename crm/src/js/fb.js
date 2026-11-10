@@ -32,13 +32,17 @@ const firebaseConfig = {
 
 export const app = initializeApp(PRUEBA ? { ...firebaseConfig, projectId: PRUEBA.projectId } : firebaseConfig);
 
+let guardaEnTelefono = false; // ¿los cambios quedan en el teléfono aunque se cierre la app?
+
 function crearDb() {
   const sinPersistencia = PRUEBA && PRUEBA.persistencia === false;
   if (!sinPersistencia) {
     try {
-      return fs.initializeFirestore(app, {
+      const base = fs.initializeFirestore(app, {
         localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }),
       });
+      guardaEnTelefono = true;
+      return base;
     } catch (e) {
       console.warn("Firestore sin guardado local:", e);
     }
@@ -216,6 +220,103 @@ export async function runTransaction(base, fn, opciones) {
   return resultado;
 }
 
+// ── Escrituras ─────────────────────────────────────────────────────────────
+//
+// Para Firestore un cambio "termina" cuando el servidor lo confirma. Sin señal
+// eso no pasa nunca: el botón quedaba en "Guardando…" aunque el cambio ya
+// estaba a salvo en el teléfono, y si la persona lo cargaba de nuevo después
+// aparecía duplicado. Acá el guardado se da por hecho cuando el cambio quedó
+// en el teléfono (sin señal, enseguida; con señal mala, a los pocos segundos)
+// y se lleva la cuenta de lo que falta enviar para mostrarlo en pantalla.
+// Con buena señal no cambia nada: se espera la confirmación del servidor.
+
+const ESPERA_SIN_SENAL_MS = 350;
+const ESPERA_SENAL_LENTA_MS = 6000;
+
+let pendientes = 0; // cambios guardados en el teléfono que el servidor todavía no confirmó
+let deAntes = false; // quedaron cambios sin enviar de una sesión anterior
+function avisarPendientes() {
+  window.dispatchEvent(new CustomEvent("sersale:pendientes", { detail: { cantidad: pendientes, deAntes } }));
+}
+
+function escribir(promesa, valor) {
+  if (!guardaEnTelefono) return promesa.then(() => valor);
+  let confirmada = false;
+  let enCola = false;
+  const confirmacion = promesa.then(
+    () => {
+      confirmada = true;
+      if (enCola) {
+        pendientes--;
+        avisarPendientes();
+      }
+      return valor;
+    },
+    (error) => {
+      confirmada = true;
+      if (enCola) {
+        // Ya se había dado por guardado: avisar que el servidor lo rechazó.
+        pendientes--;
+        avisarPendientes();
+        console.error("El servidor rechazó un cambio guardado en el teléfono:", error);
+        window.dispatchEvent(new CustomEvent("sersale:cambio-rechazado", { detail: { error } }));
+        return valor;
+      }
+      throw error;
+    }
+  );
+  const corte = (async () => {
+    const inicio = Date.now();
+    while (!confirmada && Date.now() - inicio < (sinConexion() ? ESPERA_SIN_SENAL_MS : ESPERA_SENAL_LENTA_MS)) await espera(60);
+    if (confirmada) return confirmacion;
+    enCola = true;
+    pendientes++;
+    avisarPendientes();
+    return valor;
+  })();
+  return Promise.race([confirmacion, corte]);
+}
+
+export function setDoc(ref, ...resto) {
+  return escribir(fs.setDoc(ref, ...resto));
+}
+export function updateDoc(ref, ...resto) {
+  return escribir(fs.updateDoc(ref, ...resto));
+}
+export function deleteDoc(ref) {
+  return escribir(fs.deleteDoc(ref));
+}
+export function addDoc(coleccion, datos) {
+  const ref = fs.doc(coleccion);
+  return escribir(fs.setDoc(ref, datos), ref);
+}
+export function writeBatch(base) {
+  const lote = fs.writeBatch(base);
+  const confirmar = lote.commit.bind(lote);
+  lote.commit = () => escribir(confirmar());
+  return lote;
+}
+
+/** Cuántos cambios hay guardados en el teléfono sin enviar. */
+export function cambiosPendientes() {
+  return { cantidad: pendientes, deAntes };
+}
+
+// ¿Quedó algo sin enviar de la vez anterior? Si en un momento no se vació la
+// cola, se avisa hasta que se envíe.
+if (guardaEnTelefono) {
+  const vacia = fs.waitForPendingWrites(db).then(() => true, () => true);
+  Promise.race([vacia, espera(2500).then(() => false)]).then((listo) => {
+    if (listo) return;
+    deAntes = true;
+    avisarPendientes();
+    vacia.then(() => {
+      deAntes = false;
+      avisarPendientes();
+    });
+  });
+}
+
 window.addEventListener("online", avisar);
 window.addEventListener("offline", avisar);
-window.__sersaleDatos = { estado: estadoDatos, precalentar };
+window.__sersaleDatos = { estado: estadoDatos, precalentar, pendientes: cambiosPendientes };

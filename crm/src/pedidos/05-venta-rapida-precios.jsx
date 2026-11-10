@@ -40,21 +40,16 @@
     }
 
     /**
-     * Espera una escritura simple (un precio). Sin señal, Firestore no confirma
-     * nunca pero deja el cambio guardado en el teléfono y lo envía solo al volver
-     * la conexión: en ese caso no se deja el botón trabado. Devuelve true si el
-     * servidor confirmó, false si quedó pendiente de envío.
+     * Espera una escritura simple (un precio). Sin señal el cambio queda guardado
+     * en el teléfono y se envía solo al volver la conexión: js/fb.js da la
+     * escritura por terminada en ese momento y lleva la cuenta de lo pendiente.
+     * Devuelve true si el servidor confirmó, false si quedó pendiente de envío.
      */
-    function p5EsperarEscritura(promesa) {
-      let vencida = false;
-      const ok = promesa.then(() => true);
-      ok.catch(e => {
-        if (!vencida) return; // lo informa quien espera
-        console.error(e);
-        SersaleUI.toast("Un precio cargado sin señal no se pudo guardar. Revisalo.", { tipo: "error" });
-      });
-      const ms = navigator.onLine === false ? 400 : 6000;
-      return Promise.race([ok, new Promise(r => setTimeout(() => { vencida = true; r(false); }, ms))]);
+    async function p5EsperarEscritura(promesa) {
+      const pendientes = () => (window.__sersaleDatos && window.__sersaleDatos.pendientes ? window.__sersaleDatos.pendientes().cantidad : 0);
+      const antes = pendientes();
+      await promesa;
+      return pendientes() <= antes;
     }
 
     /**

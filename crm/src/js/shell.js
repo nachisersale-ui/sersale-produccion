@@ -288,32 +288,62 @@
   }
   if (!document.documentElement.hasAttribute("data-sin-nav")) nav();
 
-  // ── Sin conexión ─────────────────────────────────────────────────────────
+  // ── Sin conexión y cambios sin enviar ────────────────────────────────────
 
   var cartel = null;
-  function conexion() {
+  var estadoRed = { sin: navigator.onLine === false, pendientes: 0, deAntes: false };
+  function textoCartel() {
+    var n = estadoRed.pendientes;
+    var cambios = n === 1 ? "1 cambio guardado en el teléfono" : n + " cambios guardados en el teléfono";
+    if (estadoRed.sin) {
+      if (n > 0) return "Sin conexión · " + cambios + ", se " + (n === 1 ? "envía" : "envían") + " al volver la señal";
+      if (estadoRed.deAntes) return "Sin conexión · hay cambios guardados en el teléfono sin enviar";
+      // Las páginas con copia local (js/fb.js) siguen mostrando lo guardado; las demás necesitan señal.
+      return window.__sersaleDatos ? "Sin conexión · se muestran los datos guardados" : "Sin conexión · esta pantalla necesita señal";
+    }
+    if (n > 0) return "Enviando " + (n === 1 ? "1 cambio" : n + " cambios") + "…";
+    if (estadoRed.deAntes) return "Enviando cambios guardados…";
+    return "";
+  }
+  function pintarCartel() {
     listo(function () {
-      var sin = navigator.onLine === false;
-      if (sin && !cartel) {
-        // Las páginas con copia local (js/fb.js) siguen mostrando lo guardado; las demás necesitan señal.
-        var conCopia = !!window.__sersaleDatos;
-        cartel = el("div", {
-          class: "ss-sin-conexion",
-          role: "status",
-          text: conCopia ? "Sin conexión · se muestran los datos guardados" : "Sin conexión · esta pantalla necesita señal",
-        });
+      var texto = textoCartel();
+      if (texto && !cartel) {
+        cartel = el("div", { class: "ss-sin-conexion", role: "status" });
         document.body.appendChild(cartel);
-      } else if (!sin && cartel) {
-        cartel.parentNode.removeChild(cartel);
-        cartel = null;
-        toast("Conexión recuperada", { tipo: "ok", ms: 1800 });
       }
-      document.documentElement.classList.toggle("ss-offline", sin);
+      if (cartel) {
+        if (texto) {
+          cartel.textContent = texto;
+          cartel.classList.toggle("ss-enviando", !estadoRed.sin);
+        } else {
+          cartel.parentNode.removeChild(cartel);
+          cartel = null;
+        }
+      }
+      document.documentElement.classList.toggle("ss-offline", estadoRed.sin);
     });
   }
-  window.addEventListener("online", conexion);
-  window.addEventListener("offline", conexion);
-  if (navigator.onLine === false) conexion();
+  window.addEventListener("online", function () {
+    estadoRed.sin = false;
+    pintarCartel();
+    toast("Conexión recuperada", { tipo: "ok", ms: 1800 });
+  });
+  window.addEventListener("offline", function () {
+    estadoRed.sin = true;
+    pintarCartel();
+  });
+  window.addEventListener("sersale:pendientes", function (e) {
+    var antes = estadoRed.pendientes + (estadoRed.deAntes ? 1 : 0);
+    estadoRed.pendientes = e.detail.cantidad;
+    estadoRed.deAntes = !!e.detail.deAntes;
+    pintarCartel();
+    if (antes > 0 && estadoRed.pendientes === 0 && !estadoRed.deAntes) toast("Cambios enviados", { tipo: "ok", ms: 2200 });
+  });
+  window.addEventListener("sersale:cambio-rechazado", function () {
+    aviso("Un cambio que se había guardado en el teléfono no se pudo enviar al servidor. Revisá lo último que cargaste.", { titulo: "Cambio no enviado" });
+  });
+  if (estadoRed.sin) pintarCartel();
 
   // ── App instalada: archivos guardados en el teléfono y actualizaciones ───
 

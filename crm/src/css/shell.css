@@ -339,6 +339,10 @@ body:has(.ss-fondo) .ss-toasts {
   padding: 6px 12px;
 }
 
+.ss-sin-conexion.ss-enviando {
+  background: #26536e;
+}
+
 @keyframes ss-sube {
   from {
     opacity: 0;
