@@ -146,22 +146,15 @@
     // ── GUARDAR CON MALA SEÑAL ─────────────────────────────
     const p1SinSenal = () => typeof navigator !== "undefined" && navigator.onLine === false;
     const P1_SIN_SENAL = "Sin conexión: no se guardó. Probá de nuevo cuando vuelva la señal.";
-    const P1_ESPERA_MS = 8000;
-    // Espera a que el servidor confirme una escritura. Con señal floja la
-    // confirmación puede tardar minutos: pasado el plazo se deja de esperar,
-    // porque la escritura ya quedó anotada en el teléfono y se envía sola.
-    // Devuelve true si se confirmó y false si quedó pendiente de envío.
-    function p1Escribir(promesa) {
-      let reloj = null, vencido = false;
-      const plazo = new Promise(resolve => { reloj = setTimeout(() => { vencido = true; resolve(false); }, P1_ESPERA_MS); });
-      const hecho = promesa.then(() => true, e => {
-        if (!vencido) throw e;
-        // Falló después de haber avisado "queda pendiente": hay que decirlo.
-        console.error(e);
-        SersaleUI.toast("Un cambio que había quedado pendiente no se pudo guardar. Revisalo.", { tipo:"error" });
-        return false;
-      });
-      return Promise.race([hecho, plazo]).finally(() => clearTimeout(reloj));
+    // Espera una escritura. Con señal floja js/fb.js la da por terminada cuando
+    // el cambio quedó anotado en el teléfono (se envía solo) y lleva la cuenta de
+    // lo pendiente. Devuelve true si el servidor confirmó y false si quedó
+    // pendiente de envío.
+    async function p1Escribir(promesa) {
+      const pendientes = () => (window.__sersaleDatos && window.__sersaleDatos.pendientes ? window.__sersaleDatos.pendientes().cantidad : 0);
+      const antes = pendientes();
+      await promesa;
+      return pendientes() <= antes;
     }
 
     // ── HISTORIAL PRECIOS POR CLIENTE ──────────────────────
