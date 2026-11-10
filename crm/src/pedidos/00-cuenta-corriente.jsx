@@ -36,6 +36,11 @@
     //                                    las partes de ccAsentarMovimiento, para meter el asiento
     //                                    dentro de una transacción más grande (el remito lo hace).
     //   ccRecalcularSaldo(nombre)        pisa el saldo guardado con la suma de los movimientos (mantenimiento).
+    //   czIdCuenta(nombre)               id fijo de la cuenta de un cliente ("cta_<nombre>"): con ese id se abren las
+    //                                    cuentas nuevas, así dos teléfonos a la vez no abren dos cuentas del mismo cliente.
+    //   czEsPendiente(mov)               ¿es un "Pendiente de facturar" ($0, sin remito) de los que deja el alta de un pedido?
+    //   czPendienteDePedido(movs, pedido)  ese pendiente para un pedido, o null.
+    //   czQuitarPendienteDePedido(pedido)  lo saca (pedido cancelado o pasado a otro cliente). No toca saldos: es de $0.
     //   esperarCopiaLocal(ref, listo, ms)
     //                                    después de una transacción, espera a que la copia del teléfono tenga el
     //                                    cambio (para que la lectura que sigue ya lo muestre). La usan las de arriba.
@@ -122,6 +127,16 @@
       return ccTextoISO(a.createdAt).localeCompare(ccTextoISO(b.createdAt));
     }
 
+    /**
+     * Id fijo de la cuenta corriente de un cliente: "cta_" + el nombre en minúsculas,
+     * sin acentos y con "_" en lugar de espacios y signos. Es el id con el que se
+     * abren las cuentas nuevas (desde "+ Nueva", un remito o una venta rápida).
+     * Las cuentas que ya existen con otro id se siguen encontrando por nombre.
+     */
+    function czIdCuenta(nombre) {
+      return "cta_" + SersaleBase.norm(nombre).replace(/[^a-z0-9]+/g, "_").slice(0, 80);
+    }
+
     /** De una lista de cuentas, la del cliente: no fusionada, y si hay varias, la de nombre idéntico. */
     function ccElegirCuenta(cuentas, nombre) {
       const candidatas = (cuentas || []).filter(c => !c.mergedInto && ccMismoCliente(c.nombre, nombre));
@@ -168,6 +183,48 @@
       return pendientes.find(x => x.detalle === productos) || pendientes[0] || null;
     }
 
+    /** ¿Es un "Pendiente de facturar" de los que deja el alta de un pedido? ($0 y todavía sin remito) */
+    function czEsPendiente(mov) {
+      return !!mov && mov.tipo === "pedido" && mov.origen === "pedido_app" && (Number(mov.monto) || 0) === 0 && mov.remitoNro == null;
+    }
+
+    /**
+     * El "Pendiente de facturar" de un pedido entre los movimientos del cliente, o null.
+     * Los que se cargan ahora están atados al pedido con `pedidoId`; los anteriores se
+     * reconocen solo si coinciden la fecha de entrega y los productos (ante la duda, null).
+     */
+    function czPendienteDePedido(movs, pedido) {
+      const lista = (movs || []).filter(czEsPendiente);
+      const atado = lista.find(x => x.pedidoId && x.pedidoId === pedido.id);
+      if (atado) return atado;
+      const productos = (pedido.items || []).map(it => it.producto).join(", ");
+      return lista.find(x => !x.pedidoId && ccDia(x.fecha) === (pedido.fechaEntrega || "") && x.detalle === productos) || null;
+    }
+
+    /**
+     * Saca de la cuenta el "Pendiente de facturar" de un pedido que ya no se le va a
+     * facturar a ese cliente (se canceló o se pasó a otro cliente). `pedido` es el
+     * pedido como estaba: { id, cliente, fechaEntrega, items }. Es un renglón de $0,
+     * así que el saldo no cambia. Si un remito ya le puso importe es un cargo y no se
+     * toca. Devuelve true si lo sacó.
+     */
+    async function czQuitarPendienteDePedido(pedido) {
+      if (!pedido || !pedido.id || !pedido.cliente) return false;
+      const { db, doc, runTransaction } = fb();
+      const cuenta = await ccBuscarCuenta(pedido.cliente);
+      const pendiente = czPendienteDePedido(await ccMovimientosDe(pedido.cliente, cuenta), pedido);
+      if (!pendiente) return false;
+      const ref = doc(db, "cc_movimientos", pendiente.id);
+      const sacado = await runTransaction(db, async tx => {
+        const snap = await tx.get(ref);
+        if (!snap.exists() || !czEsPendiente(snap.data())) return false;
+        tx.delete(ref);
+        return true;
+      });
+      if (sacado) await esperarCopiaLocal(ref, d => d === null);
+      return sacado;
+    }
+
     /**
      * Lecturas previas de un asiento (fuera de la transacción).
      *   opts.cliente      nombre del cliente, como figura en el pedido o en la cuenta.
@@ -183,13 +240,20 @@
     async function ccPrepararAsiento(opts) {
       const { db, collection, doc } = fb();
       const cuenta = opts.cuenta !== undefined ? opts.cuenta : await ccBuscarCuenta(opts.cliente);
+      // Cuenta nueva: se abre con el id fijo del cliente (el mismo de "+ Nueva"). Si otro
+      // teléfono la abrió un instante antes (o este todavía no se enteró de que existe), la
+      // transacción la encuentra en ese id y le suma el importe en vez de abrir una segunda
+      // cuenta. `cuentaRefLibre` es la salida si ese id está ocupado por otra cosa.
+      const idFijo = !cuenta && opts.abrirCuenta ? czIdCuenta(opts.cliente) : "";
+      const refLibre = !cuenta && opts.abrirCuenta ? doc(collection(db, "cuentas_corrientes")) : null;
       const plan = {
         cliente: opts.cliente,
         cuenta: cuenta || null,
         abrirCuenta: !!opts.abrirCuenta,
         conSaldo: !!opts.conSaldo,
         ultimoMovimiento: opts.ultimoMovimiento || SersaleBase.hoy(),
-        cuentaRef: cuenta ? doc(db, "cuentas_corrientes", cuenta.id) : (opts.abrirCuenta ? doc(collection(db, "cuentas_corrientes")) : null),
+        cuentaRef: cuenta ? doc(db, "cuentas_corrientes", cuenta.id) : (idFijo.length > 4 ? doc(db, "cuentas_corrientes", idFijo) : refLibre),
+        cuentaRefLibre: idFijo.length > 4 ? refLibre : null,
         movRef: opts.movId ? doc(db, "cc_movimientos", opts.movId) : doc(collection(db, "cc_movimientos")),
         movConocido: !!opts.movId,
         saldoPrevioSinCuenta: 0,
@@ -204,6 +268,17 @@
     /** Lecturas del asiento dentro de la transacción (antes de cualquier escritura). */
     async function ccLeerAsiento(tx, plan) {
       plan.cuentaSnap = plan.cuentaRef ? await tx.get(plan.cuentaRef) : null;
+      // Se iba a abrir la cuenta con el id fijo y en ese id ya hay algo. Si es la cuenta de
+      // este cliente, se usa (la abrió otro teléfono). Si es una cuenta fusionada o de otro
+      // cliente (dos nombres que dan el mismo id), la nueva se abre con un id libre.
+      if (!plan.cuenta && plan.cuentaRefLibre && plan.cuentaSnap && plan.cuentaSnap.exists()) {
+        const d = plan.cuentaSnap.data();
+        if (d.mergedInto || !ccMismoCliente(d.nombre, plan.cliente)) {
+          plan.cuentaRef = plan.cuentaRefLibre;
+          plan.cuentaRefLibre = null;
+          plan.cuentaSnap = await tx.get(plan.cuentaRef);
+        }
+      }
       plan.movSnap = plan.movConocido ? await tx.get(plan.movRef) : null;
     }
 

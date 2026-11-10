@@ -54,6 +54,14 @@
       return res;
     }
 
+    // Pedido cancelado: su "Pendiente de facturar" ($0) sale de la cuenta corriente (ya no
+    // se va a facturar). Si el pedido tenía remito, el cargo queda como está: eso lo
+    // decide una persona. La cancelación ya está guardada; si esto falla solo se anota.
+    async function czAlCancelarPedido(pedido) {
+      try { await czQuitarPendienteDePedido(pedido); }
+      catch(e) { console.error("[Pedido] No se pudo quitar el pendiente de facturar del pedido cancelado:", e); }
+    }
+
     // Lo que VistaComercial les pasa a las tarjetas aunque estén dentro de otra lista
     // (el historial no recibe onRemito): permite hacer el remito de un pedido ya despachado.
     const ComercialCtx = React.createContext(null);
@@ -257,6 +265,7 @@
           return false;
         }
         if (!r.ok) SersaleUI.toast(r.motivo, { tipo: "info", ms: 7000 });
+        if (r.ok && nuevoEstado === "cancelado") await czAlCancelarPedido(visto);
         await cargar();
         return r.ok;
       }
@@ -354,9 +363,9 @@
       };
       const remItem = i => setItems(items.filter((_,idx)=>idx!==i));
 
+      // Los clientes cargados en Clientes + "Otro" (sin los nombres de demostración que había en el código).
       const todosClientes = [
         ...clientesDB.map(c=>c.nombre),
-        ...CLIENTES_DEFAULT.filter(d=>!clientesDB.find(c=>c.nombre===d)),
         "Otro"
       ];
       // If current cliente isn't in list, treat as custom
@@ -367,22 +376,48 @@
       },[]);
       // Los clientes llegan después del primer dibujo: si el del pedido está en la
       // lista y nadie tocó el campo, se lo muestra elegido (no como "Otro" editable).
+      // Se lo reconoce aunque el pedido lo tenga escrito con otras mayúsculas o acentos.
       useEffect(()=>{
-        if(clienteSelect==="Otro" && clienteCustom===(pedido.cliente||"") && clientesDB.some(c=>c.nombre===pedido.cliente)) {
-          setClienteSelect(pedido.cliente);
+        if(clienteSelect==="Otro" && clienteCustom===(pedido.cliente||"")) {
+          const enLista = clientesDB.find(c=>c.nombre===pedido.cliente) || clientesDB.find(c=>ccMismoCliente(c.nombre, pedido.cliente));
+          if(enLista) setClienteSelect(enLista.nombre);
         }
       },[clientesDB]);
 
       const [guardar, guardando] = SersaleBase.useAccion(async () => {
         const aviso = t => { SersaleUI.toast(t, { tipo: "error" }); };
-        const nombreCliente = clienteSelect==="Otro" ? clienteCustom.trim() : clienteSelect;
+        let nombreCliente = clienteSelect==="Otro" ? clienteCustom.trim() : clienteSelect;
         if (!nombreCliente) return aviso("Seleccioná o ingresá el cliente");
+        if (clienteSelect==="Otro") {
+          // Igual que en Nuevo Pedido: si el nombre escrito a mano es el de un cliente que ya
+          // está (con otra mayúscula o sin acento), el pedido queda a nombre de ese cliente.
+          const existente = clientesDB.find(c=>SersaleBase.mismoNombre(c.nombre, nombreCliente));
+          if (existente) nombreCliente = existente.nombre;
+        }
         if (!tipo) return aviso("Seleccioná si es envío o retiro");
         if (!entrega) return aviso("Ingresá la fecha de entrega");
-        const val = items.filter(it=>it.producto&&it.cantidad);
+        // Una fila a medio cargar (producto sin cantidad o al revés) frena el guardado, como en
+        // Nuevo Pedido: antes se descartaba sin avisar y el pedido quedaba sin ese producto.
+        const val = [];
+        for (let i=0; i<items.length; i++) {
+          const it = items[i];
+          const prod = String(it.producto||"").trim(), cant = String(it.cantidad==null?"":it.cantidad).trim();
+          if (!prod && !cant) continue;
+          if (!prod) return aviso(`Al ítem ${i+1} le falta el producto`);
+          if (!cant) return aviso(`Al ítem ${i+1} (${prod}) le falta la cantidad`);
+          if (!(parseFloat(cant) > 0)) return aviso(`La cantidad del ítem ${i+1} (${prod}) tiene que ser mayor a 0`);
+          val.push(it);
+        }
         if (!val.length) return aviso("Agregá al menos un producto");
+        const cambiaCliente = !ccMismoCliente(pedido.cliente, nombreCliente);
         try {
           const { db, doc, runTransaction } = fb();
+          if (cambiaCliente) {
+            // Con remito emitido el cargo ya está en la cuenta del cliente anterior y no se pasa
+            // solo a otra cuenta: cambiar el cliente dejaba el remito a un nombre y la deuda a otro.
+            const remito = await remitoDePedido(pedido.id);
+            if (remito) return aviso(`Este pedido ya tiene el Remito N° ${String(remito.nro).padStart(4,"0")} a nombre de ${pedido.cliente}: no se puede pasar a otro cliente.`);
+          }
           const ref = doc(db,"pedidos",pedido.id);
           const editadoEn = new Date().toISOString();
           const existe = await runTransaction(db, async tx => {
@@ -408,7 +443,28 @@
           });
           if (!existe) return aviso("Ese pedido ya no existe.");
           await esperarCopiaLocal(ref, d => !!d && d.editadoEn === editadoEn);
-          SersaleUI.toast("Pedido actualizado", { tipo: "ok" });
+          // El pedido pasó a otro cliente: su "Pendiente de facturar" ($0) sale de la cuenta
+          // del anterior y, si el nuevo tiene cuenta, se anota en la suya (como en el alta).
+          let sinPendiente = false;
+          if (cambiaCliente) {
+            try {
+              await czQuitarPendienteDePedido(pedido);
+              const cuenta = cuentaCorriente ? await ccBuscarCuenta(nombreCliente) : null;
+              if (cuenta) {
+                await ccAsentarMovimiento({
+                  cliente: nombreCliente, cuenta,
+                  ultimoMovimiento: cuenta.ultimoMovimiento, // un pendiente de $0 no cambia la fecha del último movimiento
+                  datos: {
+                    tipo:"pedido", monto:0, fecha:entrega,
+                    detalle:val.map(it=>it.producto).join(", "), obs:"Pendiente de facturar",
+                    origen:"pedido_app", pedidoId:pedido.id
+                  }
+                });
+              }
+            } catch(e) { console.error("[Pedido] No se pudo pasar el pendiente de facturar al cliente nuevo:", e); sinPendiente = true; }
+          }
+          if (sinPendiente) SersaleUI.toast("Pedido actualizado. No se pudo pasar el pendiente de facturar a la cuenta de "+nombreCliente+": el cargo se hace con el remito.", { tipo: "info", ms: 6000 });
+          else SersaleUI.toast("Pedido actualizado", { tipo: "ok" });
           onSaved();
         } catch(e) {
           console.error(e);
@@ -471,7 +527,7 @@
                     : <select style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none",marginBottom:8}}
                         value={item.producto} onChange={e=>updItem(i,"producto",e.target.value)}>
                         <option value="">— Producto —</option>
-                        {(getProductos()[item.categoria]||[]).sort((a,b)=>a.localeCompare(b,"es")).map(p=><option key={p} value={p}>{p}</option>)}
+                        {[...(getProductos()[item.categoria]||[])].sort((a,b)=>a.localeCompare(b,"es")).map(p=><option key={p} value={p}>{p}</option>)}
                       </select>
                 )}
                 <div style={{display:"flex",gap:8}}>
@@ -515,7 +571,12 @@
       const { useState, useEffect } = React;
       // El pedido se vuelve a leer al abrir: la lista de Comercial puede ser de hace horas.
       const [pedido, setPedido] = useState(pedidoInicial);
+      // Lo que se escribe en pantalla (y los precios de un remito ya emitido).
       const [precios, setPrecios] = useState({});
+      // Último precio guardado del cliente para cada producto: es lo que se propone.
+      const [czGuardados, czSetGuardados] = useState({});
+      // Lo escrito en pantalla manda sobre lo propuesto, llegue antes o después.
+      const preciosVista = { ...czGuardados, ...precios };
       const [nroRemito, setNroRemito] = useState("");
       const [guardado, setGuardado] = useState(false);
       // Remito que ya tiene este pedido (emitido antes o recién guardado): { id, nro, fecha }
@@ -526,24 +587,24 @@
       // Load saved prices for this client
       useEffect(()=>{
         async function cargar() {
+          const { db, collection, getDocs, query, where } = fb();
+          // De cada producto, el precio más reciente (la fecha puede estar como texto o como Timestamp).
+          const ultimos = docs => {
+            const out = {};
+            p5UltimosPrecios(docs.filter(d => p5Precio(d.precio) > 0)).forEach(d=>{ out[d.producto] = d.precio; });
+            return out;
+          };
+          // 1) Enseguida: los guardados con el nombre tal cual figura en el pedido.
           try {
-            const { db, collection, getDocs, query, where } = fb();
-            // Try exact match first, then case-insensitive fallback
-            let snap = await getDocs(query(collection(db,"precios_cliente"),
-              where("cliente","==",pedidoInicial.cliente)));
-            if(snap.empty) {
-              // Sin coincidencia exacta: mismo nombre sin mirar mayúsculas ni acentos
-              const snapAll = await getDocs(collection(db,"precios_cliente"));
-              const matching = snapAll.docs.filter(d => SersaleBase.mismoNombre(d.data().cliente, pedidoInicial.cliente));
-              snap = { docs: matching, empty: matching.length === 0 };
-            }
-            const sorted = snap.docs.map(d=>({...(d.data ? d.data() : d)})).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
-            const latest = {};
-            sorted.forEach(data=>{
-              if(!latest[data.producto]) latest[data.producto] = data.precio;
-            });
-            // Lo que ya se haya escrito en pantalla manda sobre lo que llega después.
-            setPrecios(prev=>({...latest, ...prev}));
+            const snap = await getDocs(query(collection(db,"precios_cliente"), where("cliente","==",pedidoInicial.cliente)));
+            czSetGuardados(ultimos(snap.docs.map(d=>d.data())));
+          } catch(e){ console.error("Error cargando precios:", e); }
+          // 2) Completo: todos los del cliente sin mirar mayúsculas ni acentos, la misma regla que
+          // la pestaña Precios. Antes esto se hacía solo si el paso 1 no traía nada: un precio más
+          // nuevo guardado con otra forma del nombre no se veía y el remito proponía el viejo.
+          try {
+            const snapAll = await getDocs(collection(db,"precios_cliente"));
+            czSetGuardados(ultimos(snapAll.docs.map(d=>d.data()).filter(d => SersaleBase.mismoNombre(d.cliente, pedidoInicial.cliente))));
           } catch(e){ console.error("Error cargando precios:", e); }
         }
         // Próximo número (solo para mostrar: el definitivo se toma al guardar)
@@ -593,7 +654,7 @@
       // Filas del remito: la MISMA cuenta para la pantalla, el PDF, el remito guardado y la cuenta corriente.
       const filas = pedido.items.map(it=>{
         const kg = kgFacturables(it);
-        const precio = parseFloat(precios[it.producto])||0;
+        const precio = parseFloat(preciosVista[it.producto])||0;
         return { producto: it.producto, unidad: it.unidad, kg, precio, total: SersaleBase.redondear(kg*precio, 2), pesado: it.kgReal!=null && it.kgReal!=="", cantidad: it.cantidad };
       });
       const totalRemito = SersaleBase.redondear(filas.reduce((s,f)=>s+f.total,0), 2);
@@ -687,6 +748,9 @@
                 obs: "Remito N° "+nro4(nro), remitoNro: nro, pedidoId: pedido.id
               };
               if(!movPrevio) { datosMov.fecha = pedido.fechaEntrega || hoyStr; datosMov.origen = "remito"; }
+              // Un "Pendiente de facturar" que pasa a ser el cargo toma la fecha de entrega que el
+              // pedido tiene AHORA (si se la cambiaron después del alta, quedaba con la anterior).
+              else if(czEsPendiente(movPrevio) && pedido.fechaEntrega) datosMov.fecha = pedido.fechaEntrega;
               cc = ccEscribirAsiento(tx, asiento, datosMov);
             }
             return { nro, fecha: datos.fecha, cc, corregido: yaEmitido };
@@ -862,7 +926,7 @@
                       <div style={{fontSize:11,color:"#79828B",marginBottom:4}}>Precio / kg</div>
                       <InputMonto placeholder="$ / kg"
                         style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:15,fontWeight:700,textAlign:"right"}}
-                        value={precios[it.producto]||""} onChange={v=>{ setPrecios({...precios,[it.producto]:v}); setGuardado(false); }} />
+                        value={preciosVista[it.producto]||""} onChange={v=>{ setPrecios({...precios,[it.producto]:v}); setGuardado(false); }} />
                     </div>
                   </div>
                   {p>0 && (

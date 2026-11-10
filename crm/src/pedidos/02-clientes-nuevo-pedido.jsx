@@ -62,6 +62,10 @@
       const [cuentaCorriente, setCuentaCorriente] = useState(false);
       const [editando, setEditando] = useState(null);
       const [clientePrecios, setClientePrecios] = useState(null);
+      // Clientes que tienen cuenta corriente abierta (nombre normalizado). Las cuentas que se
+      // abren desde Cuentas Corrientes, un remito o una venta rápida no tildan la ficha.
+      const [conCuenta, setConCuenta] = useState(() => new Set());
+      const tieneCuenta = c => !!c.cuentaCorriente || conCuenta.has(SersaleBase.norm(c.nombre));
 
       function verPrecios(nombreCliente) { setClientePrecios(nombreCliente); }
 
@@ -74,6 +78,15 @@
         } catch(e) {
           console.error("[Clientes] No se pudo cargar la lista:", e);
           setErrorCarga(true);
+          return;
+        }
+        try {
+          const { db, collection, getDocs } = fb();
+          const cuentas = await getDocs(collection(db,"cuentas_corrientes"));
+          setConCuenta(new Set(cuentas.docs.map(d=>d.data()).filter(c=>!c.mergedInto).map(c=>SersaleBase.norm(c.nombre)).filter(Boolean)));
+        } catch(e) {
+          // Sin las cuentas, la lista se muestra igual con la marca de cada ficha.
+          console.error("[Clientes] No se pudieron leer las cuentas corrientes:", e);
         }
       }
 
@@ -167,7 +180,7 @@
       });
 
       function iniciarEdicion(c) {
-        setEditando(c.id); setNombre(c.nombre); setTelefono(c.telefono||""); setDireccion(c.direccion||""); setCuentaCorriente(c.cuentaCorriente||false);
+        setEditando(c.id); setNombre(c.nombre); setTelefono(c.telefono||""); setDireccion(c.direccion||""); setCuentaCorriente(tieneCuenta(c));
         window.scrollTo(0,0);
       }
 
@@ -228,7 +241,7 @@
                     <div style={{fontWeight:700,fontSize:14,color:"#191E23"}}>{c.nombre}</div>
                     <div style={{display:"flex",gap:10,marginTop:3,flexWrap:"wrap"}}>
                       {c.telefono && <span style={{fontSize:12,color:"#79828B"}}>📞 {c.telefono}</span>}
-                      {c.cuentaCorriente && <span style={{fontSize:12,color:"#6B4E8E",fontWeight:600}}>💳 Cta Cte</span>}
+                      {tieneCuenta(c) && <span style={{fontSize:12,color:"#6B4E8E",fontWeight:600}}>💳 Cta Cte</span>}
                     </div>
                     {c.direccion && <div style={{fontSize:12,color:"#79828B",marginTop:2}}>📍 {c.direccion}</div>}
                   </div>
@@ -319,8 +332,9 @@
     // Mark client as recently contacted (removes from alerts/suggestions)
     // `opciones.cuentaCorriente`: si hay que crear la ficha (cliente cargado con "Otro"),
     // se guarda con la marca de cuenta corriente que se tildó en el pedido.
+    // Devuelve true si quedó guardado y false si no se pudo (para que quien la llama pueda avisar).
     async function marcarContacto(nombreCliente, opciones) {
-      if(!nombreCliente) return;
+      if(!nombreCliente) return false;
       try {
         const { db, collection, getDocs, query, where, doc, updateDoc, addDoc } = fb();
         // Find client doc by name (sin mirar mayúsculas, acentos ni espacios de más)
@@ -349,7 +363,8 @@
           });
           console.log("[Contacto] Created client + marked as contacted:", nombreCliente);
         }
-      } catch(e) { console.error("[Contacto] Error:", e); }
+        return true;
+      } catch(e) { console.error("[Contacto] Error:", e); return false; }
     }
 
     function getLastSeen() { return localStorage.getItem(LAST_SEEN_KEY) || "2000-01-01T00:00:00.000Z"; }
@@ -659,10 +674,10 @@
       const updItem = (i,f,v) => { const c=[...items]; c[i][f]=v; if(f==="categoria") c[i].producto=""; setItems(c); };
       const remItem = i => setItems(items.filter((_,idx)=>idx!==i));
 
-      // Lista combinada: clientes de Firebase + lista base + Otro
+      // Los clientes cargados en Clientes + "Otro". (Antes se sumaban nueve nombres de
+      // demostración escritos en el código, que no eran clientes de la base.)
       const todosClientes = [
         ...clientesDB.map(c=>c.nombre),
-        ...CLIENTES_DEFAULT.filter(d=>!clientesDB.find(c=>c.nombre===d)),
         "Otro"
       ];
 

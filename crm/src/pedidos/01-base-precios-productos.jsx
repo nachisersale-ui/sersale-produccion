@@ -10,12 +10,6 @@
       cancelado:  { label:"CANCELADO",  color:"#7E1A20", bg:"#EEDADB" },
     };
 
-    const CLIENTES_DEFAULT = [
-      "Supermercado Don Juan","Carnicería El Gaucho","Rotisería La Porteña",
-      "Distribuidora Río de la Plata","Restaurant El Fogón","Carnicería San Martín",
-      "Almacén Central","Distribuidora Norte","Hotel Castelar"
-    ];
-
 
     // ── FORMATO DE MONTOS (separador de miles) ──────────────
     // Valor interno: string plano con "." decimal ("1000000.5")
@@ -176,23 +170,29 @@
         setFallo(false);
         try {
           const { db, collection, getDocs, query, where } = fb();
-          let lista = (await getDocs(query(
-            collection(db,"precios_cliente"),
-            where("cliente","==",cliente)
-          ))).docs;
-          if (lista.length === 0) {
-            // Igual que el remito: sin coincidencia exacta, el mismo nombre sin mirar mayúsculas ni acentos
-            const todos = await getDocs(collection(db,"precios_cliente"));
-            lista = todos.docs.filter(d => SersaleBase.mismoNombre(d.data().cliente, cliente));
+          const agrupar = lista => {
+            const docs = lista.map(d=>({id:d.id,...d.data()}))
+              .sort((a,b)=>p1FechaOrden(b.fecha).localeCompare(p1FechaOrden(a.fecha)));
+            const grouped = {};
+            docs.forEach(d=>{
+              if(!grouped[d.producto]) grouped[d.producto]=[];
+              grouped[d.producto].push(d);
+            });
+            return grouped;
+          };
+          // Al abrir, enseguida los guardados con el nombre idéntico…
+          if (precios === null) {
+            const exactos = (await getDocs(query(
+              collection(db,"precios_cliente"),
+              where("cliente","==",cliente)
+            ))).docs;
+            if (exactos.length) setPrecios(agrupar(exactos));
           }
-          const docs = lista.map(d=>({id:d.id,...d.data()}))
-            .sort((a,b)=>p1FechaOrden(b.fecha).localeCompare(p1FechaOrden(a.fecha)));
-          const grouped = {};
-          docs.forEach(d=>{
-            if(!grouped[d.producto]) grouped[d.producto]=[];
-            grouped[d.producto].push(d);
-          });
-          setPrecios(grouped);
+          // …y después todos los del cliente, sin mirar mayúsculas ni acentos, igual que la pestaña
+          // Precios y el remito. (Antes esto se hacía solo si no había ninguno con el nombre idéntico:
+          // los guardados con otra forma del nombre no aparecían y se veía un precio que no era el último.)
+          const todos = await getDocs(collection(db,"precios_cliente"));
+          setPrecios(agrupar(todos.docs.filter(d => SersaleBase.mismoNombre(d.data().cliente, cliente))));
         } catch(e){
           // Nunca mostrar "Sin precios registrados" si en realidad no se pudo leer.
           console.error(e); setPrecios(null); setFallo(true);
