@@ -33,22 +33,33 @@
   <script src="vendor/react.production.min.js"></script>
   <script src="vendor/react-dom.production.min.js"></script>
   <script type="module">
-    import { db, collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot, increment, runTransaction, precalentar } from "./js/fb.js";
+    import { db, collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot, increment, runTransaction, writeBatch, getDocsFromServer, getDocFromCache, precalentar } from "./js/fb.js";
     // Traer de entrada las colecciones que usan casi todas las pantallas: así
     // al cambiar de vista los datos ya están en el teléfono.
     precalentar(sessionStorage.getItem("sersale_role") === "operario"
       ? ["pedidos"]
       : ["pedidos", "clientes", "cuentas_corrientes", "cc_movimientos", "precios_cliente"]);
     window.__db = db;
-    window.__fb = { collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot, increment, runTransaction };
+    window.__fb = { collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot, increment, runTransaction, writeBatch, getDocsFromServer };
     window.__fbReady = true;
+    // Catálogo de productos guardado (config/productos). La app (js/pedidos.js)
+    // arranca casi siempre antes de que esta lectura termine y ya copió la lista
+    // fija del código a su variable PRODUCTOS: por eso, además de dejarlo en
+    // __productosOverride (lo que lee getProductos()), se le pisa esa variable.
+    // Sin esto la pestaña Precios nunca veía los productos agregados.
+    function p1UsarCatalogoGuardado(snap) {
+      const categorias = snap && snap.exists() ? snap.data().categorias : null;
+      if (!categorias) return;
+      window.__productosOverride = categorias;
+      if (typeof window.PRODUCTOS !== "undefined") window.PRODUCTOS = categorias;
+    }
     (async()=>{
-      try {
-        const snap = await getDoc(doc(db,"config","productos"));
-        if(snap.exists() && snap.data().categorias) {
-          window.__productosOverride = snap.data().categorias;
-        }
-      } catch(e){}
+      const ref = doc(db,"config","productos");
+      // Primero lo que ya está guardado en el teléfono (al instante, también sin señal)…
+      try { p1UsarCatalogoGuardado(await getDocFromCache(ref)); } catch(e){}
+      // …y después lo que diga el servidor.
+      try { p1UsarCatalogoGuardado(await getDoc(ref)); }
+      catch(e){ console.warn("No se pudo leer el catálogo de productos:", e && (e.code || e.message)); }
       document.dispatchEvent(new Event("fbReady"));
     })();
   </script>
@@ -80,6 +91,8 @@
 :root{
   --carbon:#12161A; --lacre:#A4232A; --lacre-cl:#C33039;
   --hueso:#EFEAE1;  --tinta:#191E23; --acero:#79828B; --linea:#D8DCE0;
+  /* Las usan .crm-page y las tarjetas de Pedidos; sin definir, las tarjetas salían sin borde ni sombra. */
+  --fondo:#F2F3F5;  --borde:#D8DCE0; --sombra:0 2px 10px rgba(0,0,0,.06);
 }
 body{ font-family:'IBM Plex Sans','Inter',system-ui,-apple-system,sans-serif;
       -webkit-font-smoothing:antialiased; color:var(--tinta) }

@@ -59,6 +59,53 @@
       );
     }
 
+    // Cantidad de un ítem para la hoja de ruta y el aviso de recontacto.
+    // kgReal son siempre kilos pesados (aunque sea 0), también cuando el pedido se
+    // tomó en piezas, ganchos, bolsas o unidades: "4 piezas · 31,6 kg", no "31.6 piezas".
+    function p7CantidadTexto(it) {
+      if (!it) return "";
+      const num = v => { const n = typeof v === "number" ? v : parseFloat(v); return isFinite(n) ? SersaleBase.fmtNumero(n, 3) : ""; };
+      const unidad = it.unidad || "kg";
+      const pesado = it.kgReal != null && it.kgReal !== "";
+      if (unidad === "kg") { const n = num(pesado ? it.kgReal : it.cantidad); return n ? n + " kg" : ""; }
+      const pedido = num(it.cantidad);
+      const kg = pesado ? num(it.kgReal) : "";
+      return [pedido ? pedido + " " + unidad : "", kg ? kg + " kg" : ""].filter(Boolean).join(" · ");
+    }
+
+    // Campo "Días" de una alerta (cuántos días sin pedir antes de avisar).
+    // - Guarda solo un número entero de 1 a 365, y solo si cambió.
+    // - Si el cliente tiene frecuencia automática (freqCalc), el límite se recalcula
+    //   en cada carga del Director y pisa lo que se escriba: se muestra pero no se edita.
+    function P7CampoDias({ alerta, onGuardar }) {
+      const [valor, setValor] = useState(String(alerta.diasAlerta));
+      useEffect(()=>{ setValor(String(alerta.diasAlerta)); }, [alerta.diasAlerta]);
+      const auto = !!alerta.freqCalc;
+      const [guardar, guardando] = SersaleBase.useAccion(async () => {
+        const txt = String(valor).trim();
+        const n = /^\d{1,3}$/.test(txt) ? parseInt(txt, 10) : NaN;
+        if (!(n >= 1 && n <= 365)) {
+          setValor(String(alerta.diasAlerta));
+          SersaleUI.toast("No se cambió: los días tienen que ser un número entre 1 y 365.", { tipo: "error" });
+          return;
+        }
+        if (n === alerta.diasAlerta) { setValor(String(n)); return; }
+        await onGuardar(alerta.clienteId, n);
+      });
+      const avisarAuto = () => SersaleUI.toast("Este límite se calcula solo: suele pedir cada "+alerta.freqCalc+" días, más 3 de margen. No se cambia a mano.", { tipo: "info" });
+      return (
+        <div style={{display:"flex",alignItems:"center",gap:4,background:"#EDEEF0",borderRadius:8,padding:"4px 8px"}}>
+          <span style={{fontSize:11,color:"#5C666F"}}>{auto?"Auto:":"Dias:"}</span>
+          <input type="number" inputMode="numeric" pattern="[0-9]*" min="1" max="365" value={valor}
+            readOnly={auto} disabled={guardando} aria-label={"Días de alerta de "+alerta.cliente}
+            onChange={e=>setValor(e.target.value)}
+            onBlur={auto?undefined:guardar}
+            onClick={auto?avisarAuto:undefined}
+            style={{width:48,padding:"4px",borderRadius:6,border:"1.5px solid #D8DCE0",fontSize:16,textAlign:"center",background:auto?"#F2F3F5":"#fff",color:auto?"#79828B":"#191E23"}}/>
+        </div>
+      );
+    }
+
     function TabAlertas({ alertasData, alertaEnviando, setAlertaEnviando, actualizarDiasAlerta, contactados, onContactado }) {
       const [ultimoEmail, setUltimoEmail] = useState(null);
       useEffect(()=>{
@@ -70,15 +117,21 @@
           } catch(e){}
         })();
       },[]);
-      const fmtF = f => f ? new Date(f+"T00:00:00").toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"}) : "-";
+      const fmtF = f => SersaleBase.fmtFecha(f) || "-";
       function avisarWA(a) {
         setAlertaEnviando(a.cliente);
-        const up=a.ultimoPedido;
-        const prods=(up.items||[]).map(it=>it.producto+((it.kgReal||it.cantidad)?" ("+(it.kgReal||it.cantidad)+" "+it.unidad+")":"")).join(", ");
-        const total=(up.items||[]).reduce((s,it)=>{ const kg=it.kgReal!=null?it.kgReal:parseFloat(it.cantidad)||0; return s+kg*(parseFloat(it.precio)||0); },0);
-        const nl="%0A";
-        let msg="Recontacto cliente"+nl+nl+"Cliente: "+a.cliente+nl+"Dias sin pedir: "+a.diasSinPedir+"d"+nl+"Ultimo pedido ("+fmtF(up.fechaPedido)+"): "+prods+nl+(total>0?"Monto: $"+Math.round(total).toLocaleString("es-AR")+nl:"")+"Frigorifico Sersale";
-        window.open("https://wa.me/5491167637860?text="+msg,"_blank");
+        const up=a.ultimoPedido||{};
+        const prods=(up.items||[]).map(it=>{
+          const hay=(it.kgReal!=null&&it.kgReal!=="")||parseFloat(it.cantidad)>0;
+          const cant=hay?p7CantidadTexto(it):"";
+          return it.producto+(cant?" ("+cant+")":"");
+        }).join(", ");
+        const total=(up.items||[]).reduce((s,it)=>{ const kg=(it.kgReal!=null&&it.kgReal!=="")?(Number(it.kgReal)||0):(parseFloat(it.cantidad)||0); return s+kg*(parseFloat(it.precio)||0); },0);
+        const nl="\n";
+        // La fecha sale de donde la saca la tarjeta: fechaPedido es un Timestamp y daba "Invalid Date".
+        let msg="Recontacto cliente"+nl+nl+"Cliente: "+a.cliente+nl+"Dias sin pedir: "+a.diasSinPedir+"d"+nl+"Ultimo pedido ("+fmtF(up._fechaDisplay||up.fechaEntrega||"")+"): "+prods+nl+(total>0?"Monto: "+SersaleBase.fmtMonto(total)+nl:"")+"Frigorifico Sersale";
+        // waLink codifica el texto: un "&" o un "#" en el nombre cortaba el mensaje.
+        window.open(SersaleBase.waLink(msg,"5491167637860"),"_blank");
         setTimeout(()=>setAlertaEnviando(null),2000);
       }
       if (!alertasData) return <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>;
@@ -90,7 +143,7 @@
         <div>
           {ultimoEmail&&(
             <div style={{background:"#EAF4FB",border:"1px solid #AED6F1",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12,color:"#26536E",display:"flex",alignItems:"center",gap:6}}>
-              <span>Email</span><span>Ultimo: <strong>{new Date(ultimoEmail.updatedAt).toLocaleDateString("es-AR")}</strong> · {ultimoEmail.cantidad} alerta{ultimoEmail.cantidad!==1?"s":""}</span>
+              <span>Email</span><span>Ultimo: <strong>{fmtF(ultimoEmail.updatedAt||ultimoEmail.fecha)}</strong> · {ultimoEmail.cantidad} alerta{ultimoEmail.cantidad!==1?"s":""}</span>
             </div>
           )}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
@@ -108,7 +161,7 @@
               <span>🔄</span> Frecuencia auto-calculada para <strong>{clientesConFreq}</strong> cliente{clientesConFreq!==1?"s":""} según historial de pedidos
             </div>
           )}
-          {alertasData.alertas.length===0 ? (
+          {enAlerta.length+proximas.length===0 ? (
             <div style={{textAlign:"center",color:"#A3ABB3",marginTop:60}}><div style={{fontSize:48}}>✅</div><p>Todos al dia</p></div>
           ) : (<>
             {enAlerta.length>0&&(<>
@@ -139,12 +192,7 @@
                       style={{padding:"9px 12px",borderRadius:8,border:"none",background:"#2F6B4F",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
                       ✓ Contactado
                     </button>
-                    <div style={{display:"flex",alignItems:"center",gap:4,background:"#EDEEF0",borderRadius:8,padding:"4px 8px"}}>
-                      <span style={{fontSize:11,color:"#5C666F"}}>Dias:</span>
-                      <input type="number" min="1" max="365" defaultValue={a.diasAlerta}
-                        onBlur={e=>actualizarDiasAlerta(a.clienteId,e.target.value)}
-                        style={{width:44,padding:"4px",borderRadius:6,border:"1.5px solid #D8DCE0",fontSize:12,textAlign:"center",background:"#fff"}}/>
-                    </div>
+                    <P7CampoDias alerta={a} onGuardar={actualizarDiasAlerta} />
                   </div>
                 </div>
               ))}
@@ -160,12 +208,7 @@
                         style={{padding:"6px 10px",borderRadius:8,border:"none",background:"#2F6B4F",color:"#fff",fontWeight:700,fontSize:11,cursor:"pointer",whiteSpace:"nowrap"}}>
                         ✓ Contactado
                       </button>
-                      <div style={{display:"flex",alignItems:"center",gap:4,background:"#EDEEF0",borderRadius:8,padding:"4px 8px"}}>
-                        <span style={{fontSize:11,color:"#5C666F"}}>Dias:</span>
-                        <input type="number" min="1" max="365" defaultValue={a.diasAlerta}
-                          onBlur={e=>actualizarDiasAlerta(a.clienteId,e.target.value)}
-                          style={{width:44,padding:"4px",borderRadius:6,border:"1.5px solid #D8DCE0",fontSize:12,textAlign:"center",background:"#fff"}}/>
-                      </div>
+                      <P7CampoDias alerta={a} onGuardar={actualizarDiasAlerta} />
                     </div>
                   </div>
                   <div style={{fontSize:12,color:"#79828B"}}>Ultimo: {fmtF(a.ultimoPedido._fechaDisplay||a.ultimoPedido.fechaEntrega||"")} — {(a.ultimoPedido.items||[]).map(it=>it.producto).join(", ")} {a.totalPedidos>0&&<span style={{color:"#A3ABB3"}}> · {a.totalPedidos} ped.</span>}</div>
@@ -178,9 +221,48 @@
     }
 
     // ── HOJA DE RUTA ─────────────────────────────────────────
+    // Google Maps acepta hasta 9 paradas intermedias por link (las demás las descarta).
+    const P7_MAX_PARADAS_MAPS = 9;
+
+    // Saca de una dirección lo que confunde al buscador de mapas (código postal,
+    // "CABA", "Ciudad Autónoma de Buenos Aires"). "CABA" se saca solo si es una
+    // palabra suelta: antes también se comía el "Caba" de Caballito o Cabañas.
+    function p7LimpiarDireccion(dir) {
+      return String(dir||"")
+        .replace(/(^|[,\s])C\d{4}[A-Z]{2,4}(?![A-Za-z0-9])/gi, "$1")
+        .replace(/,?\s*Cdad\.\s*Aut[oó]noma\s*de\s*Buenos\s*Aires/gi, "")
+        .replace(/,?\s*Ciudad\s*Aut[oó]noma\s*de\s*Buenos\s*Aires/gi, "")
+        .replace(/(^|[,\s])C\.?A\.?B\.?A\.?(?=\s*(?:,|$))/gi, "$1")
+        .replace(/\s{2,}/g, " ").replace(/\s+,/g, ",").replace(/,\s*,/g, ",").trim().replace(/,\s*$/, "").replace(/^,\s*/, "");
+    }
+
+    // Links de Google Maps para recorrer las paradas saliendo de `base` y volviendo.
+    // Con más de 9 paradas la ruta se parte en tramos encadenados (cada tramo
+    // arranca donde terminó el anterior) para que Maps no descarte ninguna.
+    function p7TramosMaps(paradas, base) {
+      const dirs = (paradas||[]).filter(p=>p.direccion).map(p=>p.direccion+", Buenos Aires");
+      const grupos = [];
+      for (let i=0; i<dirs.length; i+=P7_MAX_PARADAS_MAPS) grupos.push(dirs.slice(i, i+P7_MAX_PARADAS_MAPS));
+      return grupos.map((g,k)=>{
+        const ultimo = k===grupos.length-1;
+        const origen = k===0 ? base : grupos[k-1][grupos[k-1].length-1];
+        const destino = ultimo ? base : g[g.length-1];
+        const wps = ultimo ? g : g.slice(0,-1);
+        const desde = k*P7_MAX_PARADAS_MAPS+1, hasta = k*P7_MAX_PARADAS_MAPS+g.length;
+        return {
+          desde, hasta,
+          etiqueta: desde===hasta ? "Maps: parada "+desde : "Maps: paradas "+desde+" a "+hasta,
+          url:"https://www.google.com/maps/dir/?api=1&origin="+encodeURIComponent(origen)+"&destination="+encodeURIComponent(destino)
+            +(wps.length?"&waypoints="+wps.map(encodeURIComponent).join("|"):"")+"&travelmode=driving"
+        };
+      });
+    }
+
     function HojaRuta({ fecha, pedidos, onBack }) {
+      // Direcciones e ids de clientes, por nombre normalizado (sin mayúsculas, acentos ni espacios de más)
       const [clientesDB, setClientesDB] = useState({});
       const [clientesIDs, setClientesIDs] = useState({});
+      const [cargaClientes, setCargaClientes] = useState("cargando"); // "cargando" | "ok" | "error"
       const [estado, setEstado] = useState("idle");
       const [rutaOptimizada, setRutaOptimizada] = useState(null);
       const [errores, setErrores] = useState([]);
@@ -190,19 +272,29 @@
 
       const FRIGORIFICO = { nombre:"Frigorífico Sersale", direccion:"24 de Noviembre 1926, Parque Patricios, Buenos Aires", lat:-34.6262, lon:-58.4058 };
 
-      useEffect(()=>{
-        (async()=>{
-          try {
-            const{db,collection,getDocs}=fb();
-            const snap=await getDocs(collection(db,"clientes"));
-            const map={};
-            snap.docs.forEach(d=>{ const data=d.data(); map[data.nombre]=data.direccion||""; });
-            setClientesDB(map);
-          } catch(e){}
-        })();
-      },[]);
+      async function cargarClientes() {
+        setCargaClientes("cargando");
+        try {
+          const{db,collection,getDocs}=fb();
+          const snap=await getDocs(collection(db,"clientes"));
+          const map={}, ids={};
+          snap.docs.forEach(d=>{
+            const data=d.data();
+            const clave=SersaleBase.norm(data.nombre);
+            if(!clave) return;
+            const dir=String(data.direccion||"").trim();
+            // Si el cliente está cargado dos veces, vale la ficha que tiene dirección
+            if(ids[clave] && (map[clave] || !dir)) return;
+            map[clave]=dir; ids[clave]=d.id;
+          });
+          setClientesDB(map); setClientesIDs(ids);
+          setCargaClientes("ok");
+        } catch(e){ console.error(e); setCargaClientes("error"); }
+      }
+      useEffect(()=>{ cargarClientes(); },[]);
 
-      const pConDir = pedidos.map(p=>({...p, direccion:clientesDB[p.cliente]||""}));
+      // El nombre del pedido puede venir escrito distinto que en Clientes (mayúsculas, acentos, espacios)
+      const pConDir = pedidos.map(p=>({...p, direccion:clientesDB[SersaleBase.norm(p.cliente)]||""}));
       const sinDir  = pConDir.filter(p=>!p.direccion);
       const conDir  = pConDir.filter(p=>p.direccion);
 
@@ -223,26 +315,17 @@
       }
 
       async function optimizarRuta() {
-        if (conDir.length===0) { alert("Ningun cliente tiene direccion cargada."); return; }
+        if (conDir.length===0) { SersaleUI.toast("Ningún cliente tiene dirección cargada.", { tipo: "info" }); return; }
         setEstado("geocodificando");
         setRutaOptimizada(null);
         setErrores([]);
         setModoEdicion(false);
 
-        function limpiarDireccion(dir) {
-          return dir
-            .replace(/,?\s*C\d{4}[A-Z]{2,4}\s*/gi, "")
-            .replace(/,?\s*Cdad\.\s*Aut[oó]noma\s*de\s*Buenos\s*Aires/gi, "")
-            .replace(/,?\s*Ciudad\s*Aut[oó]noma\s*de\s*Buenos\s*Aires/gi, "")
-            .replace(/,?\s*CABA/gi, "")
-            .replace(/\s{2,}/g, " ").replace(/,\s*,/g, ",").trim().replace(/,\s*$/, "");
-        }
-
         const paradas = [];
-        const fallidas = [];
+        const fallidas = []; // paradas que el buscador no ubicó: NO se sacan de la ruta
         for (const p of conDir) {
           try {
-            const dirLimpia = limpiarDireccion(p.direccion);
+            const dirLimpia = p7LimpiarDireccion(p.direccion);
             const query = encodeURIComponent(dirLimpia + ", Buenos Aires, Argentina");
             const res = await fetch("https://nominatim.openstreetmap.org/search?q="+query+"&format=json&limit=1&countrycodes=ar", { headers:{"Accept-Language":"es","User-Agent":"SersaleApp/1.0"} });
             const data = await res.json();
@@ -250,19 +333,21 @@
               paradas.push({ ...p, lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), ok: true });
             } else {
               const partes = dirLimpia.split(",")[0].trim();
+              await new Promise(r=>setTimeout(r,1100)); // el buscador admite una consulta por segundo
               const res2 = await fetch("https://nominatim.openstreetmap.org/search?q="+encodeURIComponent(partes+", Buenos Aires, Argentina")+"&format=json&limit=1&countrycodes=ar", { headers:{"Accept-Language":"es","User-Agent":"SersaleApp/1.0"} });
               const data2 = await res2.json();
               if (data2 && data2.length > 0) {
                 paradas.push({ ...p, lat: parseFloat(data2[0].lat), lon: parseFloat(data2[0].lon), ok: true });
               } else {
-                fallidas.push(p.cliente);
+                fallidas.push(p);
               }
             }
-          } catch(e) { fallidas.push(p.cliente); }
+          } catch(e) { console.warn("No se pudo ubicar la dirección de "+p.cliente, e); fallidas.push(p); }
           await new Promise(r=>setTimeout(r,1100));
         }
 
-        setErrores(fallidas);
+        setErrores(fallidas.map(p=>p.cliente));
+        // Si no se ubicó ninguna, la hoja se puede mandar igual en el orden cargado (ver estado "error")
         if (paradas.length === 0) { setEstado("error"); return; }
 
         function distancia(a, b) { const dl=a.lat-b.lat, dn=a.lon-b.lon; return Math.sqrt(dl*dl+dn*dn); }
@@ -276,53 +361,66 @@
           }
           return ruta;
         }
-        setRutaOptimizada(tsp(paradas, FRIGORIFICO));
+        // Las que no se ubicaron quedan al final de la ruta, marcadas, para acomodarlas a mano:
+        // antes desaparecían de la lista, de Maps y de la hoja que se manda por WhatsApp.
+        setRutaOptimizada([...tsp(paradas, FRIGORIFICO), ...fallidas.map(p=>({...p, sinUbicar:true}))]);
         setEstado("listo");
       }
 
-      async function guardarDireccion(nombreCliente) {
-        if (!nuevaDir.trim()) return;
+      const [guardarDireccion, guardandoDir] = SersaleBase.useAccion(async (nombreCliente) => {
+        const dir = nuevaDir.trim();
+        if (!dir) return;
+        const clave = SersaleBase.norm(nombreCliente);
+        const id = clientesIDs[clave];
+        if (!id) { SersaleUI.toast("Ese cliente no está en Clientes: cargalo ahí con su dirección.", { tipo: "error" }); return; }
         try {
           const { db, doc, updateDoc } = fb();
-          const id = clientesIDs[nombreCliente];
-          if (id) {
-            await updateDoc(doc(db,"clientes",id), { direccion: nuevaDir.trim() });
-            setClientesDB(prev=>({...prev,[nombreCliente]:nuevaDir.trim()}));
-            // Si la ruta ya estaba optimizada, actualizar también ahí
-            if(rutaOptimizada) {
-              setRutaOptimizada(prev=>prev.map(p=>p.cliente===nombreCliente?{...p,direccion:nuevaDir.trim()}:p));
-            }
-          }
-        } catch(e){ alert("Error al guardar"); }
+          await updateDoc(doc(db,"clientes",id), { direccion: dir });
+        } catch(e){
+          console.error(e);
+          SersaleUI.toast("No se pudo guardar. Probá de nuevo.", { tipo: "error" });
+          return; // la hoja queda abierta con lo que se escribió
+        }
+        setClientesDB(prev=>({...prev,[clave]:dir}));
+        // Si la ruta ya estaba armada: actualizar la dirección ahí y sumar al final
+        // los envíos de ese cliente que no estaban (no tenían dirección).
+        setRutaOptimizada(prev=>{
+          if(!prev) return prev;
+          const act = prev.map(p=>SersaleBase.norm(p.cliente)===clave?{...p,direccion:dir}:p);
+          const nuevas = pedidos.filter(p=>SersaleBase.norm(p.cliente)===clave && !act.some(x=>x.id===p.id))
+            .map(p=>({...p,direccion:dir,sinUbicar:true}));
+          return [...act, ...nuevas];
+        });
         setEditandoDir(null); setNuevaDir("");
-      }
+        SersaleUI.toast("Dirección guardada", { tipo: "ok" });
+      });
 
-      function abrirMaps() {
-        const lista = rutaOptimizada || conDir;
-        if (lista.length===0) { alert("No hay paradas con direccion."); return; }
-        const frig = encodeURIComponent(FRIGORIFICO.direccion);
-        const wps = lista.map(p=>encodeURIComponent(p.direccion+", Buenos Aires")).join("|");
-        window.open("https://www.google.com/maps/dir/?api=1&origin="+frig+"&destination="+frig+"&waypoints="+wps+"&travelmode=driving","_blank");
+      const tramosMaps = p7TramosMaps(rutaOptimizada || conDir, FRIGORIFICO.direccion);
+      function abrirMaps(tramo) {
+        if (!tramo) { SersaleUI.toast("No hay paradas con dirección.", { tipo: "info" }); return; }
+        window.open(tramo.url,"_blank");
       }
 
       function enviarWA() {
         const lista = rutaOptimizada || conDir;
         const fmtF=f=>f?new Date(f+"T12:00:00").toLocaleDateString("es-AR",{weekday:"long",day:"2-digit",month:"long"}):"";
-        const nl="%0A";
+        const nl="\n";
         let txt="Hoja de Ruta "+fmtF(fecha).toUpperCase()+nl+nl;
         txt+="Salida: Frigorifico Sersale"+nl+nl;
-        lista.forEach((p,i)=>{
-          txt+=(i+1)+". "+p.cliente+nl+(p.direccion||"Sin direccion")+nl;
-          p.items.forEach(it=>{txt+="  - "+it.producto+": "+(it.kgReal||it.cantidad)+" "+it.unidad+nl;});
+        // Los envíos sin dirección cargada van al final, con sus productos (antes solo el nombre)
+        [...lista, ...sinDir].forEach((p,i)=>{
+          txt+=(i+1)+". "+p.cliente+nl+(p.direccion||"Sin direccion cargada")+nl;
+          (p.items||[]).forEach(it=>{txt+="  - "+it.producto+": "+p7CantidadTexto(it)+nl;});
           txt+=nl;
         });
-        if(sinDir.length>0){ txt+="Sin direccion: "+sinDir.map(p=>p.cliente).join(", ")+nl; }
-        txt+=nl+"Frigorifico Sersale - (011) 6763-7860";
-        window.open("https://wa.me/?text="+txt,"_blank");
+        txt+="Frigorifico Sersale - (011) 6763-7860";
+        // waLink codifica el texto: un "&", "#" o "%" en un nombre, dirección o producto cortaba la hoja
+        window.open(SersaleBase.waLink(txt),"_blank");
       }
 
       const fmtFecha=f=>f?new Date(f+"T12:00:00").toLocaleDateString("es-AR",{weekday:"long",day:"2-digit",month:"long"}):"";
       const listaVisible = rutaOptimizada || conDir;
+      const sinDirNombres = sinDir.map(p=>p.cliente).filter((n,i,arr)=>arr.findIndex(x=>SersaleBase.mismoNombre(x,n))===i);
 
       return (
         <div className="crm-page">
@@ -344,10 +442,21 @@
 
           <div style={{padding:16}}>
 
+            {/* Direcciones de clientes: mientras cargan (o si fallan) no se puede decir "sin dirección" */}
+            {cargaClientes==="cargando" && (
+              <p style={{textAlign:"center",color:"#79828B",fontSize:13,margin:"8px 0 12px"}}>Cargando direcciones...</p>
+            )}
+            {cargaClientes==="error" && (
+              <div style={{background:"#F7EAEA",border:"1.5px solid #C33039",borderRadius:14,padding:14,marginBottom:12,textAlign:"center"}}>
+                <div style={{fontWeight:700,color:"#C33039",marginBottom:10}}>No se pudieron cargar las direcciones de los clientes</div>
+                <button onClick={cargarClientes} style={{padding:"12px 18px",borderRadius:8,border:"none",background:"#C33039",color:"#fff",fontWeight:700,cursor:"pointer"}}>Reintentar</button>
+              </div>
+            )}
+
             {/* Botón optimizar */}
-            {estado==="idle" && (
+            {estado==="idle" && cargaClientes==="ok" && (
               <button onClick={optimizarRuta} disabled={conDir.length===0}
-                style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#2A333B",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:12}}>
+                style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#2A333B",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:12,opacity:conDir.length===0?0.5:1}}>
                 Optimizar ruta ({conDir.length} parada{conDir.length!==1?"s":""})
               </button>
             )}
@@ -365,8 +474,18 @@
             {estado==="error" && (
               <div style={{background:"#F7EAEA",border:"1.5px solid #C33039",borderRadius:14,padding:14,marginBottom:12,textAlign:"center"}}>
                 <div style={{fontWeight:700,color:"#C33039",marginBottom:4}}>No se pudo geocodificar ninguna dirección</div>
-                <div style={{fontSize:12,color:"#79828B",marginBottom:10}}>Verificá que las direcciones estén completas</div>
+                <div style={{fontSize:12,color:"#79828B",marginBottom:10}}>Verificá que las direcciones estén completas. La hoja se puede mandar igual, en el orden cargado.</div>
                 <button onClick={()=>setEstado("idle")} style={{padding:"8px 16px",borderRadius:8,border:"none",background:"#C33039",color:"#fff",fontWeight:700,cursor:"pointer"}}>Reintentar</button>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:10}}>
+                  {tramosMaps.map((t,k)=>(
+                    <button key={k} onClick={()=>abrirMaps(t)} style={{padding:12,borderRadius:12,border:"none",background:"#4285F4",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                      {tramosMaps.length>1 ? t.etiqueta : "Abrir en Maps"}
+                    </button>
+                  ))}
+                  <button onClick={enviarWA} style={{padding:12,borderRadius:12,border:"none",background:"#25D366",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                    Enviar por WA
+                  </button>
+                </div>
               </div>
             )}
 
@@ -374,13 +493,21 @@
             {errores.length>0 && (
               <div style={{background:"#F3EEE2",border:"1.5px solid #B5872F",borderRadius:12,padding:10,marginBottom:12,fontSize:12,color:"#A8702A"}}>
                 ⚠️ No se pudo ubicar: {errores.join(", ")}
+                {estado==="listo" && <div style={{marginTop:4}}>Siguen en la ruta, al final: acomodalas con Editar.</div>}
               </div>
             )}
 
-            {/* Sin dirección */}
-            {sinDir.length>0 && (
+            {/* Sin dirección: tocando el nombre se le carga */}
+            {cargaClientes==="ok" && sinDir.length>0 && (
               <div style={{background:"#F7F8F9",border:"1px solid #D8DCE0",borderRadius:12,padding:10,marginBottom:12,fontSize:12,color:"#79828B"}}>
-                Sin dirección: {sinDir.map(p=>p.cliente).join(", ")}
+                Sin dirección:{" "}
+                {sinDirNombres.map((n,i)=>(
+                  <button key={n} onClick={()=>{setEditandoDir(n);setNuevaDir("");}}
+                    style={{background:"none",border:"none",padding:"8px 4px",font:"inherit",fontWeight:700,color:"#26536E",textDecoration:"underline",cursor:"pointer"}}>
+                    {n}{i<sinDirNombres.length-1?",":""}
+                  </button>
+                ))}
+                <div style={{marginTop:2}}>Tocá el nombre para cargarle la dirección. En la hoja por WhatsApp van al final.</div>
               </div>
             )}
 
@@ -396,11 +523,22 @@
                     ✅ Ruta optimizada — {listaVisible.length} paradas
                   </div>
                 )}
+                {!modoEdicion && tramosMaps.length>1 && (
+                  <div style={{fontSize:12,color:"#5C666F",textAlign:"center",marginBottom:8}}>
+                    Maps acepta hasta {P7_MAX_PARADAS_MAPS} paradas por vez: la ruta va en {tramosMaps.length} tramos seguidos.
+                  </div>
+                )}
                 {!modoEdicion && (
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                    <button onClick={abrirMaps} style={{padding:12,borderRadius:12,border:"none",background:"#4285F4",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
-                      Abrir en Maps
-                    </button>
+                    {tramosMaps.length<=1 ? (
+                      <button onClick={()=>abrirMaps(tramosMaps[0])} style={{padding:12,borderRadius:12,border:"none",background:"#4285F4",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                        Abrir en Maps
+                      </button>
+                    ) : tramosMaps.map((t,k)=>(
+                      <button key={k} onClick={()=>abrirMaps(t)} style={{padding:12,borderRadius:12,border:"none",background:"#4285F4",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                        {t.etiqueta}
+                      </button>
+                    ))}
                     <button onClick={enviarWA} style={{padding:12,borderRadius:12,border:"none",background:"#25D366",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
                       Enviar por WA
                     </button>
@@ -438,8 +576,9 @@
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontWeight:700,fontSize:14,color:"#191E23",marginBottom:2}}>{p.cliente}</div>
                         <div style={{fontSize:12,color:"#26536E",marginBottom:4,wordBreak:"break-word"}}>{p.direccion}</div>
+                        {p.sinUbicar && <div style={{fontSize:11,fontWeight:700,color:"#A8702A",marginBottom:4}}>⚠️ Sin ubicar en el mapa: acomodala a mano</div>}
                         <div style={{fontSize:12,color:"#5C666F",display:"flex",flexWrap:"wrap",gap:6}}>
-                          {p.items.map((it,j)=><span key={j}>{it.producto}: <strong>{it.kgReal||it.cantidad} {it.unidad}</strong></span>)}
+                          {(p.items||[]).map((it,j)=><span key={j}>{it.producto}: <strong>{p7CantidadTexto(it)}</strong></span>)}
                         </div>
                         {p.obs&&<div style={{fontSize:11,color:"#A3ABB3",marginTop:3}}>📝 {p.obs}</div>}
                       </div>
@@ -462,7 +601,7 @@
                         </div>
                       ) : (
                         <a href={"https://maps.google.com/?q="+encodeURIComponent(p.direccion+", Buenos Aires")}
-                          target="_blank"
+                          target="_blank" rel="noopener noreferrer"
                           style={{background:"#4285F4",color:"#fff",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:700,textDecoration:"none",flexShrink:0,alignSelf:"flex-start"}}>
                           Ver
                         </a>
@@ -476,13 +615,13 @@
             {/* Modal editar dirección */}
             {editandoDir && (
               <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
-                onClick={e=>{if(e.target===e.currentTarget){setEditandoDir(null);setNuevaDir("");}}}>
+                onClick={e=>{if(e.target===e.currentTarget&&!guardandoDir){setEditandoDir(null);setNuevaDir("");}}}>
                 <div style={{background:"#fff",borderRadius:"20px 20px 0 0",padding:"24px 20px 32px",width:"100%",maxWidth:480}}>
                   <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>✏️ Editar dirección</div>
                   <div style={{fontSize:13,color:"#79828B",marginBottom:14}}>{editandoDir}</div>
                   <input
-                    style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none",marginBottom:14,boxSizing:"border-box"}}
-                    placeholder="Calle y número, barrio"
+                    style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:16,background:"#fff",outline:"none",marginBottom:14,boxSizing:"border-box"}}
+                    placeholder="Calle y número, barrio" aria-label="Dirección"
                     value={nuevaDir} onChange={e=>setNuevaDir(e.target.value)}
                     autoFocus />
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -490,9 +629,9 @@
                       style={{padding:13,borderRadius:12,border:"1.5px solid #D8DCE0",background:"#fff",fontSize:14,cursor:"pointer",fontWeight:600,color:"#5C666F"}}>
                       Cancelar
                     </button>
-                    <button onClick={()=>guardarDireccion(editandoDir)}
-                      style={{padding:13,borderRadius:12,border:"none",background:"#2A333B",color:"#fff",fontSize:14,cursor:"pointer",fontWeight:700}}>
-                      Guardar
+                    <button onClick={()=>guardarDireccion(editandoDir)} disabled={guardandoDir||!nuevaDir.trim()}
+                      style={{padding:13,borderRadius:12,border:"none",background:"#2A333B",color:"#fff",fontSize:14,cursor:"pointer",fontWeight:700,opacity:(guardandoDir||!nuevaDir.trim())?0.5:1}}>
+                      {guardandoDir?"Guardando...":"Guardar"}
                     </button>
                   </div>
                 </div>
