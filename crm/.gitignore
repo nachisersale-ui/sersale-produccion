@@ -2,3 +2,4 @@ node_modules
 dist/
 .cache/
 tests/screenshots/actual/
+tests/screenshots/despues/
