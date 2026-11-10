@@ -25,8 +25,12 @@
     //   ccDia(valor)                     "AAAA-MM-DD" de la fecha de un movimiento (texto, Timestamp o {seconds}).
     //   ccFmtSaldo(n)                    saldo para mostrar, con signo: "$1.200" / "-$1.200".
     //   ccEstadoSaldo(n)                 "debe" | "al_dia" | "a_favor".
-    //   ccBuscarCuenta(nombre)           cuenta corriente del cliente ({ id, ...datos }) o null.
-    //   ccMovimientosDe(nombre, cuenta)  movimientos del cliente, ordenados por fecha y hora de carga.
+    //   ccBuscarCuenta(nombre, opc)      cuenta corriente del cliente ({ id, ...datos }) o null.
+    //   ccMovimientosDe(nombre, cuenta, opc)  movimientos del cliente, ordenados por fecha y hora de carga.
+    //                                    En las dos, opc = { servidor: true } le pregunta al servidor en vez de usar la
+    //                                    copia del teléfono (y falla si no contesta): es para lo que DECIDE una escritura.
+    //   rvccCuentas(opc)                 todas las cuentas.   rvccMovimientosDePedido(pedido, remitoNro, cuenta): del servidor,
+    //                                    los movimientos que pueden ser el cargo o el pendiente de un pedido (para su remito).
     //   ccMovimientoDePedido(movs, pedido, remitoNro)
     //                                    movimiento que le corresponde a un pedido al hacer su remito:
     //                                    el ya vinculado (pedidoId / remitoNro) o el "Pendiente de facturar".
@@ -137,29 +141,96 @@
       return "cta_" + SersaleBase.norm(nombre).replace(/[^a-z0-9]+/g, "_").slice(0, 80);
     }
 
-    /** De una lista de cuentas, la del cliente: no fusionada, y si hay varias, la de nombre idéntico. */
+    /**
+     * De una lista de cuentas, la del cliente: no fusionada, y si hay varias, la de nombre idéntico.
+     * Si el nombre es el de una cuenta fusionada por migracion.html (por ejemplo "… S.R.L" sin el
+     * punto final, que la migración junta y SersaleBase.norm no), vale la cuenta principal del
+     * mismo cliente (mismo clienteId, como las deja la migración): sin esto al cliente se le
+     * abría una cuenta nueva aparte de la que ya tiene.
+     */
     function ccElegirCuenta(cuentas, nombre) {
-      const candidatas = (cuentas || []).filter(c => !c.mergedInto && ccMismoCliente(c.nombre, nombre));
-      if (!candidatas.length) return null;
-      return candidatas.find(c => c.nombre === nombre) || candidatas[0];
+      const lista = cuentas || [];
+      const candidatas = lista.filter(c => !c.mergedInto && ccMismoCliente(c.nombre, nombre));
+      if (candidatas.length) return candidatas.find(c => c.nombre === nombre) || candidatas[0];
+      const fusionada = lista.find(c => c.mergedInto && c.clienteId && ccMismoCliente(c.nombre, nombre));
+      return (fusionada && lista.find(c => c.id === fusionada.mergedInto && !c.mergedInto && c.clienteId === fusionada.clienteId)) || null;
     }
 
-    /** Cuenta corriente del cliente o null. */
-    async function ccBuscarCuenta(nombre) {
-      const { db, collection, getDocs } = fb();
-      const snap = await getDocs(collection(db, "cuentas_corrientes"));
-      return ccElegirCuenta(snap.docs.map(d => ({ id: d.id, ...d.data() })), nombre);
+    /**
+     * Todas las cuentas corrientes ({ id, ...datos }). Con { servidor: true } se le piden al
+     * servidor: si no contesta, FALLA (nunca responde con la copia del teléfono, que puede estar
+     * vieja). Es para las lecturas que deciden una escritura: ¿el cliente ya tiene cuenta?
+     */
+    async function rvccCuentas(opciones) {
+      const { db, collection, getDocs, getDocsFromServer } = fb();
+      const leer = opciones && opciones.servidor ? getDocsFromServer : getDocs;
+      const snap = await leer(collection(db, "cuentas_corrientes"));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }
 
-    /** Movimientos del cliente (por nombre o por clienteId de la cuenta), del más viejo al más nuevo. */
-    async function ccMovimientosDe(nombre, cuenta) {
-      const { db, collection, getDocs } = fb();
-      const snap = await getDocs(collection(db, "cc_movimientos"));
+    /** Cuenta corriente del cliente o null. Opciones: { servidor: true } (ver rvccCuentas). */
+    async function ccBuscarCuenta(nombre, opciones) {
+      return ccElegirCuenta(await rvccCuentas(opciones), nombre);
+    }
+
+    /**
+     * ¿El movimiento `m` es de la cuenta `cuenta`? (`cuentas` = todas). Si el cliente tiene dos
+     * cuentas sin fusionar que solo difieren en mayúsculas o acentos (fichas repetidas del
+     * sistema anterior), cada movimiento es de UNA sola: la que ccElegirCuenta elige para el
+     * nombre con que está escrito. Si el nombre no es el de ninguna cuenta, vale el clienteId.
+     */
+    function rvccEsDeLaCuenta(m, cuenta, cuentas) {
+      const lista = cuentas.some(c => c.id === cuenta.id) ? cuentas : [...cuentas, cuenta];
+      const porNombre = ccElegirCuenta(lista, m.cliente);
+      if (porNombre) return porNombre.id === cuenta.id;
+      if (!cuenta.clienteId || m.clienteId !== cuenta.clienteId) return false;
+      const primera = lista.find(c => !c.mergedInto && c.clienteId === cuenta.clienteId);
+      return !primera || primera.id === cuenta.id;
+    }
+
+    /**
+     * Movimientos del cliente (por nombre o por clienteId de la cuenta), del más viejo al más nuevo.
+     * Opciones:
+     *   servidor: true         se le piden al servidor (falla si no contesta; ver rvccCuentas).
+     *   soloDeLaCuenta: true   si el cliente tiene otra cuenta sin fusionar con el mismo nombre escrito
+     *                          distinto, no trae los movimientos de esa otra (para mostrar o sumar el
+     *                          saldo de UNA cuenta). Sin esto trae todo lo que esté a nombre del cliente.
+     */
+    async function ccMovimientosDe(nombre, cuenta, opciones) {
+      const { db, collection, getDocs, getDocsFromServer } = fb();
+      const o = opciones || {};
+      const snap = await (o.servidor ? getDocsFromServer : getDocs)(collection(db, "cc_movimientos"));
+      const movs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const cuentas = cuenta && o.soloDeLaCuenta ? await rvccCuentas(o) : null;
+      const esDelCliente = rvccFiltroCliente(nombre, cuenta);
+      return movs.filter(m => cuentas ? rvccEsDeLaCuenta(m, cuenta, cuentas) : esDelCliente(m)).sort(ccOrdenMovimientos);
+    }
+
+    /** La regla de siempre para saber si un movimiento es del cliente: por nombre (el del pedido o el de la cuenta) o por clienteId de la cuenta. */
+    function rvccFiltroCliente(nombre, cuenta) {
       const clienteId = cuenta && cuenta.clienteId;
-      return snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(m => ccMismoCliente(m.cliente, nombre) || (cuenta && ccMismoCliente(m.cliente, cuenta.nombre)) || (!!clienteId && m.clienteId === clienteId))
-        .sort(ccOrdenMovimientos);
+      return m => ccMismoCliente(m.cliente, nombre) || (!!cuenta && ccMismoCliente(m.cliente, cuenta.nombre)) || (!!clienteId && m.clienteId === clienteId);
+    }
+
+    /**
+     * Movimientos que pueden ser el cargo o el "Pendiente de facturar" de un pedido, pedidos AL
+     * SERVIDOR en el momento de guardar su remito (falla si no contesta). Son tres consultas
+     * chicas: los que llevan el pedidoId, los que llevan el número del remito ya emitido y los
+     * de la fecha de entrega (ahí están los pendientes del sistema anterior, sin pedidoId).
+     * Con la copia del teléfono vieja, el remito que otro teléfono ya había cargado se cobraba otra vez.
+     */
+    async function rvccMovimientosDePedido(pedido, remitoNro, cuenta) {
+      const { db, collection, query, where, getDocsFromServer } = fb();
+      const col = collection(db, "cc_movimientos");
+      const consultas = [query(col, where("pedidoId", "==", pedido.id))];
+      // El número puede estar guardado como número (lo normal) o como texto.
+      const nros = remitoNro != null && remitoNro !== "" ? [Number(remitoNro), String(remitoNro)].filter(v => typeof v === "string" || isFinite(v)) : [];
+      if (nros.length) consultas.push(query(col, where("remitoNro", "in", nros)));
+      if (pedido.fechaEntrega) consultas.push(query(col, where("fecha", "==", pedido.fechaEntrega)));
+      const snaps = await Promise.all(consultas.map(q => getDocsFromServer(q)));
+      const porId = new Map();
+      snaps.forEach(snap => snap.docs.forEach(d => porId.set(d.id, { id: d.id, ...d.data() })));
+      return [...porId.values()].filter(rvccFiltroCliente(pedido.cliente, cuenta)).sort(ccOrdenMovimientos);
     }
 
     /**
@@ -239,7 +310,16 @@
      */
     async function ccPrepararAsiento(opts) {
       const { db, collection, doc } = fb();
-      const cuenta = opts.cuenta !== undefined ? opts.cuenta : await ccBuscarCuenta(opts.cliente);
+      let cuenta = opts.cuenta !== undefined ? opts.cuenta : await ccBuscarCuenta(opts.cliente);
+      // Antes de abrir una cuenta nueva se le pregunta al servidor si el cliente de verdad no
+      // tiene una (y qué movimientos sueltos tiene). La copia del teléfono puede estar vieja:
+      // con eso se abría una segunda cuenta a un cliente que ya tenía. Si el servidor no
+      // contesta, falla acá y no se guarda nada.
+      let saldoPrevioSinCuenta = 0;
+      if (!cuenta && opts.abrirCuenta) {
+        cuenta = await ccBuscarCuenta(opts.cliente, { servidor: true });
+        if (!cuenta) saldoPrevioSinCuenta = ccSaldoDeMovimientos(await ccMovimientosDe(opts.cliente, null, { servidor: true }));
+      }
       // Cuenta nueva: se abre con el id fijo del cliente (el mismo de "+ Nueva"). Si otro
       // teléfono la abrió un instante antes (o este todavía no se enteró de que existe), la
       // transacción la encuentra en ese id y le suma el importe en vez de abrir una segunda
@@ -256,12 +336,11 @@
         cuentaRefLibre: idFijo.length > 4 ? refLibre : null,
         movRef: opts.movId ? doc(db, "cc_movimientos", opts.movId) : doc(collection(db, "cc_movimientos")),
         movConocido: !!opts.movId,
-        saldoPrevioSinCuenta: 0,
+        // Cuenta nueva: arranca con lo que el cliente ya tuviera asentado (movimientos huérfanos).
+        saldoPrevioSinCuenta,
         cuentaSnap: null,
         movSnap: null,
       };
-      // Cuenta nueva: arranca con lo que el cliente ya tuviera asentado (movimientos huérfanos).
-      if (!cuenta && opts.abrirCuenta) plan.saldoPrevioSinCuenta = ccSaldoDeMovimientos(opts.movs || await ccMovimientosDe(opts.cliente, null));
       return plan;
     }
 
@@ -299,6 +378,11 @@
       const saldoGuardado = hayCuenta ? (Number(cuentaDatos.saldo) || 0) : plan.saldoPrevioSinCuenta;
       const previo = plan.movSnap && plan.movSnap.exists() ? plan.movSnap.data() : null;
       const ahora = new Date().toISOString();
+      // Cuando Firestore repite la transacción porque se perdió la respuesta, el movimiento y la
+      // cuenta que se ven guardados los escribió el intento anterior de ESTA misma operación (se
+      // reconocen por su hora de alta): para quien llama sigue siendo un alta, no una corrección.
+      const movPropio = !!previo && !!plan.altaMov && previo.createdAt === plan.altaMov;
+      const cuentaPropia = hayCuenta && !!plan.altaCuenta && cuentaDatos.creadoEn === plan.altaCuenta;
       const nuevo = previo ? { ...previo, ...datos } : { ...datos };
       const delta = ccImporteFirmado(nuevo) - (previo ? ccImporteFirmado(previo) : 0);
       const saldo = SersaleBase.redondear(saldoGuardado + delta, 2);
@@ -309,12 +393,16 @@
         const mov = { cliente: hayCuenta ? cuentaDatos.nombre : plan.cliente, ...datos, movimiento: ccImporteFirmado(nuevo), createdAt: ahora, ...extra };
         if (hayCuenta && cuentaDatos.clienteId) mov.clienteId = cuentaDatos.clienteId;
         tx.set(plan.movRef, mov);
+        plan.altaMov = ahora;
       }
       if (hayCuenta) tx.update(plan.cuentaRef, { saldo, ultimoMovimiento: plan.ultimoMovimiento });
-      else tx.set(plan.cuentaRef, { nombre: plan.cliente, saldo, creadoEn: ahora, ultimoMovimiento: plan.ultimoMovimiento });
+      else {
+        tx.set(plan.cuentaRef, { nombre: plan.cliente, saldo, creadoEn: ahora, ultimoMovimiento: plan.ultimoMovimiento });
+        plan.altaCuenta = ahora;
+      }
       plan.marca = ahora;
       plan.saldoFinal = saldo;
-      return { asentado: true, corregido: !!previo, delta, saldo, movId: plan.movRef.id, cuentaId: plan.cuentaRef.id, cuentaAbierta: !hayCuenta };
+      return { asentado: true, corregido: !!previo && !movPropio, delta, saldo, movId: plan.movRef.id, cuentaId: plan.cuentaRef.id, cuentaAbierta: !hayCuenta || cuentaPropia };
     }
 
     /**
@@ -356,7 +444,7 @@
       const { db, doc, runTransaction } = fb();
       const cuenta = await ccBuscarCuenta(nombre);
       if (!cuenta) return null;
-      const saldo = ccSaldoDeMovimientos(await ccMovimientosDe(cuenta.nombre, cuenta));
+      const saldo = ccSaldoDeMovimientos(await ccMovimientosDe(cuenta.nombre, cuenta, { soloDeLaCuenta: true }));
       const ref = doc(db, "cuentas_corrientes", cuenta.id);
       const res = await runTransaction(db, async tx => {
         const snap = await tx.get(ref);

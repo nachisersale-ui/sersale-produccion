@@ -1,3 +1,24 @@
+    // Pagos que dieron error sin saberse si el servidor llegó a guardarlos (la señal se cortó
+    // justo al confirmar: el pago queda guardado y la pantalla dice "No se pudo registrar").
+    // Se recuerda el id con que se intentó: si la persona vuelve a cargar el mismo pago (mismo
+    // cliente, mismo importe, mismo día) se reintenta con ese id y no se asienta dos veces.
+    // Se olvida cuando el pago queda confirmado, o al cerrar la app.
+    //   rvccPagoDudoso(clave)        id recordado para ese pago, o null.
+    //   rvccPagoDudoso(clave, id)    lo recuerda.
+    //   rvccPagoDudoso(null, id)     olvida todo lo anotado con ese id.
+    let rvccPagosDudosos = null;
+    function rvccPagoDudoso(clave, id) {
+      const DONDE = "sersale_pagos_sin_confirmar";
+      if (!rvccPagosDudosos) {
+        try { rvccPagosDudosos = JSON.parse(sessionStorage.getItem(DONDE) || "{}") || {}; } catch(e) { rvccPagosDudosos = {}; }
+      }
+      if (id === undefined) return rvccPagosDudosos[clave] || null;
+      if (clave) rvccPagosDudosos[clave] = id;
+      else Object.keys(rvccPagosDudosos).forEach(k => { if (rvccPagosDudosos[k] === id) delete rvccPagosDudosos[k]; });
+      try { sessionStorage.setItem(DONDE, JSON.stringify(rvccPagosDudosos)); } catch(e) {}
+      return id;
+    }
+
     function TabCuentasCorrientes({ refresh }) {
       const [clientes, setClientes] = useState(null);
       const [errorCarga, setErrorCarga] = useState(false);
@@ -11,6 +32,8 @@
       const [recargas, setRecargas] = useState(0);
       // Id del pago que se está cargando: si hay que reintentar, no se duplica
       const pagoId = React.useRef(null);
+      // ¿Este pago ya se intentó y dio error? (para avisar si al reintentar resulta que estaba guardado)
+      const pagoReintento = React.useRef(false);
 
       async function cargarClientesDisponibles() {
         setClientesDisponibles(null);
@@ -53,6 +76,7 @@
 
       function abrirPago(nombre) {
         pagoId.current = null;
+        pagoReintento.current = false;
         setPagoForm({monto:"",formaPago:"transferencia",obs:""});
         setModalPago(nombre);
       }
@@ -67,22 +91,41 @@
         if(!monto||monto<=0) { SersaleUI.toast("Ingresá un monto válido", { tipo: "error" }); return; }
         try {
           const {db,collection,doc} = fb();
-          if(!pagoId.current) pagoId.current = doc(collection(db,"cc_movimientos")).id;
           const hoy = SersaleBase.hoy();
+          // Un intento anterior de este mismo pago que dio error (ver rvccPagoDudoso)
+          const clave = [SersaleBase.norm(modalPago), monto, hoy].join("|");
+          if(!pagoId.current) {
+            pagoId.current = rvccPagoDudoso(clave);
+            if(pagoId.current) pagoReintento.current = true;
+            else pagoId.current = doc(collection(db,"cc_movimientos")).id;
+          }
           // Movimiento y saldo se guardan juntos (o no se guarda nada)
-          const r = await ccAsentarMovimiento({
-            cliente: modalPago, movId: pagoId.current, ultimoMovimiento: hoy,
-            datos: {
-              tipo:"pago", formaPago:pagoForm.formaPago, monto,
-              obs:pagoForm.obs.trim(), fecha:hoy,
-              detalle:"Pago — "+pagoForm.formaPago
-            }
-          });
+          let r;
+          try {
+            r = await ccAsentarMovimiento({
+              cliente: modalPago, movId: pagoId.current, ultimoMovimiento: hoy,
+              datos: {
+                tipo:"pago", formaPago:pagoForm.formaPago, monto,
+                obs:pagoForm.obs.trim(), fecha:hoy,
+                detalle:"Pago — "+pagoForm.formaPago
+              }
+            });
+          } catch(e) {
+            // No se sabe si el servidor lo guardó: queda anotado para que cargarlo de nuevo no lo duplique.
+            rvccPagoDudoso(clave, pagoId.current);
+            pagoReintento.current = true;
+            throw e;
+          }
           if(!r.asentado) throw new Error("El cliente no tiene cuenta corriente: "+modalPago);
+          // Reintento de un pago que el servidor ya tenía guardado igual: no se cargó nada nuevo, y se dice.
+          const yaEstaba = pagoReintento.current && !!r.corregido && r.delta === 0;
+          rvccPagoDudoso(null, pagoId.current);
           pagoId.current = null;
+          pagoReintento.current = false;
           setModalPago(null);
           setPagoForm({monto:"",formaPago:"transferencia",obs:""});
-          SersaleUI.toast("Pago de "+SersaleBase.fmtMonto(monto)+" registrado. Saldo: "+ccFmtSaldo(r.saldo), { tipo: "ok" });
+          if(yaEstaba) SersaleUI.toast("Ese pago de "+SersaleBase.fmtMonto(monto)+" ya había quedado registrado cuando falló la señal: no se cargó otra vez. Saldo: "+ccFmtSaldo(r.saldo), { tipo: "ok", ms: 8000 });
+          else SersaleUI.toast("Pago de "+SersaleBase.fmtMonto(monto)+" registrado. Saldo: "+ccFmtSaldo(r.saldo), { tipo: "ok" });
           setRecargas(n=>n+1);
           cargar();
         } catch(e){
@@ -96,13 +139,15 @@
         if(!nombre) { SersaleUI.toast("Elegí un cliente", { tipo: "error" }); return; }
         try {
           const {db,doc,runTransaction} = fb();
-          if(await ccBuscarCuenta(nombre)) {
+          // Se le pregunta al servidor (no a la copia del teléfono, que puede estar vieja): si otro
+          // teléfono ya le abrió la cuenta, no se abre una segunda. Si no contesta, no se crea nada.
+          if(await ccBuscarCuenta(nombre, { servidor: true })) {
             SersaleUI.toast(nombre+" ya tiene cuenta corriente", { tipo: "info" });
           } else {
             // Id fijo por cliente: dos toques (o dos teléfonos) no abren dos cuentas.
             const ref = doc(db,"cuentas_corrientes",czIdCuenta(nombre));
             // Si el cliente ya tenía movimientos sueltos, la cuenta arranca con esa suma.
-            const saldoInicial = ccSaldoDeMovimientos(await ccMovimientosDe(nombre, null));
+            const saldoInicial = ccSaldoDeMovimientos(await ccMovimientosDe(nombre, null, { servidor: true }));
             await runTransaction(db, async tx => {
               const snap = await tx.get(ref);
               if(snap.exists()) return;
@@ -564,7 +609,9 @@
           // Mismas reglas que al cobrar o facturar: el cliente se reconoce aunque
           // el nombre esté escrito con otras mayúsculas o acentos.
           const cta = await ccBuscarCuenta(cliente);
-          const movs = await ccMovimientosDe(cliente, cta);
+          // Solo los de ESTA cuenta: si el cliente tiene otra cuenta sin fusionar con el nombre
+          // escrito distinto, sus movimientos se ven (y se suman) en la otra, no en las dos.
+          const movs = await ccMovimientosDe(cliente, cta, { soloDeLaCuenta: true });
           setCuenta(cta);
           setMovimientos(movs);
           setSaldo(Math.round(ccSaldoDeMovimientos(movs)));
