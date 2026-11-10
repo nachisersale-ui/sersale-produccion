@@ -782,6 +782,11 @@
         if (esOperario) { _setVista("deposito"); return; } // bloquear cambio de vista
         sessionStorage.setItem("sersale_vista",v); _setVista(v);
       }
+      // El gesto "atrás" del teléfono vuelve al inicio de Pedidos en vez de salir de la página.
+      SersaleBase.useAtras(!esOperario && vista !== "home", () => {
+        sessionStorage.setItem("sersale_vista", "home");
+        _setVista("home");
+      });
       const [nuevosPedidos, setNuevosPedidos] = useState(0);
       const [bannerPedido, setBannerPedido] = useState(null);
       const inicioSesion = React.useRef(new Date().toISOString());

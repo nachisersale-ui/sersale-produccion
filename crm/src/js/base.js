@@ -191,6 +191,70 @@
     return [ejecutar, estado[0]];
   }
 
+  // ── Gesto "atrás" del teléfono ───────────────────────────────────────────
+  // Cada vista o ventana que se abre dentro de una página anota una entrada en
+  // el historial. Así el gesto de volver (deslizar desde el borde en el iPhone,
+  // botón atrás en Android) cierra lo último que se abrió en vez de salir de
+  // la página.
+  var pilaAtras = [];
+  var ignorar = []; // vencimientos de los "atrás" que disparamos nosotros
+  window.addEventListener("popstate", function () {
+    var ahora = Date.now();
+    ignorar = ignorar.filter(function (t) { return t > ahora; });
+    if (ignorar.length) {
+      ignorar.shift();
+      return;
+    }
+    var tope = pilaAtras.pop();
+    if (tope) {
+      try {
+        tope.cb();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  });
+  /**
+   * Avisa que se abrió algo que el gesto "atrás" debe cerrar. `alVolver` se
+   * llama si la persona vuelve con el gesto. Devuelve una función para llamar
+   * cuando se cierra desde la pantalla (botón, guardar, etc.).
+   */
+  function abrirAtras(alVolver) {
+    var entrada = { cb: alVolver };
+    pilaAtras.push(entrada);
+    try {
+      history.pushState({ ssAtras: pilaAtras.length }, "");
+    } catch (e) {}
+    return function cerrar() {
+      var i = pilaAtras.indexOf(entrada);
+      if (i === -1) return; // ya se cerró con el gesto
+      var cuantas = pilaAtras.length - i; // también lo que haya quedado abierto encima
+      pilaAtras.splice(i);
+      ignorar.push(Date.now() + 1500);
+      try {
+        history.go(-cuantas);
+      } catch (e) {}
+    };
+  }
+  /**
+   * Para React: mientras `activo` sea verdadero, el gesto "atrás" llama a `alVolver`.
+   *   SersaleBase.useAtras(!!pedidoEditando, () => setPedidoEditando(null));
+   */
+  function useAtras(activo, alVolver) {
+    var R = window.React;
+    var ultima = R.useRef(alVolver);
+    ultima.current = alVolver;
+    R.useEffect(
+      function () {
+        if (!activo) return undefined;
+        return abrirAtras(function () {
+          ultima.current();
+        });
+      },
+      [!!activo]
+    );
+  }
+
   window.SersaleBase = {
     ZONA: ZONA,
     aFecha: aFecha,
@@ -212,5 +276,7 @@
     waLink: waLink,
     esc: esc,
     useAccion: useAccion,
+    abrirAtras: abrirAtras,
+    useAtras: useAtras,
   };
 })();
