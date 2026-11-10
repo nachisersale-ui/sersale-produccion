@@ -100,7 +100,7 @@
             SersaleUI.toast(nombre+" ya tiene cuenta corriente", { tipo: "info" });
           } else {
             // Id fijo por cliente: dos toques (o dos teléfonos) no abren dos cuentas.
-            const ref = doc(db,"cuentas_corrientes","cta_"+SersaleBase.norm(nombre).replace(/[^a-z0-9]+/g,"_").slice(0,80));
+            const ref = doc(db,"cuentas_corrientes",czIdCuenta(nombre));
             // Si el cliente ya tenía movimientos sueltos, la cuenta arranca con esa suma.
             const saldoInicial = ccSaldoDeMovimientos(await ccMovimientosDe(nombre, null));
             await runTransaction(db, async tx => {
@@ -759,7 +759,8 @@
       const rankP = Object.values(prods).sort((a,b)=>b.kgTotal-a.kgTotal);
       const maxP = rankP[0]?.kgTotal||1;
       const clis = {};
-      filtrados.forEach(p=>{if(!clis[p.cliente])clis[p.cliente]={nombre:p.cliente,pedidos:0};clis[p.cliente].pedidos++;});
+      // Un mismo cliente escrito con otras mayúsculas o acentos cuenta una sola vez.
+      filtrados.forEach(p=>{const k=SersaleBase.norm(p.cliente);if(!clis[k])clis[k]={nombre:p.cliente,pedidos:0};clis[k].pedidos++;});
       const totalClientes = Object.keys(clis).length;
       const rankC = Object.values(clis).sort((a,b)=>b.pedidos-a.pedidos).slice(0,8);
       const dias=["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"],porDiaS=[0,0,0,0,0,0,0];

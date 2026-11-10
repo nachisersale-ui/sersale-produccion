@@ -391,6 +391,9 @@
             return false;
           }
           if (r.cambiaronItems) SersaleUI.toast("Ojo: el pedido cambió mientras lo tenías abierto. Revisá los productos.", { tipo:"info", ms: 6000 });
+          // Cancelado desde el depósito (lo puede hacer un director): igual que en Comercial,
+          // su "Pendiente de facturar" sale de la cuenta corriente.
+          if (nuevoEstado === "cancelado" && visto) await czAlCancelarPedido(visto);
           return true;
         } catch(e) {
           console.error("[Depósito] No se pudo cambiar el estado del pedido " + id + ":", e);
