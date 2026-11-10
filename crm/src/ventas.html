@@ -92,7 +92,7 @@ body{font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;background:v
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--green);color:#0f0f0f;padding:12px 24px;border-radius:40px;font-weight:600;font-size:14px;z-index:999;transition:transform .3s cubic-bezier(.34,1.56,.64,1);white-space:nowrap}
 .toast.show{transform:translateX(-50%) translateY(0)}
 .toast.err{background:var(--red);color:#fff}
-.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:500;align-items:center;justify-content:center}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:10001;align-items:center;justify-content:center}
 .overlay.show{display:flex}
 .modal{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:32px 28px;width:90%;max-width:340px;text-align:center}
 .modal h3{font-size:18px;margin-bottom:8px}
@@ -181,8 +181,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   <button class="nav-btn" id="nb-rep" onclick="nav('rep',this)">📊 Reportes</button>
   <button class="nav-btn" id="nb-comp" onclick="nav('comp',this)">📈 Comparativa</button>
 </nav>
-
-<div class="toast" id="toast"></div>
 
 <!-- CARGA -->
 <div class="view active" id="view-carga">
@@ -336,12 +334,29 @@ function esc(s) {
 
 // INIT
 window.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('fFecha').value = new Date().toISOString().split('T')[0];
-  const now = new Date();
-  document.getElementById('hMes').value = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   addGasto();
   addExtra();
+  proponerHoy();
+  document.getElementById('hMes').value = SersaleBase.hoy().slice(0,7);
+  fetchDolar(true);
 });
+
+// FECHA PROPUESTA
+// Día de Buenos Aires: con toISOString() (UTC) después de las 21 hs proponía el día siguiente.
+// La app instalada puede quedar abierta de un día para el otro: al volver a ella, si cambió
+// el día y no hay una carga a medio hacer, la fecha se pone en hoy (si no, el cierre de hoy
+// se guardaba con la fecha de ayer).
+let _diaPropuesto = '';
+function proponerHoy() {
+  const hoy = SersaleBase.hoy();
+  if (hoy === _diaPropuesto) return;          // mismo día: no se toca la fecha que eligió la persona
+  if (_diaPropuesto && !formVacio()) return;  // carga a medio hacer: se respeta
+  document.getElementById('fFecha').value = hoy;
+  _diaPropuesto = hoy;
+}
+function alVolverALaApp() { proponerHoy(); fetchDolar(true); }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') alVolverALaApp(); });
+window.addEventListener('pageshow', (e) => { if (e.persisted) alVolverALaApp(); });
 
 // NAV
 function nav(v, btn) {
@@ -352,7 +367,7 @@ function nav(v, btn) {
   if(v==='hist') loadHist();
   if(v==='rep') loadRep();
   if(v==='comp') loadComp();
-  if(v==='carga') fetchDolar();
+  if(v==='carga') fetchDolar(true);
 }
 
 // SUCURSAL
@@ -445,7 +460,7 @@ function desfmtMiles(txt) {
   if (q.length === 2) s = q[0] + '.' + q[1].slice(0, 2);
   return (neg && s !== '' ? '-' : '') + s;
 }
-function setMonto(id, val) { const el = document.getElementById(id); if (el) el.value = (val === '' || val === null || val === undefined) ? '' : fmtMilesTxt(val); }
+function setMonto(id, val) { const el = document.getElementById(id); if (typeof val === 'number') val = SersaleBase.redondear(val); if (el) el.value = (val === '' || val === null || val === undefined) ? '' : fmtMilesTxt(val); }
 function caretPorDigitos(el, digitos) {
   const t = el.value;
   let cnt = 0, pos = t.length;
@@ -479,7 +494,7 @@ document.addEventListener('keydown', function (e) {
 
 // RESUMEN
 function v(id){ return parseFloat(desfmtMiles(document.getElementById(id)?.value))||0; }
-function fmt(n){ return '$'+Math.round(n).toLocaleString('es-AR'); }
+function fmt(n){ return SersaleBase.fmtMonto(n); }
 function upRes() {
   const z=v('fZ'), ex=totalExtras(), g=totalGastos();
   const neto=z+ex-g;
@@ -491,77 +506,148 @@ function upRes() {
   const block=document.getElementById('rUsdBlock');
   if(usdOf>0||usdBl>0){
     block.style.display='block';
-    if(usdOf>0) document.getElementById('rUsdOf').textContent='U$S '+(neto/usdOf).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0});
-    if(usdBl>0) document.getElementById('rUsdBl').textContent='U$S '+(neto/usdBl).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0});
+    document.getElementById('rUsdOf').textContent=usdOf>0?'U$S '+(neto/usdOf).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0}):'—';
+    document.getElementById('rUsdBl').textContent=usdBl>0?'U$S '+(neto/usdBl).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0}):'—';
   } else { block.style.display='none'; }
 }
 
 // FETCH DOLAR
-async function fetchDolar() {
+// auto=true (al abrir la página o volver a Carga): no pisa una cotización ya escrita.
+// Con el botón "Actualizar" se reemplaza siempre.
+let _dolarEnCurso = false;
+async function fetchDolar(auto) {
+  if (_dolarEnCurso) return;
+  _dolarEnCurso = true;
   const btn = document.getElementById('btnDolar');
   const status = document.getElementById('dolarStatus');
   btn.textContent = '⏳ Cargando...'; btn.disabled = true;
   status.textContent = 'Consultando DolarAPI...';
+  // Si el servicio no contesta, se corta a los 10 segundos (antes el botón quedaba en "Cargando" para siempre)
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  const corte = ctl ? setTimeout(() => ctl.abort(), 10000) : null;
   try {
+    const op = ctl ? { signal: ctl.signal } : undefined;
     const [resOf, resBl] = await Promise.all([
-      fetch('https://dolarapi.com/v1/dolares/oficial'),
-      fetch('https://dolarapi.com/v1/dolares/blue')
+      fetch('https://dolarapi.com/v1/dolares/oficial', op),
+      fetch('https://dolarapi.com/v1/dolares/blue', op)
     ]);
+    if (!resOf.ok || !resBl.ok) throw new Error('DolarAPI respondió ' + resOf.status + ' / ' + resBl.status);
     const [dOf, dBl] = await Promise.all([resOf.json(), resBl.json()]);
 
-    const mediaOf = Math.round((dOf.compra + dOf.venta) / 2);
-    const mediaBl = Math.round((dBl.compra + dBl.venta) / 2);
+    const mediaOf = Math.round((Number(dOf.compra) + Number(dOf.venta)) / 2);
+    const mediaBl = Math.round((Number(dBl.compra) + Number(dBl.venta)) / 2);
+    if (!(mediaOf > 0) || !(mediaBl > 0)) throw new Error('DolarAPI devolvió una cotización inválida');
 
-    setMonto('fUsdOf', mediaOf);
-    setMonto('fUsdBl', mediaBl);
+    [['fUsdOf', mediaOf], ['fUsdBl', mediaBl]].forEach(([id, media]) => {
+      const el = document.getElementById(id);
+      if (auto && el.value && el.value !== el.dataset.auto) return; // escrita a mano
+      setMonto(id, media);
+      el.dataset.auto = el.value;
+    });
     document.getElementById('lblOf').textContent = `C:$${dOf.compra} V:$${dOf.venta}`;
     document.getElementById('lblBl').textContent = `C:$${dBl.compra} V:$${dBl.venta}`;
 
-    const upd = new Date(dBl.fechaActualizacion).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
-    status.innerHTML = `✅ Actualizado ${esc(upd)} · Oficial: <strong>$${mediaOf}</strong> · Blue: <strong style="color:#A8702A">$${mediaBl}</strong>`;
+    const fAct = dBl.fechaActualizacion ? new Date(dBl.fechaActualizacion) : null;
+    const upd = fAct && !isNaN(fAct.getTime()) ? ' ' + fAct.toLocaleString('es-AR',{timeZone:SersaleBase.ZONA,day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}) : '';
+    status.innerHTML = `✅ Actualizado${esc(upd)} · Oficial: <strong>$${mediaOf}</strong> · Blue: <strong style="color:#A8702A">$${mediaBl}</strong>`;
     upRes();
   } catch(e) {
     status.textContent = '⚠️ No se pudo conectar con DolarAPI. Ingresá el valor manualmente.';
-    console.error(e);
+    console.warn('DolarAPI:', e);
   }
+  if (corte) clearTimeout(corte);
   btn.textContent = '↻ Actualizar'; btn.disabled = false;
+  _dolarEnCurso = false;
 }
 
 // GUARDAR
+function formVacio() {
+  return !v('fZ') && !v('fEfec') && !v('fTarj') && !v('fMP') && !v('fOtro') && !getExtras().length && !getGastos().length && !document.getElementById('fObs').value.trim();
+}
+function nombreSuc(s){ return s==='PP' ? 'Parque Patricios' : s==='CAB' ? 'Caballito' : String(s||''); }
+let _guardando = false;
 async function guardar() {
+  if(_guardando) return;
   const fecha = document.getElementById('fFecha').value;
   if(!fecha){ toast('Seleccioná una fecha', true); return; }
+  const sucG = suc; // la sucursal elegida al tocar Guardar
+  const R = SersaleBase.redondear;
   const totalZ=v('fZ'), cobEfec=v('fEfec'), cobTarj=v('fTarj'), cobMP=v('fMP'), cobOtro=v('fOtro');
   const usdOficial=v('fUsdOf'), usdBlue=v('fUsdBl');
-  const extras=getExtras(), extraZ=extras.reduce((s,e)=>s+e.monto,0);
+  const extras=getExtras(), extraZ=R(extras.reduce((s,e)=>s+e.monto,0));
   const extraDesc=extras.map(e=>e.desc).join(', ');
   const obs=document.getElementById('fObs').value.trim();
-  const gastos=getGastos(), totalGasto=gastos.reduce((s,g)=>s+g.monto,0);
-  const totalVentas=totalZ+extraZ, totalNeto=totalVentas-totalGasto;
-  const totalCobros=cobEfec+cobTarj+cobMP+cobOtro;
+  const gastos=getGastos(), totalGasto=R(gastos.reduce((s,g)=>s+g.monto,0));
+  const totalVentas=R(totalZ+extraZ), totalNeto=R(totalVentas-totalGasto);
+  const totalCobros=R(cobEfec+cobTarj+cobMP+cobOtro);
+  // Formulario vacío: después de guardar el formulario se limpia, y un segundo toque en
+  // "Guardar" reemplazaba el registro recién cargado por uno en cero.
+  if(formVacio()){
+    toast('No hay nada cargado: completá el Total Z antes de guardar', true); return;
+  }
+  // Sin conexión el guardado quedaba esperando para siempre (y se perdía al cerrar la página)
+  if(navigator.onLine === false){ toast('Sin conexión. No se guardó: probá de nuevo cuando vuelva la señal.', true); return; }
+  const datos = {
+    fecha, sucursal:sucG, totalZ, cobEfec, cobTarj, cobMP, cobOtro, usdOficial, usdBlue,
+    extraZ, extraDesc, extras, gastos, totalGasto, totalCobros, totalVentas, totalNeto, obs,
+    ts: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const ref = db.collection('ventas_diarias').doc(fecha+'_'+sucG);
   const btn=document.getElementById('btnSave');
-  btn.disabled=true; btn.textContent='Guardando...';
+  _guardando=true; btn.disabled=true; btn.textContent='Guardando...';
   try {
-    await db.collection('ventas_diarias').doc(fecha+'_'+suc).set({
-      fecha, sucursal:suc, totalZ, cobEfec, cobTarj, cobMP, cobOtro, usdOficial, usdBlue,
-      extraZ, extraDesc, extras, gastos, totalGasto, totalCobros, totalVentas, totalNeto, obs,
-      ts: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    toast('✅ Registro guardado');
-    resetForm();
-  } catch(e){ toast('Error al guardar', true); console.error(e); }
-  btn.disabled=false; btn.textContent='Guardar Registro del Día';
+    // El id es fecha + sucursal: si ya hay un registro de ese día no se pisa sin preguntar
+    // (sucursal o fecha mal elegida, o dos teléfonos cargando lo mismo). La lectura y la
+    // escritura van en una transacción.
+    let reemplazar=false, guardado=false;
+    while(!guardado){
+      let existente=null;
+      await db.runTransaction(async tx=>{
+        const s=await tx.get(ref);
+        existente = (s.exists && !reemplazar) ? (s.data()||{}) : null;
+        if(!existente) tx.set(ref, datos);
+      });
+      if(!existente){ guardado=true; break; }
+      const ok = await SersaleUI.confirmar({
+        titulo: 'Ya hay un registro de ese día',
+        cuerpo: SersaleBase.fmtFecha(fecha)+' · '+nombreSuc(sucG)+' ya tiene cargado Total Z '+fmt(existente.totalZ)+' (ventas '+fmt(existente.totalVentas)+'). Si seguís, se reemplaza por lo que cargaste ahora (Total Z '+fmt(totalZ)+').',
+        aceptar: 'Reemplazar', cancelar: 'Cancelar', peligro: true
+      });
+      if(!ok) break;
+      reemplazar=true;
+    }
+    if(guardado){
+      toast('✅ Registro guardado: '+SersaleBase.fmtFecha(fecha)+' · '+nombreSuc(sucG));
+      resetForm();
+    }
+  } catch(e){ toast('No se pudo guardar. Probá de nuevo.', true); console.error(e); }
+  _guardando=false; btn.disabled=false; btn.textContent='Guardar Registro del Día';
 }
 function resetForm() {
-  ['fZ','fEfec','fTarj','fMP','fOtro','fUsdOf','fUsdBl'].forEach(id=>document.getElementById(id).value='');
+  // La cotización del dólar se deja: es la misma para el cierre de la otra sucursal
+  ['fZ','fEfec','fTarj','fMP','fOtro'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('fObs').value='';
   document.getElementById('gastosList').innerHTML='';
   document.getElementById('extrasList').innerHTML='';
   gc=0; ec=0; addGasto(); addExtra(); upRes();
 }
 
+// Cuando no se pudo cargar: mensaje y botón para reintentar sin tener que cambiar un filtro.
+function noCargoHtml(texto, fn) {
+  return '<div class="empty"><div class="empty-ico">⚠️</div>'+esc(texto)+'<div style="margin-top:14px"><button onclick="'+fn+'()" style="min-height:44px;padding:10px 22px;border-radius:10px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:14px;font-weight:600;cursor:pointer">Reintentar</button></div></div>';
+}
+// Esta página no guarda copia en el teléfono: sin conexión la consulta devuelve una lista
+// vacía en vez de fallar. No hay que mostrarla como "sin registros".
+const SIN_CONEXION = 'Sin conexión. No se pudieron cargar los datos.';
+function sinServidor(snap){ return !!(snap && snap.metadata && snap.metadata.fromCache); }
+// Días distintos con registro (cada día tiene un registro por sucursal)
+function contarDias(docs){ return new Set(docs.map(d=>d.fecha).filter(Boolean)).size; }
+function txtDias(n){ return n+(n===1?' día':' días'); }
+
 // HISTORIAL
+let _seqHist = 0;
 async function loadHist() {
+  const seq = ++_seqHist; // si se cambia el filtro mientras carga, la respuesta vieja se descarta
   const suc2=document.getElementById('hSuc').value, mes=document.getElementById('hMes').value;
   const c=document.getElementById('histContent');
   c.innerHTML='<div class="loading"><div class="spinner"></div>Cargando...</div>';
@@ -576,7 +662,9 @@ async function loadHist() {
     }
     q=q.orderBy('fecha','desc');
     const snap=await q.get();
-    let docs=snap.docs.map(d=>d.data());
+    if(seq!==_seqHist) return;
+    if(sinServidor(snap)){ c.innerHTML=noCargoHtml(SIN_CONEXION,'loadHist'); return; }
+    let docs=snap.docs.map(d=>Object.assign({_id:d.id}, d.data()));
     if(suc2!=='TODAS') docs=docs.filter(d=>d.sucursal===suc2);
     if(!docs.length){ c.innerHTML='<div class="empty"><div class="empty-ico">📭</div>Sin registros para este período</div>'; return; }
 
@@ -586,7 +674,7 @@ async function loadHist() {
     const tZ=docs.reduce((s,d)=>s+(d.totalZ||0),0);
 
     let h=`<div class="kpi-grid">
-      <div class="kpi"><div class="kpi-lbl">TOTAL VENTAS</div><div class="kpi-val accent">${fmt(tV)}</div><div class="kpi-sub">${docs.length} días</div></div>
+      <div class="kpi"><div class="kpi-lbl">TOTAL VENTAS</div><div class="kpi-val accent">${fmt(tV)}</div><div class="kpi-sub">${txtDias(contarDias(docs))}</div></div>
       <div class="kpi"><div class="kpi-lbl">NETO</div><div class="kpi-val green">${fmt(tN)}</div></div>
       <div class="kpi"><div class="kpi-lbl">TOTAL Z</div><div class="kpi-val">${fmt(tZ)}</div></div>
       <div class="kpi"><div class="kpi-lbl">GASTOS</div><div class="kpi-val red">${fmt(tG)}</div></div>
@@ -624,14 +712,14 @@ async function loadHist() {
     });
     h+='</tbody></table></div>';
     c.innerHTML=h;
-  } catch(e){ c.innerHTML='<div class="empty"><div class="empty-ico">⚠️</div>Error al cargar</div>'; console.error(e); }
+  } catch(e){ console.error(e); if(seq===_seqHist) c.innerHTML=noCargoHtml('Error al cargar','loadHist'); }
 }
 // EDITAR REGISTRO
 let editDocId = null;
 function abrirEdit(i) {
   const d = _editDocs[i];
   if(!d){ console.error('No doc at index',i); return; }
-  editDocId = d.fecha + '_' + d.sucursal;
+  editDocId = d._id || (d.fecha + '_' + d.sucursal);
   const fd = d.fecha ? d.fecha.split('-').reverse().join('/') : '—';
   const sLabel = d.sucursal === 'PP' ? 'Parque Patricios' : 'Caballito';
   document.getElementById('editSubtitle').textContent = fd + ' · ' + sLabel;
@@ -652,45 +740,54 @@ function cerrarEdit() {
 }
 async function guardarEdit() {
   if(!editDocId) return;
+  const id = editDocId;
   const btn = document.getElementById('btnEditSave');
+  if(btn.disabled) return;
+  if(navigator.onLine === false){ toast('Sin conexión. No se guardó: probá de nuevo cuando vuelva la señal.', true); return; }
   btn.disabled = true; btn.textContent = 'Guardando...';
+  const R = SersaleBase.redondear;
   const ev = n => { const el=document.getElementById(n); return el&&el.value!==''?parseFloat(desfmtMiles(el.value))||0:null; };
   const totalZ = ev('eZ')||0, extraZ = ev('eExtraZ')||0;
   const cobEfec = ev('eEfec')||0, cobTarj = ev('eTarj')||0, cobMP = ev('eMP')||0, cobOtro = ev('eOtro')||0;
   const usdOficial = ev('eUsdOf'), usdBlue = ev('eUsdBl');
   const obs = document.getElementById('eObs').value.trim();
   try {
-    // Una sola lectura del doc: gastos + extras actuales
-    const snap = await db.collection('ventas_diarias').doc(editDocId).get();
-    const prev = snap.data() || {};
-    const gastos = Array.isArray(prev.gastos) ? prev.gastos : [];
+    const ref = db.collection('ventas_diarias').doc(id);
+    // Lectura y escritura en una transacción: los totales se recalculan con los gastos y
+    // extras que tiene el registro en ese momento (otro teléfono puede haberlo cambiado).
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if(!snap.exists) throw new Error('El registro '+id+' ya no existe');
+      const prev = snap.data() || {};
+      const gastos = Array.isArray(prev.gastos) ? prev.gastos : null;
 
-    // Mantener extras[] coherente con el nuevo extraZ
-    let extras = Array.isArray(prev.extras) ? prev.extras.slice() : [];
-    const extrasPrev = extras.reduce((s,e)=>s+(e.monto||0),0);
-    if(extraZ !== extrasPrev){
-      if(extraZ === 0) extras = [];
-      else if(extras.length === 1) extras = [{desc: extras[0].desc || 'Ingreso extra', monto: extraZ}];
-      else if(extras.length > 1) extras = [{desc: extras.map(e=>e.desc).join(' + '), monto: extraZ}];
-      else extras = [{desc: prev.extraDesc || 'Ingreso extra', monto: extraZ}];
-    }
-    const extraDesc = extras.map(e=>e.desc).join(', ');
+      // Mantener extras[] coherente con el nuevo extraZ (comparando en centavos: la suma
+      // de 1000,10 + 2000,20 da 3000,3000000000002 y no es "otro" importe)
+      let extras = Array.isArray(prev.extras) ? prev.extras.slice() : [];
+      const extrasPrev = R(extras.reduce((s,e)=>s+(Number(e.monto)||0),0));
+      if(extraZ !== extrasPrev){
+        if(extraZ === 0) extras = [];
+        else if(extras.length === 1) extras = [{desc: extras[0].desc || 'Ingreso extra', monto: extraZ}];
+        else if(extras.length > 1) extras = [{desc: extras.map(e=>e.desc).join(' + '), monto: extraZ}];
+        else extras = [{desc: prev.extraDesc || 'Ingreso extra', monto: extraZ}];
+      }
+      const extraDesc = extras.map(e=>e.desc).join(', ');
 
-    // Totales derivados, recalculados siempre
-    const totalGasto = gastos.reduce((s,g)=>s+(g.monto||0),0);
-    const totalVentas = totalZ + extraZ;
-    const totalNeto = totalVentas - totalGasto;
-    const totalCobros = cobEfec + cobTarj + cobMP + cobOtro;
+      // Totales derivados, recalculados siempre. Un registro viejo sin lista de gastos conserva su total.
+      const totalGasto = gastos ? R(gastos.reduce((s,g)=>s+(Number(g.monto)||0),0)) : (Number(prev.totalGasto)||0);
+      const totalVentas = R(totalZ + extraZ);
+      const totalNeto = R(totalVentas - totalGasto);
+      const totalCobros = R(cobEfec + cobTarj + cobMP + cobOtro);
 
-    const upd = { totalZ, extraZ, extras, extraDesc, cobEfec, cobTarj, cobMP, cobOtro, totalGasto, totalVentas, totalNeto, totalCobros, obs };
-    if(usdOficial !== null) upd.usdOficial = usdOficial;
-    if(usdBlue !== null) upd.usdBlue = usdBlue;
-
-    await db.collection('ventas_diarias').doc(editDocId).update(upd);
+      const upd = { totalZ, extraZ, extras, extraDesc, cobEfec, cobTarj, cobMP, cobOtro, totalGasto, totalVentas, totalNeto, totalCobros, obs };
+      if(usdOficial !== null) upd.usdOficial = usdOficial;
+      if(usdBlue !== null) upd.usdBlue = usdBlue;
+      tx.update(ref, upd);
+    });
     toast('✅ Registro actualizado');
     cerrarEdit();
     loadHist();
-  } catch(e) { toast('Error al guardar', true); console.error(e); }
+  } catch(e) { toast('No se pudo guardar. Probá de nuevo.', true); console.error(e); }
   btn.disabled = false; btn.textContent = 'Guardar';
 }
 
@@ -711,24 +808,32 @@ function onTipoChange() {
   loadRep();
 }
 function getRange() {
-  const t=document.getElementById('rTipo').value, now=new Date();
-  let from,to;
-  if(t==='semana'){ const d=now.getDay()||7; from=new Date(now); from.setDate(now.getDate()-d+1); to=now; }
-  else if(t==='semana-ant'){ const d=now.getDay()||7; from=new Date(now); from.setDate(now.getDate()-d-6); to=new Date(now); to.setDate(now.getDate()-d); }
-  else if(t==='mes'){ from=new Date(now.getFullYear(),now.getMonth(),1); to=now; }
-  else if(t==='mes-ant'){ from=new Date(now.getFullYear(),now.getMonth()-1,1); to=new Date(now.getFullYear(),now.getMonth(),0); }
-  else { const f=document.getElementById('rFrom').value, t2=document.getElementById('rTo').value; if(!f||!t2) return null; return{from:f,to:t2}; }
-  return{from:from.toISOString().split('T')[0], to:to.toISOString().split('T')[0]};
+  const t=document.getElementById('rTipo').value;
+  if(t==='custom'){ const f=document.getElementById('rFrom').value, t2=document.getElementById('rTo').value; if(!f||!t2) return null; return{from:f,to:t2}; }
+  // Todo en días de Buenos Aires. Con toISOString() (UTC), después de las 21 hs "esta semana"
+  // empezaba el martes y "semana anterior" iba de martes a lunes.
+  const hoy=SersaleBase.hoy(), B=SersaleBase;
+  const d=B.diaSemana(hoy)||7; // lunes=1 … domingo=7
+  if(t==='semana') return {from:B.sumarDias(hoy,1-d), to:hoy};
+  if(t==='semana-ant') return {from:B.sumarDias(hoy,-d-6), to:B.sumarDias(hoy,-d)};
+  const ini=hoy.slice(0,8)+'01';
+  if(t==='mes-ant'){ const finAnt=B.sumarDias(ini,-1); return {from:finAnt.slice(0,8)+'01', to:finAnt}; }
+  return {from:ini, to:hoy};
 }
 
+let _seqRep = 0;
 async function loadRep() {
-  const range=getRange(); if(!range) return;
-  const sucF=document.getElementById('rSuc').value;
+  const seq = ++_seqRep; // una respuesta vieja no reemplaza al período elegido después
   const c=document.getElementById('repContent');
+  const range=getRange();
+  if(!range){ c.innerHTML='<div class="empty"><div class="empty-ico">📅</div>Elegí las dos fechas del período</div>'; return; }
+  const sucF=document.getElementById('rSuc').value;
   c.innerHTML='<div class="loading"><div class="spinner"></div>Calculando...</div>';
   try {
     let q=db.collection('ventas_diarias').where('fecha','>=',range.from).where('fecha','<=',range.to).orderBy('fecha','asc');
     const snap=await q.get();
+    if(seq!==_seqRep) return;
+    if(sinServidor(snap)){ c.innerHTML=noCargoHtml(SIN_CONEXION,'loadRep'); return; }
     let docs=snap.docs.map(d=>d.data());
     if(sucF!=='TODAS') docs=docs.filter(d=>d.sucursal===sucF);
     if(!docs.length){ c.innerHTML='<div class="empty"><div class="empty-ico">📊</div>Sin datos para el período</div>'; return; }
@@ -737,13 +842,15 @@ async function loadRep() {
     const tV=sum('totalVentas'), tZ=sum('totalZ'), tEx=sum('extraZ');
     const tG=sum('totalGasto'), tN=sum('totalNeto');
     const tEf=sum('cobEfec'), tTj=sum('cobTarj'), tMP=sum('cobMP'), tOt=sum('cobOtro');
-    const prom=tV/docs.length;
+    // Con las dos sucursales hay dos registros por día: el promedio es por día, no por registro
+    const dias=contarDias(docs)||docs.length;
+    const prom=tV/dias;
 
     const pp=docs.filter(d=>d.sucursal==='PP'), cab=docs.filter(d=>d.sucursal==='CAB');
     const tPP=pp.reduce((s,d)=>s+(d.totalVentas||0),0), tCAB=cab.reduce((s,d)=>s+(d.totalVentas||0),0);
 
-    const gDict={};
-    docs.forEach(d=>(d.gastos||[]).forEach(g=>{ gDict[g.desc]=(gDict[g.desc]||0)+g.monto; }));
+    const gDict=Object.create(null);
+    docs.forEach(d=>(Array.isArray(d.gastos)?d.gastos:[]).forEach(g=>{ const k=String(g.desc||'Sin descripción'); gDict[k]=(gDict[k]||0)+(Number(g.monto)||0); }));
 
     const label=`${range.from.split('-').reverse().join('/')} — ${range.to.split('-').reverse().join('/')}`;
 
@@ -753,7 +860,7 @@ async function loadRep() {
     const avgBl=usdBlArr.length?usdBlArr.reduce((s,d)=>s+d.usdBlue,0)/usdBlArr.length:0;
     const fmtUsd=n=>Math.round(n).toLocaleString('es-AR');
 
-    let h=`<div style="font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:14px">${label} · ${docs.length} días</div>
+    let h=`<div style="font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:14px">${label} · ${txtDias(dias)}</div>
     <div class="kpi-grid">
       <div class="kpi"><div class="kpi-lbl">TOTAL VENTAS</div><div class="kpi-val accent">${fmt(tV)}</div><div class="kpi-sub">prom ${fmt(prom)}/día</div></div>
       <div class="kpi"><div class="kpi-lbl">NETO TOTAL</div><div class="kpi-val green">${fmt(tN)}</div>${avgBl>0?`<div class="kpi-sub" style="color:#A8702A">≈ U$S ${fmtUsd(tN/avgBl)} blue</div>`:''}</div>
@@ -803,9 +910,9 @@ async function loadRep() {
     h+='</tbody></table></div>';
     h+=`<button onclick="imprimirReporte()" style="width:100%;padding:14px;border-radius:12px;border:none;background:#A4232A;color:#fff;font-weight:700;font-size:15px;cursor:pointer;margin-top:4px">🖨️ Exportar / Imprimir PDF</button>`;
     // Store data for PDF export
-    window._repData = { docs, tV, tZ, tEx, tG, tN, tEf, tTj, tMP, tOt, prom, tPP, tCAB, gDict, label, sucF, avgOf, avgBl };
+    window._repData = { docs, dias, tV, tZ, tEx, tG, tN, tEf, tTj, tMP, tOt, prom, tPP, tCAB, gDict, label, sucF, avgOf, avgBl };
     c.innerHTML=h;
-  } catch(e){ c.innerHTML='<div class="empty"><div class="empty-ico">⚠️</div>Error al cargar reporte</div>'; console.error(e); }
+  } catch(e){ console.error(e); if(seq===_seqRep) c.innerHTML=noCargoHtml('Error al cargar reporte','loadRep'); }
 }
 
 // IMPRIMIR REPORTE PDF
@@ -839,6 +946,8 @@ function imprimirReporte() {
     </div>` : '';
 
   const w = window.open('','_blank');
+  // Si el teléfono no deja abrir la ventana (bloqueo de ventanas emergentes, app instalada), se avisa
+  if(!w || !w.document){ toast('No se pudo abrir la ventana del reporte. Permití las ventanas emergentes para este sitio y probá de nuevo.', true); return; }
   w.document.write(`<!DOCTYPE html><html><head>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
@@ -869,7 +978,7 @@ function imprimirReporte() {
         <img src="${new URL('assets/logo.png', location.href).href}" alt="Sersale" style="height:64px;width:auto" />
         <div><h1>FRIGORÍFICO SERSALE</h1><p>24 de Noviembre 1926, Parque Patricios · CABA · (011) 6763-7860</p></div>
       </div>
-      <div style="text-align:right"><div style="font-size:18px;font-weight:900;color:#A4232A">Reporte de Ventas</div><div style="font-size:12px;color:#79828B;margin-top:2px">${esc(d.label)}</div><div style="font-size:11px;color:#A3ABB3">${d.docs.length} días · ${d.sucF==='TODAS'?'Todas las sucursales':esc(d.sucF)}</div></div>
+      <div style="text-align:right"><div style="font-size:18px;font-weight:900;color:#A4232A">Reporte de Ventas</div><div style="font-size:12px;color:#79828B;margin-top:2px">${esc(d.label)}</div><div style="font-size:11px;color:#A3ABB3">${esc(txtDias(d.dias))} · ${d.sucF==='TODAS'?'Todas las sucursales':esc(nombreSuc(d.sucF))}</div></div>
     </div>
     <div class="kpis">
       <div class="kpi"><div class="lbl">Total Ventas</div><div class="val" style="color:#A4232A">${fmtP(d.tV)}</div></div>
@@ -883,6 +992,7 @@ function imprimirReporte() {
         <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>Efectivo</span><span>${fmtP(d.tEf)}</span></div>
         <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>Tarjeta / Posnet</span><span>${fmtP(d.tTj)}</span></div>
         <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>Transferencia</span><span>${fmtP(d.tMP)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>Cheque / Otro</span><span>${fmtP(d.tOt)}</span></div>
         <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:13px;font-weight:700"><span>Total</span><span>${fmtP(d.tEf+d.tTj+d.tMP+d.tOt)}</span></div>
       </div>
       ${Object.keys(d.gDict).length?`<div class="section"><h2>Gastos</h2>${gastoRows}</div>`:''}
@@ -890,7 +1000,7 @@ function imprimirReporte() {
     <div class="section"><h2>Detalle por Día</h2>
     <table><thead><tr><th>Fecha</th><th>Sucursal</th><th style="text-align:right">Ventas</th><th style="text-align:right">Gastos</th><th style="text-align:right">Neto</th></tr></thead>
     <tbody>${filas}</tbody></table></div>
-    <div class="footer">Frigorífico Sersale SRL · Reporte generado el ${new Date().toLocaleDateString('es-AR')} · Documento interno</div>
+    <div class="footer">Frigorífico Sersale SRL · Reporte generado el ${SersaleBase.fmtFecha(SersaleBase.hoy())} · Documento interno</div>
     <br><button onclick="window.print()" style="padding:10px 24px;background:#A4232A;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:700">🖨️ Imprimir / Guardar PDF</button><button onclick="window.close()" style="margin-left:8px;padding:10px 24px;background:#79828B;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">✕ Cerrar</button>
   
   
@@ -900,17 +1010,19 @@ function imprimirReporte() {
 }
 
 // COMPARATIVA MES A MES
+let _seqComp = 0;
 async function loadComp() {
+  const seq = ++_seqComp;
   const sucF = document.getElementById('cSuc').value;
   const nMeses = parseInt(document.getElementById('cMeses').value)||6;
   const c = document.getElementById('compContent');
   c.innerHTML = '<div class="loading"><div class="spinner"></div>Cargando...</div>';
   try {
     // Build array of last N months
-    const now = new Date();
+    const [anioHoy, mesHoy] = SersaleBase.hoy().split('-').map(Number); // mes en curso en Buenos Aires
     const months = [];
     for(let i = nMeses-1; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+      const d = new Date(anioHoy, mesHoy-1-i, 1);
       const key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
       const label = d.toLocaleDateString('es-AR',{month:'short',year:'2-digit'});
       months.push({key, label});
@@ -921,20 +1033,23 @@ async function loadComp() {
     const to = months[months.length-1].key+'-31';
     let q = db.collection('ventas_diarias').where('fecha','>=',from).where('fecha','<=',to).orderBy('fecha','asc');
     const snap = await q.get();
+    if(seq!==_seqComp) return;
+    if(sinServidor(snap)){ c.innerHTML=noCargoHtml(SIN_CONEXION,'loadComp'); return; }
     let docs = snap.docs.map(d=>d.data());
     if(sucF!=='TODAS') docs = docs.filter(d=>d.sucursal===sucF);
 
     // Aggregate by month
     const data = {};
-    months.forEach(m=>{ data[m.key]={ventas:0,neto:0,gastos:0,dias:0,extraZ:0}; });
+    months.forEach(m=>{ data[m.key]={ventas:0,neto:0,gastos:0,dias:0,extraZ:0,fechas:new Set()}; });
     docs.forEach(d=>{
-      const mk = d.fecha?d.fecha.substring(0,7):null;
+      const mk = d.fecha?String(d.fecha).substring(0,7):null;
       if(mk && data[mk]) {
         data[mk].ventas += d.totalVentas||0;
         data[mk].neto   += d.totalNeto||0;
         data[mk].gastos += d.totalGasto||0;
         data[mk].extraZ += d.extraZ||0;
-        data[mk].dias++;
+        data[mk].fechas.add(d.fecha); // días distintos: con dos sucursales hay dos registros por día
+        data[mk].dias = data[mk].fechas.size;
       }
     });
 
@@ -1049,15 +1164,12 @@ async function loadComp() {
         </table>
         </div>
       </div>`;
-  } catch(e) { c.innerHTML='<div class="empty"><div class="empty-ico">⚠️</div>Error al cargar</div>'; console.error(e); }
+  } catch(e) { console.error(e); if(seq===_seqComp) c.innerHTML=noCargoHtml('Error al cargar','loadComp'); }
 }
 
-// TOAST
+// TOAST (el aviso propio de esta página quedaba tapado por la barra inferior: se usa el compartido)
 function toast(msg, isErr=false) {
-  const t=document.getElementById('toast');
-  t.textContent=msg;
-  t.className='toast'+(isErr?' err':'')+' show';
-  setTimeout(()=>t.classList.remove('show'), 3000);
+  SersaleUI.toast(msg, { tipo: isErr ? 'error' : 'ok' });
 }
 </script>
 
