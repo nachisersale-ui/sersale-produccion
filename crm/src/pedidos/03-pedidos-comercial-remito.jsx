@@ -1,3 +1,63 @@
+    // Kg que se facturan de un ítem: lo pesado (aunque sea 0) o, si no se pesó, lo pedido.
+    // Es la única cuenta de kg del remito: pantalla, PDF, remito guardado y cuenta corriente.
+    function kgFacturables(it) {
+      if (it.kgReal != null && it.kgReal !== "") return Number(it.kgReal) || 0;
+      return parseFloat(it.cantidad) || 0;
+    }
+
+    // Para saber si los ítems de un pedido cambiaron desde que se abrió una pantalla.
+    function firmaItemsPedido(items) {
+      return JSON.stringify((items || []).map(it => [it.producto || "", String(it.cantidad == null ? "" : it.cantidad), it.unidad || "", it.kgReal == null || it.kgReal === "" ? null : Number(it.kgReal)]));
+    }
+
+    // Cambio de estado (y de kg) de un pedido sin pisar lo que cargó otro teléfono.
+    //   visto:        el pedido tal como lo muestra la tarjeta que se tocó.
+    //   itemsConKg:   opcional, los ítems de esa tarjeta con los kg recién escritos.
+    // Se hace en una transacción contra el documento actual: si el estado ya no es
+    // el que mostraba la tarjeta, o los productos cambiaron, no se escribe nada.
+    // De los kg solo se guardan los que la persona cambió; el resto queda como está
+    // en la base. Devuelve { ok: true } o { ok: false, motivo }.
+    async function pedidoCambiarEstado(visto, nuevoEstado, itemsConKg) {
+      const { db, doc, runTransaction } = fb();
+      const ref = doc(db, "pedidos", visto.id);
+      const marca = new Date().toISOString();
+      const res = await runTransaction(db, async tx => {
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return { ok: false, motivo: "Ese pedido ya no existe. Se actualizó la lista." };
+        const actual = snap.data();
+        if ((actual.estado || "pendiente") !== (visto.estado || "pendiente")) {
+          const etiqueta = (ESTADOS[actual.estado] || ESTADOS.pendiente).label.replace(" ✓", "");
+          return { ok: false, motivo: "El pedido de " + (actual.cliente || visto.cliente) + " cambió desde otro teléfono: ahora está " + etiqueta + ". Se actualizó la lista." };
+        }
+        const upd = {
+          estado: nuevoEstado,
+          historial: [...(actual.historial || []), { estado: nuevoEstado, fecha: marca }]
+        };
+        if (itemsConKg) {
+          const actuales = actual.items || [];
+          const vistos = visto.items || [];
+          const mismos = actuales.length === itemsConKg.length && actuales.every((it, i) =>
+            it.producto === itemsConKg[i].producto && String(it.cantidad) === String(itemsConKg[i].cantidad) && (it.unidad || "") === (itemsConKg[i].unidad || ""));
+          if (!mismos) return { ok: false, motivo: "Los productos del pedido de " + (actual.cliente || visto.cliente) + " cambiaron desde otro teléfono. Se actualizó la lista: cargá los kg de nuevo." };
+          const igual = (a, b) => (a == null || a === "" ? null : Number(a)) === (b == null || b === "" ? null : Number(b));
+          upd.items = actuales.map((it, i) => {
+            const escrito = itemsConKg[i].kgReal;
+            const antes = vistos[i] ? vistos[i].kgReal : undefined;
+            return igual(escrito, antes) ? it : { ...it, kgReal: escrito };
+          });
+        }
+        tx.update(ref, upd);
+        return { ok: true };
+      });
+      // Que la lista que se recarga a continuación ya traiga el cambio
+      if (res.ok) await esperarCopiaLocal(ref, d => !!d && (d.historial || []).some(x => x.fecha === marca));
+      return res;
+    }
+
+    // Lo que VistaComercial les pasa a las tarjetas aunque estén dentro de otra lista
+    // (el historial no recibe onRemito): permite hacer el remito de un pedido ya despachado.
+    const ComercialCtx = React.createContext(null);
+
     // ── TARJETA PEDIDO ──────────────────────────────────────
     function TarjetaPedido({ pedido, onCambiarEstado, showActions, isNew, onEditar, onRemito, onDetallePrep, modoOperario }) {
       const [expanded, setExpanded] = useState(false);
@@ -6,6 +66,41 @@
       const [editKgModal, setEditKgModal] = useState(false);
       const [editKgValues, setEditKgValues] = useState({});
       const est = ESTADOS[pedido.estado] || ESTADOS.pendiente;
+      const comercial = React.useContext(ComercialCtx);
+      const abrirRemito = onRemito || (comercial && comercial.onRemito) || null;
+      // Un cambio por vez: mientras se guarda, los botones quedan bloqueados.
+      // Devuelve true si la hoja de kg se puede cerrar.
+      const [cambiar, cambiando] = SersaleBase.useAccion(async (estado, items) => {
+        const guardado = Promise.resolve().then(() => onCambiarEstado(pedido.id, estado, items));
+        if (!comercial) {
+          // Depósito: el cambio queda en el teléfono y se envía solo aunque no haya
+          // señal (como siempre). Se espera un momento por si falla enseguida.
+          let fallo = false;
+          const fin = guardado.then(() => {}, e => {
+            fallo = true;
+            console.error(e);
+            SersaleUI.toast("No se pudo guardar el cambio. Probá de nuevo.", { tipo: "error" });
+          });
+          await Promise.race([fin, new Promise(r => setTimeout(r, 1500))]);
+          return !fallo;
+        }
+        // Comercial: se confirma contra el servidor; false = no se guardó (ya se avisó por qué).
+        try {
+          return (await guardado) !== false;
+        } catch(e) {
+          console.error(e);
+          SersaleUI.toast("No se pudo guardar el cambio. Probá de nuevo.", { tipo: "error" });
+          return false;
+        }
+      });
+      async function cancelar() {
+        const ok = await SersaleUI.confirmar({
+          titulo: "¿Cancelar el pedido de " + pedido.cliente + "?",
+          cuerpo: "El pedido sale de la lista de activos y del depósito. No se puede deshacer desde la app.",
+          aceptar: "Cancelar pedido", cancelar: "Volver", peligro: true
+        });
+        if (ok) cambiar("cancelado");
+      }
       return (
         <>
         <div style={{background:"#fff",borderRadius:14,borderLeft:`4px solid ${est.color}`,borderTop:"1px solid #EDEEF0",borderRight:"1px solid #EDEEF0",borderBottom:"1px solid #EDEEF0",marginBottom:10,overflow:"hidden",position:"relative",boxShadow:"0 2px 10px rgba(0,0,0,0.06)"}}>
@@ -40,13 +135,19 @@
               {showActions && !["despachado","cancelado"].includes(pedido.estado) && (
                 <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
                   {pedido.estado==="pendiente"  && <button onClick={()=>{ setKgValues({}); setKgModal(true); }} style={{flex:1,padding:"10px 8px",borderRadius:12,border:"none",background:"#26536E",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>⚙️ En preparación</button>}
-                  {pedido.estado==="preparando" && !modoOperario && <button onClick={()=>onCambiarEstado(pedido.id,"listo")}      style={{flex:1,padding:"10px 8px",borderRadius:12,border:"none",background:"#2F6B4F",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>✅ Listo</button>}
+                  {pedido.estado==="preparando" && !modoOperario && <button disabled={cambiando} onClick={()=>cambiar("listo")}      style={{flex:1,padding:"10px 8px",borderRadius:12,border:"none",background:"#2F6B4F",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer",opacity:cambiando?0.6:1}}>✅ Listo</button>}
                   {pedido.estado==="preparando" && onDetallePrep && <button onClick={onDetallePrep} style={{padding:"10px 12px",borderRadius:12,border:"1.5px solid #26536E",background:"transparent",color:"#26536E",fontWeight:700,fontSize:12,cursor:"pointer"}}>📋 Ítems</button>}
-                  {pedido.estado==="listo" && !modoOperario && <button onClick={()=>onCambiarEstado(pedido.id,"despachado")} style={{flex:1,padding:"10px 8px",borderRadius:12,border:"none",background:"#79828B",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>🚚 Despachado</button>}
+                  {pedido.estado==="listo" && !modoOperario && <button disabled={cambiando} onClick={()=>cambiar("despachado")} style={{flex:1,padding:"10px 8px",borderRadius:12,border:"none",background:"#79828B",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer",opacity:cambiando?0.6:1}}>🚚 Despachado</button>}
                   {pedido.estado==="listo" && !modoOperario && onRemito && <button onClick={()=>onRemito(pedido)} style={{padding:"10px 12px",borderRadius:12,border:"none",background:"#6B4E8E",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>🧾 Remito</button>}
                   {pedido.estado==="listo" && <button onClick={()=>{ const vals={}; pedido.items.forEach((it,i)=>{ if(it.kgReal!=null) vals[i]=it.kgReal; }); setEditKgValues(vals); setEditKgModal(true); }} style={{padding:"10px 12px",borderRadius:12,border:"1.5px solid #2F6B4F",background:"transparent",color:"#2F6B4F",fontWeight:700,fontSize:12,cursor:"pointer"}}>⚖️ kg</button>}
                   {onEditar && !modoOperario && <button onClick={()=>onEditar(pedido)} style={{padding:"10px 14px",borderRadius:12,border:"1.5px solid #2A333B",background:"transparent",color:"#2A333B",fontWeight:700,fontSize:12,cursor:"pointer"}}>✏️</button>}
-                  {!modoOperario && <button onClick={()=>onCambiarEstado(pedido.id,"cancelado")} style={{padding:"10px 14px",borderRadius:12,border:"1.5px solid #C33039",background:"transparent",color:"#C33039",fontWeight:700,fontSize:12,cursor:"pointer"}}>❌</button>}
+                  {!modoOperario && <button disabled={cambiando} onClick={cancelar} aria-label="Cancelar pedido" style={{padding:"10px 14px",borderRadius:12,border:"1.5px solid #C33039",background:"transparent",color:"#C33039",fontWeight:700,fontSize:12,cursor:"pointer"}}>❌</button>}
+                </div>
+              )}
+              {/* Pedido despachado sin remito (o con un remito a corregir): solo desde Comercial */}
+              {pedido.estado==="despachado" && !modoOperario && abrirRemito && pedido.origen!=="venta_rapida" && !String(pedido.id||"").startsWith("cc_") && (
+                <div style={{display:"flex",gap:8,marginTop:12}}>
+                  <button onClick={()=>abrirRemito(pedido)} style={{padding:"10px 12px",borderRadius:12,border:"none",background:"#6B4E8E",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>🧾 Remito</button>
                 </div>
               )}
             </div>
@@ -64,20 +165,20 @@
               {pedido.items.map((it,i)=>(
                 <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
                   <span style={{flex:1,fontSize:13,color:"#262C32"}}>{it.producto}</span>
-                  <input type="number" placeholder="kg"
-                    style={{width:90,padding:"10px 12px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:14,textAlign:"right"}}
+                  <input type="number" inputMode="decimal" step="any" min="0" placeholder="kg"
+                    style={{width:90,padding:"10px 12px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:16,textAlign:"right"}}
                     value={kgValues[i]||""} onChange={e=>setKgValues({...kgValues,[i]:e.target.value})} />
                   <span style={{fontSize:12,color:"#79828B",width:24}}>kg</span>
                 </div>
               ))}
-              <button onClick={()=>{
+              <button disabled={cambiando} onClick={async ()=>{
                 const itemsConKg = pedido.items.map((it,i)=>({
                   ...it, kgReal: kgValues[i]!=null && kgValues[i]!=="" ? parseFloat(kgValues[i]) : null
                 }));
-                onCambiarEstado(pedido.id,"preparando", itemsConKg);
-                setKgModal(false);
-              }} style={{width:"100%",padding:16,borderRadius:14,border:"none",background:"#26536E",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer",marginTop:8}}>
-                ⚙️ Confirmar — En preparación
+                // La hoja se cierra recién cuando el cambio quedó guardado.
+                if (await cambiar("preparando", itemsConKg)) setKgModal(false);
+              }} style={{width:"100%",padding:16,borderRadius:14,border:"none",background:cambiando?"#A3ABB3":"#26536E",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer",marginTop:8}}>
+                {cambiando ? "Guardando..." : "⚙️ Confirmar — En preparación"}
               </button>
             </div>
           </div>
@@ -94,20 +195,19 @@
               {pedido.items.map((it,i)=>(
                 <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
                   <span style={{flex:1,fontSize:13,color:"#262C32"}}>{it.producto}</span>
-                  <input type="number" placeholder="kg"
-                    style={{width:90,padding:"10px 12px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:14,textAlign:"right"}}
+                  <input type="number" inputMode="decimal" step="any" min="0" placeholder="kg"
+                    style={{width:90,padding:"10px 12px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:16,textAlign:"right"}}
                     value={editKgValues[i]!=null ? editKgValues[i] : ""} onChange={e=>setEditKgValues({...editKgValues,[i]:e.target.value})} />
                   <span style={{fontSize:12,color:"#79828B",width:24}}>kg</span>
                 </div>
               ))}
-              <button onClick={()=>{
+              <button disabled={cambiando} onClick={async ()=>{
                 const itemsActualizados = pedido.items.map((it,i)=>({
                   ...it, kgReal: editKgValues[i]!=null && editKgValues[i]!=="" ? parseFloat(editKgValues[i]) : null
                 }));
-                onCambiarEstado(pedido.id, pedido.estado, itemsActualizados);
-                setEditKgModal(false);
-              }} style={{width:"100%",padding:16,borderRadius:14,border:"none",background:"#2F6B4F",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer",marginTop:8}}>
-                ✓ Guardar kg
+                if (await cambiar(pedido.estado, itemsActualizados)) setEditKgModal(false);
+              }} style={{width:"100%",padding:16,borderRadius:14,border:"none",background:cambiando?"#A3ABB3":"#2F6B4F",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer",marginTop:8}}>
+                {cambiando ? "Guardando..." : "✓ Guardar kg"}
               </button>
             </div>
           </div>
@@ -128,23 +228,37 @@
       const [remitoPedido, setRemitoPedido] = useState(null);
       const lastSeen = getLastSeen();
 
+      const [errorCarga, setErrorCarga] = useState(false);
+
       async function cargar() {
-        const { db, collection, query, getDocs, orderBy } = fb();
-        const snap = await getDocs(query(collection(db,"pedidos"), orderBy("fechaPedido","desc")));
-        setPedidos(snap.docs.map(d=>({id:d.id,...d.data()})));
-        if(onRefreshParent) setTimeout(()=>onRefreshParent(), 800);
+        try {
+          const { db, collection, query, getDocs, orderBy } = fb();
+          const snap = await getDocs(query(collection(db,"pedidos"), orderBy("fechaPedido","desc")));
+          setPedidos(snap.docs.map(d=>({id:d.id,...d.data()})));
+          setErrorCarga(false);
+          if(onRefreshParent) setTimeout(()=>onRefreshParent(), 800);
+        } catch(e) {
+          console.error(e);
+          setErrorCarga(true);
+          SersaleUI.toast("No se pudieron cargar los pedidos.", { tipo: "error" });
+        }
       }
 
+      // Devuelve true si se guardó, false si no (ya se avisó por qué).
       async function cambiarEstado(id, nuevoEstado, itemsConKg=null) {
-        const { db, doc, updateDoc } = fb();
-        const pedido = pedidos.find(p=>p.id===id);
-        const upd = {
-          estado: nuevoEstado,
-          historial:[...(pedido.historial||[]),{estado:nuevoEstado,fecha:new Date().toISOString()}]
-        };
-        if(itemsConKg) upd.items = itemsConKg;
-        await updateDoc(doc(db,"pedidos",id), upd);
-        cargar();
+        const visto = (pedidos||[]).find(p=>p.id===id);
+        if (!visto) return false;
+        let r;
+        try {
+          r = await pedidoCambiarEstado(visto, nuevoEstado, itemsConKg);
+        } catch(e) {
+          console.error(e);
+          SersaleUI.toast("No se pudo guardar el cambio. Revisá la conexión y probá de nuevo.", { tipo: "error" });
+          return false;
+        }
+        if (!r.ok) SersaleUI.toast(r.motivo, { tipo: "info", ms: 7000 });
+        await cargar();
+        return r.ok;
       }
 
       useEffect(()=>{
@@ -155,7 +269,7 @@
       if (mostrarClientes) return <GestionClientes onBack={()=>setMostrarClientes(false)} />;
       if (mostrarProductos) return <GestionProductos onBack={()=>setMostrarProductos(false)} />;
       if (editandoPedido) return <EditarPedido pedido={editandoPedido} onBack={()=>setEditandoPedido(null)} onSaved={()=>{ setEditandoPedido(null); cargar(); }} />;
-      if (remitoPedido) return <RemitoPedido pedido={remitoPedido} onBack={()=>setRemitoPedido(null)} />;
+      if (remitoPedido) return <RemitoPedido pedido={remitoPedido} onBack={()=>{ setRemitoPedido(null); cargar(); }} />;
 
       const activos   = (pedidos||[]).filter(p=>!["despachado","cancelado"].includes(p.estado));
       const historial = (pedidos||[]).filter(p=>["despachado","cancelado"].includes(p.estado));
@@ -175,10 +289,19 @@
             ))}
           </div>
           <div style={{padding:16}}>
-            {pedidos===null ? <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>
-            : tab==="pedidos"
-              ? <ActivosFiltrados activos={activos} cambiarEstado={cambiarEstado} lastSeen={lastSeen} onEditar={setEditandoPedido} onRemito={setRemitoPedido} />
-              : <HistorialFiltrado historial={historial} cambiarEstado={cambiarEstado} />
+            {errorCarga && (
+              <div style={{background:"#F7EAEA",border:"1px solid #E3B9BC",borderRadius:12,padding:"12px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+                <span style={{flex:1,fontSize:13,color:"#7E1A20",fontWeight:600}}>No se pudieron cargar los pedidos.</span>
+                <button onClick={cargar} style={{padding:"10px 14px",minHeight:44,borderRadius:10,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer"}}>Reintentar</button>
+              </div>
+            )}
+            {pedidos===null ? (errorCarga ? null : <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>)
+            : <ComercialCtx.Provider value={{ onRemito: setRemitoPedido }}>
+                {tab==="pedidos"
+                  ? <ActivosFiltrados activos={activos} cambiarEstado={cambiarEstado} lastSeen={lastSeen} onEditar={setEditandoPedido} onRemito={setRemitoPedido} />
+                  : <HistorialFiltrado historial={historial} cambiarEstado={cambiarEstado} />
+                }
+              </ComercialCtx.Provider>
             }
           </div>
         </div>
@@ -192,10 +315,13 @@
       const [cuentaCorriente, setCuentaCorriente] = useState(!!pedido.cuentaCorriente);
       const [tipo, setTipo] = useState(pedido.tipo||"");
       const [entrega, setEntrega] = useState(pedido.fechaEntrega||"");
-      const [items, setItems] = useState(pedido.items.map(it=>({...it})));
+      const [items, setItems] = useState(()=>pedido.items.map(it=>({...it})));
       const [obsGeneral, setObsGeneral] = useState(pedido.obs||"");
-      const [guardando, setGuardando] = useState(false);
       const [clientesDB, setClientesDB] = useState([]);
+      // Filas que siguen siendo el mismo producto que cuando se abrió la pantalla:
+      // al guardar conservan los kg que haya cargado el depósito mientras tanto.
+      const sinTocar = React.useRef(null);
+      if (!sinTocar.current) sinTocar.current = new WeakSet(items);
 
       useEffect(()=>{
         async function cargarClientes() {
@@ -217,7 +343,15 @@
           return filaVacia ? [...prev.slice(0,-1), nueva] : [...prev, nueva];
         });
       }
-      const updItem = (i,f,v) => { const c=[...items]; c[i][f]=v; if(f==="categoria") c[i].producto=""; setItems(c); };
+      const updItem = (i,f,v) => {
+        const c=[...items];
+        // Otro producto en la misma fila: los kg pesados eran del producto anterior.
+        if((f==="producto"||f==="categoria") && c[i][f]!==v) {
+          sinTocar.current.delete(c[i]);
+          if(c[i].kgReal!=null) c[i].kgReal=null;
+        }
+        c[i][f]=v; if(f==="categoria") c[i].producto=""; setItems(c);
+      };
       const remItem = i => setItems(items.filter((_,idx)=>idx!==i));
 
       const todosClientes = [
@@ -231,26 +365,56 @@
       useEffect(()=>{
         if(!clienteEnLista) setClienteCustom(cliente);
       },[]);
+      // Los clientes llegan después del primer dibujo: si el del pedido está en la
+      // lista y nadie tocó el campo, se lo muestra elegido (no como "Otro" editable).
+      useEffect(()=>{
+        if(clienteSelect==="Otro" && clienteCustom===(pedido.cliente||"") && clientesDB.some(c=>c.nombre===pedido.cliente)) {
+          setClienteSelect(pedido.cliente);
+        }
+      },[clientesDB]);
 
-      async function guardar() {
+      const [guardar, guardando] = SersaleBase.useAccion(async () => {
+        const aviso = t => { SersaleUI.toast(t, { tipo: "error" }); };
         const nombreCliente = clienteSelect==="Otro" ? clienteCustom.trim() : clienteSelect;
-        if (!nombreCliente) return alert("Seleccioná o ingresá el cliente");
-        if (!tipo) return alert("Seleccioná si es envío o retiro");
-        if (!entrega) return alert("Ingresá la fecha de entrega");
+        if (!nombreCliente) return aviso("Seleccioná o ingresá el cliente");
+        if (!tipo) return aviso("Seleccioná si es envío o retiro");
+        if (!entrega) return aviso("Ingresá la fecha de entrega");
         const val = items.filter(it=>it.producto&&it.cantidad);
-        if (!val.length) return alert("Agregá al menos un producto");
-        setGuardando(true);
+        if (!val.length) return aviso("Agregá al menos un producto");
         try {
-          const { db, doc, updateDoc } = fb();
-          await updateDoc(doc(db,"pedidos",pedido.id), {
-            cliente: nombreCliente, cuentaCorriente, tipo,
-            fechaEntrega: entrega, items: val, obs: obsGeneral.trim(),
-            editadoEn: new Date().toISOString()
+          const { db, doc, runTransaction } = fb();
+          const ref = doc(db,"pedidos",pedido.id);
+          const editadoEn = new Date().toISOString();
+          const existe = await runTransaction(db, async tx => {
+            const snap = await tx.get(ref);
+            if (!snap.exists()) return false;
+            // Los kg los carga el depósito: se toman del pedido como está AHORA en
+            // la base, no de la copia con la que se abrió esta pantalla.
+            const frescos = snap.data().items || [];
+            const usados = new Set();
+            const finales = val.map(it => {
+              if (!sinTocar.current.has(it)) return it;
+              const j = frescos.findIndex((f,idx)=>!usados.has(idx) && f.producto===it.producto);
+              if (j===-1) return it;
+              usados.add(j);
+              return frescos[j].kgReal===undefined ? it : { ...it, kgReal: frescos[j].kgReal };
+            });
+            tx.update(ref, {
+              cliente: nombreCliente, cuentaCorriente, tipo,
+              fechaEntrega: entrega, items: finales, obs: obsGeneral.trim(),
+              editadoEn
+            });
+            return true;
           });
+          if (!existe) return aviso("Ese pedido ya no existe.");
+          await esperarCopiaLocal(ref, d => !!d && d.editadoEn === editadoEn);
+          SersaleUI.toast("Pedido actualizado", { tipo: "ok" });
           onSaved();
-        } catch(e) { alert("Error al guardar"); console.error(e); }
-        setGuardando(false);
-      }
+        } catch(e) {
+          console.error(e);
+          aviso("No se pudo guardar. Revisá la conexión y probá de nuevo.");
+        }
+      });
 
       return (
         <div className="crm-page">
@@ -312,7 +476,7 @@
                 )}
                 <div style={{display:"flex",gap:8}}>
                   <input style={{flex:1,padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
-                    type="number" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
+                    type="number" inputMode="decimal" step="any" min="0" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
                   <select style={{width:110,padding:"12px 10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
                     value={item.unidad} onChange={e=>updItem(i,"unidad",e.target.value)}>
                     {UNIDADES.map(u=><option key={u} value={u}>{u}</option>)}
@@ -338,12 +502,26 @@
     }
 
     // ── REMITO PEDIDO ───────────────────────────────────────
-    function RemitoPedido({ pedido, onBack }) {
+    // Remito ya emitido para un pedido (o null). Los remitos nuevos se guardan con
+    // id "ped_<id del pedido>"; los anteriores se encuentran por el campo pedidoId.
+    async function remitoDePedido(pedidoId) {
+      const { db, collection, getDocs, query, where } = fb();
+      const snap = await getDocs(query(collection(db,"remitos"), where("pedidoId","==",pedidoId)));
+      const lista = snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(Number(a.nro)||0)-(Number(b.nro)||0));
+      return lista[0] || null;
+    }
+
+    function RemitoPedido({ pedido: pedidoInicial, onBack }) {
       const { useState, useEffect } = React;
+      // El pedido se vuelve a leer al abrir: la lista de Comercial puede ser de hace horas.
+      const [pedido, setPedido] = useState(pedidoInicial);
       const [precios, setPrecios] = useState({});
       const [nroRemito, setNroRemito] = useState("");
-      const [guardando, setGuardando] = useState(false);
       const [guardado, setGuardado] = useState(false);
+      // Remito que ya tiene este pedido (emitido antes o recién guardado): { id, nro, fecha }
+      const [emitido, setEmitido] = useState(null);
+      const [resultadoCC, setResultadoCC] = useState(null);
+      const nro4 = n => String(n).padStart(4,"0");
 
       // Load saved prices for this client
       useEffect(()=>{
@@ -352,15 +530,11 @@
             const { db, collection, getDocs, query, where } = fb();
             // Try exact match first, then case-insensitive fallback
             let snap = await getDocs(query(collection(db,"precios_cliente"),
-              where("cliente","==",pedido.cliente)));
+              where("cliente","==",pedidoInicial.cliente)));
             if(snap.empty) {
-              // Case-insensitive fallback: fetch all and filter
+              // Sin coincidencia exacta: mismo nombre sin mirar mayúsculas ni acentos
               const snapAll = await getDocs(collection(db,"precios_cliente"));
-              const lower = pedido.cliente.toLowerCase().trim();
-              const matching = snapAll.docs.filter(d => {
-                const c = d.data().cliente;
-                return c && c.toLowerCase().trim() === lower;
-              });
+              const matching = snapAll.docs.filter(d => SersaleBase.mismoNombre(d.data().cliente, pedidoInicial.cliente));
               snap = { docs: matching, empty: matching.length === 0 };
             }
             const sorted = snap.docs.map(d=>({...(d.data ? d.data() : d)})).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
@@ -368,11 +542,11 @@
             sorted.forEach(data=>{
               if(!latest[data.producto]) latest[data.producto] = data.precio;
             });
-            setPrecios(latest);
-            if(Object.keys(latest).length > 0) console.log("[Remito] Precios cargados:", Object.keys(latest).length, "productos para", pedido.cliente);
+            // Lo que ya se haya escrito en pantalla manda sobre lo que llega después.
+            setPrecios(prev=>({...latest, ...prev}));
           } catch(e){ console.error("Error cargando precios:", e); }
         }
-        // Load next remito number from atomic counter
+        // Próximo número (solo para mostrar: el definitivo se toma al guardar)
         async function cargarNro() {
           try {
             const { db, doc, getDoc, setDoc, collection, getDocs } = fb();
@@ -380,193 +554,171 @@
             const counterRef = doc(db, "config", "contador_remitos");
             const counterSnap = await getDoc(counterRef);
             if(counterSnap.exists()) {
-              setNroRemito(String((counterSnap.data().ultimo||0)+1).padStart(4,"0"));
+              setNroRemito(nro4((counterSnap.data().ultimo||0)+1));
             } else {
               // First time: scan existing remitos to initialize counter
               const snap = await getDocs(collection(db,"remitos"));
               let maxNro = 0;
               snap.docs.forEach(d=>{ const n = d.data().nro||0; if(n>maxNro) maxNro=n; });
               await setDoc(counterRef, { ultimo: maxNro, updatedAt: new Date().toISOString() });
-              setNroRemito(String(maxNro+1).padStart(4,"0"));
+              setNroRemito(nro4(maxNro+1));
             }
-          } catch(e){ console.error("Error cargarNro:", e); setNroRemito("0001"); }
+          } catch(e){ console.error("Error cargarNro:", e); }
         }
-        if(window.__fbReady){ cargar(); cargarNro(); }
-        else document.addEventListener("fbReady",()=>{ cargar(); cargarNro(); });
+        // Pedido al día y remito ya emitido (si lo hay)
+        async function cargarPedidoYRemito() {
+          const { db, doc, getDoc } = fb();
+          try {
+            const snap = await getDoc(doc(db,"pedidos",pedidoInicial.id));
+            if(snap.exists()) setPedido({id:snap.id,...snap.data()});
+          } catch(e){ console.error("Error releyendo el pedido:", e); }
+          let previo = null;
+          try { previo = await remitoDePedido(pedidoInicial.id); } catch(e){ console.error("Error buscando remito:", e); }
+          if(previo) {
+            setEmitido({ id: previo.id, nro: previo.nro, fecha: previo.fecha });
+            setNroRemito(nro4(previo.nro));
+            // Se muestran los precios con los que se emitió
+            const usados = {};
+            (previo.items||[]).forEach(it=>{ if(it.precio>0) usados[it.producto] = it.precio; });
+            setPrecios(prev=>({...prev, ...usados}));
+          } else {
+            await cargarNro();
+          }
+        }
+        function iniciar(){ cargar(); cargarPedidoYRemito(); }
+        if(window.__fbReady) iniciar();
+        else document.addEventListener("fbReady", iniciar, { once: true });
       },[]);
 
-      async function guardarRemito() {
-        setGuardando(true);
-        try {
-          const { db, collection, addDoc, getDocs, query, orderBy, where, doc, getDoc, updateDoc, setDoc, increment } = fb();
-          // Atomically reserve the next remito number
-          let nroFinal = parseInt(nroRemito)||0;
-          try {
-            const counterRef = doc(db, "config", "contador_remitos");
-            const counterSnap = await getDoc(counterRef);
-            if(counterSnap.exists()) {
-              nroFinal = (counterSnap.data().ultimo||0) + 1;
-              await updateDoc(counterRef, { ultimo: nroFinal, updatedAt: new Date().toISOString() });
-            } else {
-              await setDoc(counterRef, { ultimo: nroFinal, updatedAt: new Date().toISOString() });
-            }
-            setNroRemito(String(nroFinal).padStart(4,"0"));
-          } catch(e) { console.error("Error reservando nro remito:", e); }
-          // Save remito
-          await addDoc(collection(db,"remitos"), {
-            nro: nroFinal,
-            pedidoId: pedido.id,
-            cliente: pedido.cliente,
-            fecha: new Date().toISOString().split("T")[0],
-            items: pedido.items.map(it=>({
-              producto: it.producto,
-              kg: it.kgReal||it.cantidad||0,
-              unidad: it.unidad,
-              precio: parseFloat(precios[it.producto])||0,
-              total: (it.kgReal||parseFloat(it.cantidad)||0) * (parseFloat(precios[it.producto])||0)
-            })),
-            total: pedido.items.reduce((s,it)=>{
-              const kg = it.kgReal||parseFloat(it.cantidad)||0;
-              const p = parseFloat(precios[it.producto])||0;
-              return s + kg*p;
-            },0),
-            createdAt: new Date().toISOString()
-          });
-          // Save prices per client
-          for(const it of pedido.items) {
-            const p = parseFloat(precios[it.producto]);
-            if(p>0) {
-              await addDoc(collection(db,"precios_cliente"), {
-                cliente: pedido.cliente,
-                producto: it.producto,
-                precio: p,
-                fecha: new Date().toISOString()
-              });
-            }
-          }
-          // ── Actualizar CC con el total real del remito ──
-          // Check both pedido flag AND if client has CC account
-          // Check CC: exact match first, then case-insensitive
-          let ccDocId = null;
-          const clienteTieneCC = pedido.cuentaCorriente || await (async()=>{
-            try {
-              const snapCC2 = await getDocs(collection(db,"cuentas_corrientes"));
-              const lower = pedido.cliente.toLowerCase().trim();
-              const match = snapCC2.docs.find(d => {
-                const n = d.data().nombre;
-                return n && n.toLowerCase().trim() === lower;
-              });
-              if(match) { ccDocId = match.id; return true; }
-              return false;
-            } catch(e){ return false; }
-          })();
-          if(clienteTieneCC) {
-            try {
-              const montoRemito = pedido.items.reduce((s,it)=>{
-                const kg = it.kgReal||parseFloat(it.cantidad)||0;
-                const p = parseFloat(precios[it.producto])||0;
-                return s + kg*p;
-              },0);
-              const montoFinal = Math.round(montoRemito);
-              const hoyStr = new Date().toISOString().split("T")[0];
-              const productos = pedido.items.map(it=>it.producto).join(", ");
-              
-              // Buscar placeholder cc_movimiento (case-insensitive)
-              const lower3 = pedido.cliente.toLowerCase().trim();
-              const snapAllCC = await getDocs(collection(db,"cc_movimientos"));
-              let movExistente = null;
-              snapAllCC.docs.forEach(d => {
-                const m = d.data();
-                if(m.cliente && m.cliente.toLowerCase().trim() === lower3 
-                   && m.origen === "pedido_app" 
-                   && m.fecha === pedido.fechaEntrega 
-                   && m.monto === 0) {
-                  movExistente = d;
-                }
-              });
-              
-              if(movExistente && montoFinal > 0) {
-                // Actualizar el movimiento placeholder con el monto real
-                await updateDoc(doc(db,"cc_movimientos",movExistente.id), {
-                  monto: montoFinal,
-                  movimiento: montoFinal,
-                  detalle: productos,
-                  obs: "Remito N° "+String(nroFinal).padStart(4,"0"),
-                  remitoNro: nroFinal,
-                  updatedAt: new Date().toISOString()
-                });
-                console.log("[Remito] CC movimiento actualizado:", montoFinal);
-              } else if(montoFinal > 0) {
-                // Crear nuevo movimiento CC (no habia placeholder)
-                await addDoc(collection(db,"cc_movimientos"), {
-                  cliente: pedido.cliente,
-                  tipo: "pedido",
-                  monto: montoFinal,
-                  movimiento: montoFinal,
-                  fecha: pedido.fechaEntrega || hoyStr,
-                  detalle: productos,
-                  obs: "Remito N° "+String(nroFinal).padStart(4,"0"),
-                  origen: "remito",
-                  remitoNro: nroFinal,
-                  createdAt: new Date().toISOString()
-                });
-                console.log("[Remito] CC movimiento creado:", montoFinal);
-              }
-              
-              // Recalcular saldo total del cliente (case-insensitive)
-              if(montoFinal > 0) {
-                const lower2 = pedido.cliente.toLowerCase().trim();
-                const snapAllMovs = await getDocs(collection(db,"cc_movimientos"));
-                let saldo = 0;
-                snapAllMovs.docs.forEach(d => {
-                  const m = d.data();
-                  if(m.cliente && m.cliente.toLowerCase().trim() === lower2) {
-                    saldo += m.tipo === "pedido" ? (m.monto||0) : -(m.monto||0);
-                  }
-                });
-                // Find CC account (use ccDocId if already found, otherwise search)
-                if(ccDocId) {
-                  await updateDoc(doc(db,"cuentas_corrientes",ccDocId), {
-                    saldo: Math.round(saldo),
-                    ultimoMovimiento: hoyStr
-                  });
-                  console.log("[Remito] CC saldo actualizado:", saldo);
-                } else {
-                  const snapCC3 = await getDocs(collection(db,"cuentas_corrientes"));
-                  const ccMatch = snapCC3.docs.find(d => {
-                    const n = d.data().nombre;
-                    return n && n.toLowerCase().trim() === lower2;
-                  });
-                  if(ccMatch) {
-                    await updateDoc(doc(db,"cuentas_corrientes",ccMatch.id), {
-                      saldo: Math.round(saldo),
-                      ultimoMovimiento: hoyStr
-                    });
-                    console.log("[Remito] CC saldo actualizado:", saldo);
-                  } else {
-                    console.warn("[Remito] CC account not found for:", pedido.cliente);
-                  }
-                }
-              }
-            } catch(e) { console.error("[Remito] Error actualizando CC:", e); }
-          }
-          
-          setGuardado(true);
-          // Number already reserved atomically above
-          setNroRemito(String(nroFinal+1).padStart(4,"0"));
-        } catch(e){ alert("Error al guardar"); console.error(e); }
-        setGuardando(false);
-      }
+      // Filas del remito: la MISMA cuenta para la pantalla, el PDF, el remito guardado y la cuenta corriente.
+      const filas = pedido.items.map(it=>{
+        const kg = kgFacturables(it);
+        const precio = parseFloat(precios[it.producto])||0;
+        return { producto: it.producto, unidad: it.unidad, kg, precio, total: SersaleBase.redondear(kg*precio, 2), pesado: it.kgReal!=null && it.kgReal!=="", cantidad: it.cantidad };
+      });
+      const totalRemito = SersaleBase.redondear(filas.reduce((s,f)=>s+f.total,0), 2);
 
-      const totalRemito = pedido.items.reduce((s,it)=>{
-        const kg = it.kgReal!=null ? it.kgReal : parseFloat(it.cantidad)||0;
-        const p = parseFloat(precios[it.producto])||0;
-        return s + kg*p;
-      },0);
+      const [guardarRemito, guardando] = SersaleBase.useAccion(async () => {
+        try {
+          const { db, collection, doc, getDoc, getDocs, runTransaction } = fb();
+          const hoyStr = SersaleBase.hoy();
+          const ahora = new Date().toISOString();
+          const montoFinal = Math.round(totalRemito);
+          const productos = pedido.items.map(it=>it.producto).join(", ");
+
+          // ── Lecturas previas ──
+          const previo = await remitoDePedido(pedido.id);
+          const remitoRef = doc(db,"remitos", previo ? previo.id : "ped_"+pedido.id);
+          const pedidoRef = doc(db,"pedidos",pedido.id);
+          const counterRef = doc(db,"config","contador_remitos");
+          // Sin contador (primera vez o no se pudo leer): se parte del mayor número emitido.
+          let maxNro = 0;
+          if(!previo && !(await getDoc(counterRef)).exists()) {
+            const todos = await getDocs(collection(db,"remitos"));
+            todos.docs.forEach(d=>{ const n = Number(d.data().nro)||0; if(n>maxNro) maxNro=n; });
+          }
+          // Cuenta corriente: si el pedido está marcado o el cliente tiene cuenta.
+          const cuenta = await ccBuscarCuenta(pedido.cliente);
+          let asiento = null, movPrevio = null;
+          if(pedido.cuentaCorriente || cuenta) {
+            const movs = await ccMovimientosDe(pedido.cliente, cuenta);
+            movPrevio = ccMovimientoDePedido(movs, pedido, previo ? previo.nro : null);
+            // Sin importe y sin cargo anterior que corregir: el "Pendiente de facturar" queda como está.
+            const hayCargoPrevio = !!(movPrevio && (Number(movPrevio.monto)||0) > 0);
+            if(montoFinal > 0 || hayCargoPrevio) {
+              asiento = await ccPrepararAsiento({
+                cliente: pedido.cliente, cuenta, movs,
+                movId: movPrevio ? movPrevio.id : "remito_"+pedido.id,
+                abrirCuenta: true, ultimoMovimiento: hoyStr
+              });
+            }
+          }
+
+          // ── Todo junto: número, remito, precios, movimiento y saldo (o nada) ──
+          const res = await runTransaction(db, async tx => {
+            const pedSnap = await tx.get(pedidoRef);
+            const remSnap = await tx.get(remitoRef);
+            const cntSnap = await tx.get(counterRef);
+            if(asiento) { asiento.marca = null; await ccLeerAsiento(tx, asiento); }
+
+            // Si el depósito cambió kg o productos después de abrir esta pantalla, no se factura lo viejo.
+            if(pedSnap.exists() && firmaItemsPedido(pedSnap.data().items) !== firmaItemsPedido(pedido.items)) {
+              return { cambio: { id: pedSnap.id, ...pedSnap.data() } };
+            }
+
+            const yaEmitido = remSnap.exists();
+            const anterior = yaEmitido ? remSnap.data() : null;
+            const nro = yaEmitido ? anterior.nro
+              : cntSnap.exists() ? (Number(cntSnap.data().ultimo)||0) + 1
+              : maxNro + 1;
+            const items = filas.map((f,i)=>({
+              producto: f.producto,
+              kg: f.pesado ? f.kg : (pedido.items[i].cantidad||0),
+              unidad: f.unidad,
+              precio: f.precio,
+              total: f.total
+            }));
+            const datos = {
+              nro, pedidoId: pedido.id, cliente: pedido.cliente,
+              fecha: yaEmitido && anterior.fecha ? anterior.fecha : hoyStr,
+              fechaEntrega: pedido.fechaEntrega||"", tipo: pedido.tipo||"",
+              items, total: totalRemito
+            };
+            if(yaEmitido) tx.update(remitoRef, { ...datos, updatedAt: ahora });
+            else {
+              tx.set(remitoRef, { ...datos, createdAt: ahora });
+              if(cntSnap.exists()) tx.update(counterRef, { ultimo: nro, updatedAt: ahora });
+              else tx.set(counterRef, { ultimo: nro, updatedAt: ahora });
+            }
+            // Precios del cliente (al corregir un remito, solo los que cambiaron)
+            const antes = {};
+            if(anterior) (anterior.items||[]).forEach(it=>{ antes[it.producto] = it.precio; });
+            const vistos = new Set();
+            filas.forEach(f=>{
+              if(!(f.precio>0) || vistos.has(f.producto) || antes[f.producto]===f.precio) return;
+              vistos.add(f.producto);
+              tx.set(doc(collection(db,"precios_cliente")), { cliente: pedido.cliente, producto: f.producto, precio: f.precio, fecha: ahora });
+            });
+            // Cuenta corriente: el cargo de este pedido queda en el total del remito
+            let cc = null;
+            if(asiento) {
+              const datosMov = {
+                tipo: "pedido", monto: montoFinal, detalle: productos,
+                obs: "Remito N° "+nro4(nro), remitoNro: nro, pedidoId: pedido.id
+              };
+              if(!movPrevio) { datosMov.fecha = pedido.fechaEntrega || hoyStr; datosMov.origen = "remito"; }
+              cc = ccEscribirAsiento(tx, asiento, datosMov);
+            }
+            return { nro, fecha: datos.fecha, cc, corregido: yaEmitido };
+          });
+
+          // Que lo que se lea después (lista, cuenta corriente) ya traiga el remito
+          if(!res.cambio) {
+            await esperarCopiaLocal(remitoRef, d => !!d && (d.createdAt === ahora || d.updatedAt === ahora));
+            await ccEsperarAsiento(asiento);
+          }
+          if(res.cambio) {
+            setPedido(res.cambio);
+            SersaleUI.toast("El pedido cambió desde otro teléfono (kg o productos). Revisá los importes y guardá de nuevo.", { tipo: "info", ms: 8000 });
+            return;
+          }
+          setEmitido({ id: remitoRef.id, nro: res.nro, fecha: res.fecha });
+          setNroRemito(nro4(res.nro));
+          setResultadoCC(res.cc && res.cc.asentado ? res.cc : null);
+          setGuardado(true);
+          SersaleUI.toast((res.corregido ? "Remito N° "+nro4(res.nro)+" corregido" : "Remito N° "+nro4(res.nro)+" guardado"), { tipo: "ok" });
+        } catch(e){
+          console.error(e);
+          SersaleUI.toast("No se pudo guardar el remito. Revisá la conexión y probá de nuevo.", { tipo: "error" });
+        }
+      });
 
       const fmt$ = n => n.toLocaleString("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:2});
+      // Fecha del remito: la de emisión si ya está guardado; si no, hoy.
+      const fechaRemito = SersaleBase.fmtFecha(emitido && emitido.fecha ? emitido.fecha : SersaleBase.hoy());
 
       function imprimir() {
+        if(!nroRemito) { SersaleUI.toast("Todavía no se pudo obtener el número de remito. Guardá primero.", { tipo: "error" }); return; }
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ unit: 'mm', format: 'a4' });
         const W = doc.internal.pageSize.getWidth();
@@ -605,7 +757,7 @@
         y += 4;
         doc.setFontSize(10); doc.setTextColor(30); doc.setFont(undefined,'bold');
         doc.text(pedido.cliente || '-', margin, y);
-        doc.text(new Date().toLocaleDateString('es-AR'), margin + pw/2, y);
+        doc.text(fechaRemito, margin + pw/2, y);
         y += 5;
         doc.setFontSize(7); doc.setTextColor(150); doc.setFont(undefined,'normal');
         doc.text('FECHA DE ENTREGA', margin, y);
@@ -631,12 +783,13 @@
         
         // Table rows
         doc.setFont(undefined,'normal'); doc.setTextColor(50);
-        var totalRemito2 = 0;
-        pedido.items.forEach(function(it) {
-          var kg = it.kgReal != null ? it.kgReal : parseFloat(it.cantidad) || 0;
-          var p = parseFloat(precios[it.producto]) || 0;
-          var tot = kg * p;
-          totalRemito2 += tot;
+        filas.forEach(function(it) {
+          var kg = it.kg;
+          var p = it.precio;
+          var tot = it.total;
+          // Remito largo: sigue en otra hoja en vez de salirse del papel
+          if (y > 272) { doc.addPage(); y = 20; }
+          doc.setTextColor(50);
           doc.setFontSize(9); doc.setFont(undefined,'normal');
           doc.text(it.producto || '', colX[0] + 2, y + 4);
           doc.text(String(kg), colX[1] + colW2[1]/2, y + 4, { align: 'center' });
@@ -649,15 +802,16 @@
         });
         
         // Total
+        if (y > 280) { doc.addPage(); y = 20; }
         doc.setDrawColor(192,34,43); doc.setLineWidth(0.5);
         doc.line(margin, y, W - margin, y);
         y += 2;
         doc.setFontSize(11); doc.setTextColor(192,34,43); doc.setFont(undefined,'bold');
         doc.text('TOTAL', colX[2] + colW2[2]/2, y + 5, { align: 'center' });
-        doc.text(fmt$(totalRemito2), colX[3] + colW2[3] - 2, y + 5, { align: 'right' });
+        doc.text(fmt$(totalRemito), colX[3] + colW2[3] - 2, y + 5, { align: 'right' });
         
         // Save as blob for sharing
-        var fileName = 'Remito ' + nroRemito + ' - ' + (pedido.cliente||'Cliente') + ' - ' + new Date().toLocaleDateString('es-AR').replace(/\//g,'-') + '.pdf';
+        var fileName ='Remito ' + nroRemito + ' - ' + String(pedido.cliente||'Cliente').replace(/[\\/:*?"<>|]/g,' ') + ' - ' + fechaRemito.replace(/\//g,'-') + '.pdf';
         window.compartirOdescargarPDF(doc, fileName);
       }
 
@@ -672,9 +826,14 @@
             {/* Nro remito */}
             <div style={{background:"#fff",borderRadius:14,border:"1px solid var(--borde)",boxShadow:"var(--sombra)",padding:16,marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
               <span style={{fontWeight:600,fontSize:13,color:"#3A424A"}}>N° Remito</span>
-              <input style={{flex:1,padding:"10px 14px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:18,fontWeight:700,textAlign:"center"}}
-                value={nroRemito} onChange={e=>setNroRemito(e.target.value)} />
+              <input readOnly aria-label="Número de remito" style={{flex:1,padding:"10px 14px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:18,fontWeight:700,textAlign:"center",background:"#F7F8F9",color:"#262C32"}}
+                value={nroRemito} />
             </div>
+            {emitido && !guardado && (
+              <div data-aviso="remito-emitido" style={{background:"#F5EEF8",border:"1px solid #D9C7E6",borderRadius:12,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#4A3566",fontWeight:600}}>
+                Este pedido ya tiene el Remito N° {nro4(emitido.nro)}. Si guardás, se corrige ese remito y su cargo en la cuenta corriente: no se crea otro.
+              </div>
+            )}
 
             {/* Info cliente */}
             <div style={{background:"#fff",borderRadius:14,border:"1px solid var(--borde)",boxShadow:"var(--sombra)",padding:14,marginBottom:16}}>
@@ -687,10 +846,10 @@
 
             {/* Items con precio */}
             <p style={{fontWeight:700,fontSize:13,color:"#5C666F",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Ítems del pedido</p>
-            {pedido.items.map((it,i)=>{
-              const kg = it.kgReal!=null ? it.kgReal : parseFloat(it.cantidad)||0;
-              const p = parseFloat(precios[it.producto])||0;
-              const tot = kg*p;
+            {filas.map((it,i)=>{
+              const kg = it.kg;
+              const p = it.precio;
+              const tot = it.total;
               return (
                 <div key={i} style={{background:"#fff",borderRadius:14,border:"1px solid var(--borde)",boxShadow:"var(--sombra)",padding:14,marginBottom:10}}>
                   <div style={{fontWeight:600,fontSize:14,marginBottom:10}}>{it.producto}</div>
@@ -703,7 +862,7 @@
                       <div style={{fontSize:11,color:"#79828B",marginBottom:4}}>Precio / kg</div>
                       <InputMonto placeholder="$ / kg"
                         style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:15,fontWeight:700,textAlign:"right"}}
-                        value={precios[it.producto]||""} onChange={v=>setPrecios({...precios,[it.producto]:v})} />
+                        value={precios[it.producto]||""} onChange={v=>{ setPrecios({...precios,[it.producto]:v}); setGuardado(false); }} />
                     </div>
                   </div>
                   {p>0 && (
@@ -733,6 +892,11 @@
               </button>
             </div>
             {guardado && <p style={{textAlign:"center",fontSize:12,color:"#2F6B4F",fontWeight:600}}>✓ Remito guardado y precios actualizados para {pedido.cliente}</p>}
+            {guardado && resultadoCC && (
+              <p data-aviso="remito-cc" style={{textAlign:"center",fontSize:12,color:"#6B4E8E",fontWeight:600,marginTop:6}}>
+                💳 {resultadoCC.cuentaAbierta ? "Se abrió la cuenta corriente y se cargó el remito. " : "Cargado en cuenta corriente. "}Saldo: {ccFmtSaldo(resultadoCC.saldo)}
+              </p>
+            )}
           </div>
         </div>
       );
