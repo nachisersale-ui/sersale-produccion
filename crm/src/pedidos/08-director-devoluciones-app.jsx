@@ -1,3 +1,17 @@
+    // ── AYUDAS DEL PANEL DEL DIRECTOR ───────────────────────
+    // Día (AAAA-MM-DD, Buenos Aires) de un pedido: el de entrega; si falta, el de carga.
+    function p8DiaDePedido(p) {
+      if (!p) return "";
+      return ccDia(p.fechaEntrega) || SersaleBase.diaDe(p.fechaPedidoISO) || SersaleBase.diaDe(p.fechaPedido)
+        || ccDia(p.fecha) || SersaleBase.diaDe(p.createdAt) || "";
+    }
+    // Momento de carga de un pedido (ms), para ordenar listas; si falta, su día de entrega.
+    function p8MomentoPedido(p) {
+      const f = SersaleBase.aFecha(p.fechaPedidoISO) || SersaleBase.aFecha(p.fechaPedido) || SersaleBase.aFecha(p.fechaEntrega);
+      return f ? f.getTime() : 0;
+    }
+    const p8OrdenNombres = (a, b) => String(a).localeCompare(String(b), "es", { sensitivity: "base" });
+
         function VistaDirector({ onBack }) {
       const [pedidos, setPedidos] = useState(null);
       const [tab, setTab] = useState("resumen");
@@ -11,7 +25,17 @@
       const [ccRefresh, setCcRefresh] = useState(0);
       const [busqueda, setBusqueda] = useState("");
       const [busquedaCliente, setBusquedaCliente] = useState("");
-      const [ventaRapidaOpen, setVentaRapidaOpen] = useState(()=>new URLSearchParams(window.location.search).get('vr')==='1');
+      const [ventaRapidaOpen, setVentaRapidaOpen] = useState(()=>{
+        const pedida = new URLSearchParams(window.location.search).get('vr')==='1';
+        // El pedido de abrirla vale una sola vez: si quedaba en la dirección, la venta
+        // rápida se abría sola cada vez que se volvía a entrar al panel o se recargaba.
+        if (pedida) { try { window.history.replaceState(window.history.state, "", window.location.pathname); } catch(e) {} }
+        return pedida;
+      });
+      const [errorCarga, setErrorCarga] = useState(false);
+      // Cada carga lleva su número: la respuesta de una carga vieja (o de una pantalla
+      // que ya se cerró) no pisa a la más nueva.
+      const tandaCarga = React.useRef(0);
 
       // Botón flotante ⚡ via DOM (evita conflicto JSX con IIFEs en tabs)
       useEffect(()=>{
@@ -34,68 +58,96 @@
       const lastSeen = getLastSeen();
 
       async function cargar() {
-        const { db, collection, getDocs } = fb();
-        const snap = await getDocs(collection(db,"pedidos"));
-        const todos = snap.docs.map(d=>({id:d.id,...d.data()}));
+        const tanda = ++tandaCarga.current;
+        let todos;
+        try {
+          const { db, collection, getDocs } = fb();
+          const snap = await getDocs(collection(db,"pedidos"));
+          todos = snap.docs.map(d=>({id:d.id,...d.data()}));
+        } catch(e) {
+          // Antes el error se perdía y la pantalla quedaba en "Cargando..." para siempre
+          console.error(e);
+          if (tanda === tandaCarga.current) {
+            setErrorCarga(true);
+            SersaleUI.toast("No se pudieron cargar los pedidos. Revisá la conexión y probá de nuevo.", { tipo: "error" });
+          }
+          return;
+        }
+        if (tanda !== tandaCarga.current) return;
+        setErrorCarga(false);
         // Don't setPedidos here - calcularAlertas will do it with combined data
-        await calcularAlertas(todos);
+        await calcularAlertas(todos, tanda);
       }
 
-      async function calcularAlertas(todosPedidosCached) {
+      async function calcularAlertas(todosPedidosCached, tanda) {
+        const vigente = () => tanda === tandaCarga.current;
         try {
-          const { db, collection, getDocs, query, orderBy } = fb();
-          // Use the already-fetched pedidos from cargar()
-          const todosPedidos = [...(todosPedidosCached || [])];
-          console.log("[Alertas] Pedidos received:", todosPedidos.length);
-          // Build case-insensitive client name map
-          const clienteNormalizado = {}; // lowercase -> canonical name
+          const { db, collection, getDocs } = fb();
+          // Un cliente es el mismo aunque cambien mayúsculas, acentos o espacios de más
+          // (la misma regla que cuentas corrientes). Se muestra con el nombre de su
+          // ficha; si no tiene ficha, con el primero que aparezca.
+          const clienteNormalizado = {}; // nombre normalizado -> nombre a mostrar
           function normCliente(nombre) {
             if(!nombre) return nombre;
-            const lower = nombre.toLowerCase().trim();
-            if(!clienteNormalizado[lower]) clienteNormalizado[lower] = nombre;
-            return clienteNormalizado[lower];
+            const clave = SersaleBase.norm(nombre);
+            if(!clave) return nombre;
+            if(!clienteNormalizado[clave]) clienteNormalizado[clave] = nombre;
+            return clienteNormalizado[clave];
           }
+          // Fichas primero: sus nombres son los que mandan.
+          let fichas = [], errorFichas = null;
+          try {
+            const snapCli = await getDocs(collection(db,"clientes"));
+            fichas = snapCli.docs.map(d => ({ id: d.id, data: d.data() }));
+          } catch(e) { errorFichas = e; }
+          const configCli = {};
+          fichas.forEach(({ id, data }) => {
+            if(!data.nombre) return;
+            const nombre = normCliente(data.nombre);
+            if(!configCli[nombre]) {
+              configCli[nombre] = {
+                diasAlerta: data.diasAlerta || 14,
+                telefono: data.telefono || "",
+                id,
+                ultimoContacto: data.ultimoContacto || null,
+                ultimoPedidoRegistrado: data.ultimoPedidoRegistrado || null,
+                // Lo que ya está guardado, para no volver a escribirlo si no cambió
+                _diasGuardado: data.diasAlerta,
+                _freqGuardada: data.freqCalculada
+              };
+            }
+          });
+          // Pedidos con el nombre ya unificado (copias: no se toca lo que vino de la base)
+          const todosPedidos = (todosPedidosCached || []).map(p => p.cliente ? { ...p, cliente: normCliente(p.cliente) } : p);
+          const idsPedidos = new Set(todosPedidos.map(p => p.id));
+          const diasConPedido = new Set(todosPedidos.map(p => p.cliente + "|" + p.fechaEntrega));
           // Also check ALL cc_movimientos as evidence of client activity
           // Use a separate map to collect additional dates per client from CC
           const ccFechasPorCliente = {};
           try {
             const snapCC = await getDocs(collection(db,"cc_movimientos"));
-            console.log("[Alertas] CC movimientos:", snapCC.docs.length);
             snapCC.docs.forEach(d => {
               const m = d.data();
               if(!m.cliente) return;
-              m.cliente = normCliente(m.cliente); // normalize name
-              // Handle fecha as string, Timestamp, or object with .seconds
-              let fechaCorta = null;
-              try {
-                if(m.fecha && typeof m.fecha === "string") {
-                  fechaCorta = m.fecha.substring(0,10);
-                } else if(m.fecha && typeof m.fecha === "object" && m.fecha.toDate) {
-                  fechaCorta = m.fecha.toDate().toISOString().substring(0,10);
-                } else if(m.fecha && typeof m.fecha === "object" && m.fecha.seconds) {
-                  fechaCorta = new Date(m.fecha.seconds*1000).toISOString().substring(0,10);
-                } else if(m.createdAt && typeof m.createdAt === "string") {
-                  fechaCorta = m.createdAt.substring(0,10);
-                } else if(m.createdAt && typeof m.createdAt === "object" && m.createdAt.toDate) {
-                  fechaCorta = m.createdAt.toDate().toISOString().substring(0,10);
-                } else if(m.createdAt && typeof m.createdAt === "object" && m.createdAt.seconds) {
-                  fechaCorta = new Date(m.createdAt.seconds*1000).toISOString().substring(0,10);
-                }
-              } catch(e) { /* skip this record */ }
+              const cliente = normCliente(m.cliente);
+              // Día del movimiento en Buenos Aires: su `fecha` (texto o Timestamp) o, si falta, cuándo se cargó
+              const fechaCorta = ccDia(m.fecha) || SersaleBase.diaDe(m.createdAt);
               if(!fechaCorta) return;
               // Track ALL CC activity dates per client (pedidos AND pagos = client is active)
-              if(!ccFechasPorCliente[m.cliente]) ccFechasPorCliente[m.cliente] = new Set();
-              ccFechasPorCliente[m.cliente].add(fechaCorta);
+              if(!ccFechasPorCliente[cliente]) ccFechasPorCliente[cliente] = new Set();
+              ccFechasPorCliente[cliente].add(fechaCorta);
               // Only create virtual pedido entries for tipo="pedido" (actual sales)
               if(m.tipo === "pedido") {
-                const yaExiste = todosPedidos.some(p => 
-                  p.cliente === m.cliente && p.fechaEntrega === fechaCorta
-                );
+                // ¿Ya está el pedido de este cargo? Primero por su id (el remito y la venta
+                // rápida lo guardan en el movimiento); si no lo trae, por cliente y día.
+                const yaExiste = (!!m.pedidoId && idsPedidos.has(m.pedidoId)) || diasConPedido.has(cliente + "|" + fechaCorta);
                 if(!yaExiste) {
+                  diasConPedido.add(cliente + "|" + fechaCorta);
                   todosPedidos.push({
-                    id: "cc_"+d.id, cliente: m.cliente, tipo: "retiro",
+                    id: "cc_"+d.id, cliente, tipo: "retiro",
                     fechaEntrega: fechaCorta,
-                    fechaPedidoISO: m.createdAt || fechaCorta+"T12:00:00.000Z",
+                    // siempre texto: un Timestamp acá rompía la marca NUEVO y la hora de la tarjeta
+                    fechaPedidoISO: ccTextoISO(m.createdAt) || fechaCorta+"T12:00:00.000Z",
                     items: m.items || [{producto: m.detalle||"Movimiento CC", cantidad:0}],
                     estado: "despachado", origen: m.origen || "cc_movimiento",
                     obs: m.detalle || ""
@@ -104,98 +156,36 @@
               }
             });
           } catch(e) { console.error("Error reading cc_movimientos:", e); }
-          console.log("[Alertas] Total pedidos+CC:", todosPedidos.length);
-          console.log("[Alertas] Clients with CC activity:", Object.keys(ccFechasPorCliente).length);
+          if(!vigente()) return;
           // Update local state with combined data
           setPedidos(todosPedidos);
-          const snapCli = await getDocs(collection(db,"clientes"));
-          const configCli = {};
-          snapCli.docs.forEach(d => {
-            const data = d.data();
-            const nombre = normCliente(data.nombre);
-            if(!configCli[nombre]) {
-              configCli[nombre] = { 
-                diasAlerta: data.diasAlerta || 14, 
-                telefono: data.telefono || "", 
-                id: d.id,
-                ultimoContacto: data.ultimoContacto || null,
-                ultimoPedidoRegistrado: data.ultimoPedidoRegistrado || null
-              };
-            }
-          });
+          if(errorFichas) throw errorFichas;
           // Ensure all clients with pedidos exist in configCli
           // (some may have pedidos but no entry in clientes collection)
-          const allClientsFromPedidos = [...new Set(todosPedidos.filter(p=>p.cliente && p.estado!=="cancelado").map(p=>p.cliente))];
-          const missingClients = [];
-          allClientsFromPedidos.forEach(nombre => {
-            if(!configCli[nombre]) {
-              configCli[nombre] = { diasAlerta: 14, telefono: "", id: null };
-              missingClients.push(nombre);
-            }
+          todosPedidos.forEach(p => {
+            if(p.cliente && p.estado!=="cancelado" && !configCli[p.cliente]) configCli[p.cliente] = { diasAlerta: 14, telefono: "", id: null };
           });
-          if(missingClients.length > 0) console.log("[Alertas] Clients with pedidos but no clientes doc:", missingClients.length);
           // Build per-client history: find ultimo pedido using ALL date sources
           const ultimoPedido = {};
           const historialClientes = {};
-          let skippedNoDates = 0;
           todosPedidos.filter(p=>p.estado!=="cancelado" && p.cliente).forEach(p => {
-            p.cliente = normCliente(p.cliente); // normalize name
-            // Normalize: try every possible date source (most reliable first)
-            let fp = "";
-            try {
-              // 1. fechaEntrega is most reliable (always YYYY-MM-DD string)
-              if(p.fechaEntrega && typeof p.fechaEntrega === "string" && p.fechaEntrega.length >= 10) {
-                fp = p.fechaEntrega.substring(0,10) + "T12:00:00.000Z";
-              }
-              // 2. fechaPedidoISO (ISO string from new Date().toISOString())
-              else if(p.fechaPedidoISO && typeof p.fechaPedidoISO === "string") {
-                fp = p.fechaPedidoISO;
-              }
-              // 3. fechaPedido as Firestore Timestamp with toDate()
-              else if(p.fechaPedido && typeof p.fechaPedido === "object" && p.fechaPedido.toDate) {
-                fp = p.fechaPedido.toDate().toISOString();
-              }
-              // 4. fechaPedido as object with .seconds (serialized Timestamp)
-              else if(p.fechaPedido && typeof p.fechaPedido === "object" && p.fechaPedido.seconds) {
-                fp = new Date(p.fechaPedido.seconds * 1000).toISOString();
-              }
-              // 5. fechaPedido as string
-              else if(p.fechaPedido && typeof p.fechaPedido === "string") {
-                fp = p.fechaPedido.length === 10 ? p.fechaPedido + "T12:00:00.000Z" : p.fechaPedido;
-              }
-              // 6. fecha field (from CC movements)
-              else if(p.fecha && typeof p.fecha === "string") {
-                fp = p.fecha.length === 10 ? p.fecha + "T12:00:00.000Z" : p.fecha;
-              }
-              // 7. createdAt as last resort
-              else if(p.createdAt && typeof p.createdAt === "string") {
-                fp = p.createdAt;
-              }
-            } catch(e) { fp = ""; }
-            if(!fp) { skippedNoDates++; return; }
+            const dia = p8DiaDePedido(p);
+            if(!dia) return;
+            const conFecha = {...p, _fechaNorm: dia+"T12:00:00.000Z", _fechaDisplay: dia};
             // Track history
             if(!historialClientes[p.cliente]) historialClientes[p.cliente] = [];
-            historialClientes[p.cliente].push({...p, _fechaNorm: fp, _fechaDisplay: fp.substring(0,10)});
+            historialClientes[p.cliente].push(conFecha);
             // Keep latest
-            const fpExisting = ultimoPedido[p.cliente] ? (ultimoPedido[p.cliente]._fechaNorm || "") : "";
-            if (!ultimoPedido[p.cliente] || fp > fpExisting) {
-              ultimoPedido[p.cliente] = {...p, _fechaNorm: fp, _fechaDisplay: fp.substring(0,10)};
-            }
+            if (!ultimoPedido[p.cliente] || dia > ultimoPedido[p.cliente]._fechaDisplay) ultimoPedido[p.cliente] = conFecha;
           });
-          if(skippedNoDates > 0) console.log("[Alertas] Pedidos skipped (no date):", skippedNoDates);
-          console.log("[Alertas] Clients in historial:", Object.keys(historialClientes).length);
-          // Log clients with only 1 pedido for debugging
-          const singlePedido = Object.entries(historialClientes).filter(([c,p])=>p.length===1);
-          if(singlePedido.length > 0) console.log("[Alertas] Clients with only 1 pedido:", singlePedido.length, singlePedido.slice(0,5).map(([c])=>c));
           // ── Auto-recalcular frecuencia (diasAlerta) por cliente ──
-          const hoy = new Date(); hoy.setHours(0,0,0,0);
           const updatesBatch = [];
           Object.entries(historialClientes).forEach(([cliente, pedArr]) => {
             const fechasUnicas = [...new Set(pedArr.map(p=>p._fechaDisplay).filter(Boolean))].sort();
             if(fechasUnicas.length < 2) return;
             const diffs = [];
             for(let i=1; i<fechasUnicas.length; i++) {
-              const d = Math.round((new Date(fechasUnicas[i]+"T12:00:00")-new Date(fechasUnicas[i-1]+"T12:00:00"))/86400000);
+              const d = SersaleBase.diasEntre(fechasUnicas[i-1], fechasUnicas[i]);
               if(d > 0 && d < 120) diffs.push(d);
             }
             if(diffs.length === 0) return;
@@ -204,36 +194,34 @@
             const diasAlertaCalc = freqCalc + 3;
             const cfg = configCli[cliente];
             if(cfg && cfg.id) {
-              // Always update frequency based on real history
-              const current = cfg.diasAlerta || 14;
-              if(true) { // Always recalculate from actual data
-                configCli[cliente].diasAlerta = diasAlertaCalc;
-                configCli[cliente]._freqCalc = freqCalc;
-                configCli[cliente]._totalPedidos = fechasUnicas.length;
+              // Always recalculate from actual data
+              cfg.diasAlerta = diasAlertaCalc;
+              cfg._freqCalc = freqCalc;
+              cfg._totalPedidos = fechasUnicas.length;
+              // ...pero se escribe solo si cambió (antes: una escritura por cliente en cada carga)
+              if(cfg._diasGuardado !== diasAlertaCalc || cfg._freqGuardada !== freqCalc) {
                 updatesBatch.push({ id: cfg.id, diasAlerta: diasAlertaCalc, freqCalculada: freqCalc });
               }
             }
           });
-          // Write updates to Firestore (batch)
+          // Se guardan sin frenar la pantalla: sin señal la escritura queda en cola y,
+          // si se la esperaba, las alertas no aparecían nunca.
           if(updatesBatch.length > 0) {
-            console.log("[Alertas] Auto-updating diasAlerta for", updatesBatch.length, "clients");
             const { doc, updateDoc } = fb();
-            for(const upd of updatesBatch) {
-              try {
-                await updateDoc(doc(db,"clientes",upd.id), { 
-                  diasAlerta: upd.diasAlerta, 
-                  freqCalculada: upd.freqCalculada,
-                  freqActualizado: new Date().toISOString()
-                });
-              } catch(e) { console.error("Error updating",upd.id,e); }
-            }
+            const ahora = new Date().toISOString();
+            updatesBatch.forEach(upd => {
+              updateDoc(doc(db,"clientes",upd.id), {
+                diasAlerta: upd.diasAlerta,
+                freqCalculada: upd.freqCalculada,
+                freqActualizado: ahora
+              }).catch(e => console.error("Error updating",upd.id,e));
+            });
           }
           // Only track REGISTERED clients (from clientes collection)
           // Deleted clients won't appear even if they have historical pedidos/CC
-          const todosClientes = new Set(Object.keys(configCli));
-          console.log("[Alertas] Registered clients:", todosClientes.size);
+          const hoy = SersaleBase.hoy();
           const alertas = [];
-          todosClientes.forEach(cliente => {
+          Object.keys(configCli).forEach(cliente => {
             const cfg = configCli[cliente];
             if(!cfg || !cfg.id) return; // Skip clients without a real doc in clientes collection
             const pedido = ultimoPedido[cliente] || null;
@@ -245,22 +233,19 @@
               const ultimaCC = ccDates[ccDates.length - 1];
               if(ultimaCC > fechaStr) fechaStr = ultimaCC;
             }
-            // Check ultimoContacto from clientes collection (set when pedido is created)
-            if(cfg.ultimoContacto) {
-              const contactoStr = cfg.ultimoContacto.substring(0,10);
-              if(contactoStr > fechaStr) fechaStr = contactoStr;
-            }
-            if(cfg.ultimoPedidoRegistrado && cfg.ultimoPedidoRegistrado > fechaStr) {
-              fechaStr = cfg.ultimoPedidoRegistrado;
-            }
+            // Check ultimoContacto from clientes collection (set when pedido is created).
+            // Es una fecha con hora: se toma su día de Buenos Aires (el de UTC corría un día
+            // los contactos marcados después de las 21).
+            const contactoStr = SersaleBase.diaDe(cfg.ultimoContacto);
+            if(contactoStr > fechaStr) fechaStr = contactoStr;
+            const registradoStr = SersaleBase.diaDe(cfg.ultimoPedidoRegistrado);
+            if(registradoStr > fechaStr) fechaStr = registradoStr;
             const totalPedidos = historialClientes[cliente] ? historialClientes[cliente].length : 0;
             const totalCC = ccFechasPorCliente[cliente] ? ccFechasPorCliente[cliente].size : 0;
-            const sinActividad = !fechaStr;
             // Skip clients with NO activity at all (only in clientes collection)
-            if(sinActividad) return;
-            const fechaUlt = new Date(fechaStr+"T00:00:00");
-            if(isNaN(fechaUlt.getTime())) return; // invalid date, skip
-            const diasSinPedir = Math.floor((hoy - fechaUlt) / 86400000);
+            if(!fechaStr) return;
+            const diasSinPedir = SersaleBase.diasEntre(fechaStr, hoy);
+            if(isNaN(diasSinPedir)) return; // invalid date, skip
             // Skip clients with very recent activity (not in alert zone)
             if(diasSinPedir < cfg.diasAlerta - 3) return;
             const enAlerta = diasSinPedir >= cfg.diasAlerta;
@@ -276,9 +261,17 @@
             if (!a.enAlerta && b.enAlerta) return 1;
             return b.diasSinPedir - a.diasSinPedir;
           });
+          if(!vigente()) return;
           setAlertasData({ alertas, configCli, historialClientes, ccFechasPorCliente });
           verificarYEnviarAlertas(alertas);
-        } catch(e) { console.error(e); }
+        } catch(e) {
+          console.error(e);
+          if(vigente()) {
+            // Que un problema con las alertas no deje el panel entero en "Cargando..."
+            setPedidos(prev => prev === null ? (todosPedidosCached || []) : prev);
+            SersaleUI.toast("No se pudieron calcular los recontactos. Tocá ↻ para probar de nuevo.", { tipo: "error" });
+          }
+        }
       }
 
       // Marca el contacto, lo saca de las dos vistas y recalcula con datos frescos
@@ -290,26 +283,53 @@
 
       async function actualizarDiasAlerta(clienteId, dias) {
         if (!clienteId) return;
+        const n = parseInt(dias, 10);
+        // Campo vacío o fuera de rango: antes se guardaba NaN (o 0) en la ficha
+        if (!(n >= 1 && n <= 365)) {
+          SersaleUI.toast("Los días de alerta tienen que ser un número entre 1 y 365.", { tipo: "error" });
+          return;
+        }
+        const actual = alertasData ? alertasData.alertas.find(a => a.clienteId === clienteId) : null;
+        if (actual && Number(actual.diasAlerta) === n) return; // se tocó el campo sin cambiarlo: nada que guardar
+        if (actual && actual.freqCalc) {
+          // Con historial, el límite se recalcula solo en cada carga (frecuencia + 3) y pisa lo
+          // que se escriba a mano: se avisa en vez de aparentar que quedó guardado.
+          SersaleUI.toast(actual.cliente+" suele pedir cada "+actual.freqCalc+" días: su límite se calcula solo ("+(actual.freqCalc+3)+" días) y no se puede fijar a mano.", { tipo: "info", ms: 7000 });
+          return;
+        }
         try {
           const { db, doc, updateDoc } = fb();
-          await updateDoc(doc(db,"clientes",clienteId), { diasAlerta: parseInt(dias) });
-          if (pedidos) await calcularAlertas(pedidos);
-        } catch(e) { console.error(e); }
+          // No se espera al servidor (sin señal queda en cola); si falla, se avisa.
+          updateDoc(doc(db,"clientes",clienteId), { diasAlerta: n }).catch(e => {
+            console.error(e);
+            SersaleUI.toast("No se pudo guardar el límite de días. Probá de nuevo.", { tipo: "error" });
+          });
+          await cargar();
+        } catch(e) {
+          console.error(e);
+          SersaleUI.toast("No se pudo guardar el límite de días. Probá de nuevo.", { tipo: "error" });
+        }
       }
 
       useEffect(()=>{
         if(window.__fbReady) cargar(); else document.addEventListener("fbReady",cargar);
+        return () => { document.removeEventListener("fbReady",cargar); tandaCarga.current++; };
       },[]);
 
       if (clienteSeleccionado) return <HistorialCliente cliente={clienteSeleccionado} pedidos={pedidos||[]} onBack={()=>setClienteSeleccionado(null)} />;
       if (hojaRutaFecha) return <HojaRuta fecha={hojaRutaFecha} pedidos={(pedidos||[]).filter(p=>p.fechaEntrega===hojaRutaFecha&&p.tipo==="envio"&&!["cancelado","despachado"].includes(p.estado))} onBack={()=>setHojaRutaFecha(null)} />;
 
-      const activos = (pedidos||[]).filter(p=>!["despachado","cancelado"].includes(p.estado));
+      // Los pedidos llegan en el orden de su id (al azar): primero lo que se entrega antes
+      // y, dentro del día, lo que se cargó antes.
+      const activos = (pedidos||[]).filter(p=>!["despachado","cancelado"].includes(p.estado))
+        .sort((a,b)=>String(a.fechaEntrega||"9999").localeCompare(String(b.fechaEntrega||"9999")) || p8MomentoPedido(a)-p8MomentoPedido(b));
 
       // Agrupar todos los clientes con al menos un pedido
       const clientesMap = {};
-      (pedidos||[]).filter(p=>p.estado!=="cancelado").forEach(p=>{
-        if(!clientesMap[p.cliente]) clientesMap[p.cliente]={total:0,activos:0,despachados:0,cuentaCorriente:p.cuentaCorriente};
+      (pedidos||[]).filter(p=>p.estado!=="cancelado" && p.cliente).forEach(p=>{
+        if(!clientesMap[p.cliente]) clientesMap[p.cliente]={total:0,activos:0,despachados:0,cuentaCorriente:false};
+        // "Cta Cte" si algún pedido la tiene marcada (antes dependía de cuál venía primero)
+        if(p.cuentaCorriente) clientesMap[p.cliente].cuentaCorriente = true;
         clientesMap[p.cliente].total++;
         if(p.estado==="despachado") clientesMap[p.cliente].despachados++;
         else clientesMap[p.cliente].activos++;
@@ -329,7 +349,12 @@
             ))}
           </div>
           <div style={{padding:16}}>
-            {pedidos===null ? <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>
+            {pedidos===null ? (errorCarga
+              ? <div style={{textAlign:"center",marginTop:40}}>
+                  <p style={{color:"#7E1A20",fontWeight:600,fontSize:14,marginBottom:14}}>No se pudieron cargar los pedidos.</p>
+                  <button onClick={cargar} style={{padding:"12px 20px",minHeight:44,borderRadius:10,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>Reintentar</button>
+                </div>
+              : <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>)
             : tab==="resumen" ? (
               <div>
                 {/* Estado de recontactos — detalle y acciones en la pestaña Alertas */}
@@ -351,14 +376,19 @@
                   ? <div style={{textAlign:"center",color:"#A3ABB3",marginTop:40}}><div style={{fontSize:48}}>📭</div><p>Sin pedidos activos</p></div>
                   : (() => {
                     // Lista consolidada del día
-                    const hoy = new Date().toISOString().split("T")[0];
+                    // Día de Buenos Aires (con el de UTC, después de las 21 "hoy" ya era mañana)
+                    const hoy = SersaleBase.hoy();
                     const pedidosHoy = activos.filter(p=>p.fechaEntrega===hoy);
                     const consolidado = {};
                     pedidosHoy.forEach(p=>{
                       (p.items||[]).forEach(it=>{
-                        const key = it.producto+"|||"+it.unidad;
-                        if(!consolidado[key]) consolidado[key]={producto:it.producto,unidad:it.unidad,cantidad:0,clientes:[]};
-                        consolidado[key].cantidad += it.kgReal!=null?it.kgReal:parseFloat(it.cantidad)||0;
+                        // Lo que ya se pesó son kilos, se haya pedido por pieza, bolsa o gancho
+                        // (antes salía "31.6 piezas"); lo que no, va en la unidad del pedido.
+                        const pesado = it.kgReal!=null && it.kgReal!=="";
+                        const unidad = pesado ? "kg" : it.unidad;
+                        const key = it.producto+"|||"+unidad;
+                        if(!consolidado[key]) consolidado[key]={producto:it.producto,unidad,cantidad:0,clientes:[]};
+                        consolidado[key].cantidad += kgFacturables(it);
                         if(!consolidado[key].clientes.includes(p.cliente)) consolidado[key].clientes.push(p.cliente);
                       });
                     });
@@ -375,7 +405,7 @@
                                 <span style={{fontWeight:600,fontSize:13,color:"#191E23"}}>{it.producto}</span>
                                 <span style={{fontSize:11,color:"#79828B",marginLeft:8}}>{it.clientes.join(", ")}</span>
                               </div>
-                              <span style={{fontWeight:700,fontSize:14,color:"#2A333B",whiteSpace:"nowrap",marginLeft:8}}>{Number.isInteger(it.cantidad)?it.cantidad:it.cantidad.toFixed(1)} {it.unidad}</span>
+                              <span style={{fontWeight:700,fontSize:14,color:"#2A333B",whiteSpace:"nowrap",marginLeft:8}}>{SersaleBase.fmtNumero(it.cantidad, 2)} {it.unidad}</span>
                             </div>
                           ))}
                         </div>
@@ -393,10 +423,11 @@
               Object.keys(clientesMap).length===0
                 ? <div style={{textAlign:"center",color:"#A3ABB3",marginTop:60}}><div style={{fontSize:48}}>👥</div><p>Sin pedidos aún</p></div>
                 : (() => {
-                    const qc = busquedaCliente.toLowerCase().trim();
+                    // Sin mirar acentos ni mayúsculas: "angel" encuentra "Ángel"
+                    const qc = busquedaCliente.trim();
                     const lista = Object.entries(clientesMap)
-                      .filter(([cliente]) => !qc || cliente.toLowerCase().includes(qc))
-                      .sort((a,b)=>a[0].localeCompare(b[0], "es", {sensitivity:"base"}));
+                      .filter(([cliente]) => !qc || SersaleBase.coincide(cliente, qc))
+                      .sort((a,b)=>p8OrdenNombres(a[0], b[0]));
                     return (
                       <div>
                         <div style={{position:"relative",marginBottom:12}}>
@@ -438,15 +469,18 @@
             ) : tab==="devoluciones" ? (
               <TabDevoluciones clientes={Object.keys(clientesMap)} />
             ) : (() => {
-                const q = busqueda.toLowerCase().trim();
-                const filtrados = q
+                // Búsqueda sin acentos ni mayúsculas; la fecha se puede escribir 2026-11-10 o 10/11
+                const q = busqueda.trim();
+                const filtrados = (q
                   ? (pedidos||[]).filter(p=>
-                      p.cliente?.toLowerCase().includes(q) ||
-                      (p.items||[]).some(it=>it.producto?.toLowerCase().includes(q)) ||
-                      p.estado?.toLowerCase().includes(q) ||
-                      p.fechaEntrega?.includes(q)
+                      SersaleBase.coincide(p.cliente, q) ||
+                      (p.items||[]).some(it=>SersaleBase.coincide(it.producto, q)) ||
+                      SersaleBase.coincide(p.estado, q) ||
+                      String(p.fechaEntrega||"").includes(q) ||
+                      SersaleBase.fmtFecha(p.fechaEntrega).includes(q)
                     )
-                  : (pedidos||[]);
+                  : [...(pedidos||[])]
+                ).sort((a,b)=>p8MomentoPedido(b)-p8MomentoPedido(a)); // lo último cargado, arriba (venían en orden de id, al azar)
                 return (
                   <div>
                     <div style={{position:"relative",marginBottom:12}}>
@@ -480,102 +514,165 @@
 
     // ── DEVOLUCIONES ─────────────────────────────────────────
     function TabDevoluciones({ clientes }) {
+      const FORM_VACIO = {
+        cliente:"", producto:"", cantidad:"", unidad:"kg",
+        motivo:"", descripcion:"", fechaPedidoOrig:"",
+        monto:"", estado:"pendiente"
+      };
       const [devoluciones, setDevoluciones] = useState(null);
+      const [errorCarga, setErrorCarga] = useState(false);
       const [filtro, setFiltro] = useState("todos"); // todos | pendiente | resuelta
       const [filtroCliente, setFiltroCliente] = useState("");
       const [modalOpen, setModalOpen] = useState(false);
       const [detalle, setDetalle] = useState(null);
-      const [guardando, setGuardando] = useState(false);
-      const [form, setForm] = useState({
-        cliente:"", producto:"", cantidad:"", unidad:"kg",
-        motivo:"", descripcion:"", fechaPedidoOrig:"",
-        monto:"", estado:"pendiente"
-      });
+      const [form, setForm] = useState(FORM_VACIO);
+      // Cuenta corriente del cliente elegido: undefined = todavía no se sabe, null = no tiene
+      const [cuentaForm, setCuentaForm] = useState(undefined);
+      // Id de esta devolución (y de su crédito): si hay que reintentar después de un
+      // error, se corrige lo mismo en vez de cargar la devolución y el crédito dos veces.
+      const idDevolucion = React.useRef(null);
 
       async function cargar() {
         try {
           const { db, collection, getDocs, query, orderBy } = fb();
           const snap = await getDocs(query(collection(db,"devoluciones"), orderBy("createdAt","desc")));
           setDevoluciones(snap.docs.map(d=>({id:d.id,...d.data()})));
-        } catch(e){ console.error(e); setDevoluciones([]); }
+          setErrorCarga(false);
+        } catch(e){
+          // Antes se mostraba "Sin devoluciones registradas", como si no hubiera ninguna
+          console.error(e);
+          setErrorCarga(true);
+          SersaleUI.toast("No se pudieron cargar las devoluciones. Revisá la conexión.", { tipo: "error" });
+        }
       }
 
       useEffect(()=>{
-        if(window.__fbReady) cargar(); else document.addEventListener("fbReady",cargar);
+        if(window.__fbReady) { cargar(); return; }
+        document.addEventListener("fbReady",cargar);
+        return () => document.removeEventListener("fbReady",cargar);
       },[]);
 
-      async function guardar() {
-        if(!form.cliente) return alert("Seleccioná el cliente");
-        if(!form.producto.trim()) return alert("Ingresá el producto");
-        if(!form.motivo.trim()) return alert("Ingresá el motivo");
-        setGuardando(true);
+      // ¿El cliente elegido tiene cuenta corriente? (para avisar antes de guardar si el crédito se puede asentar)
+      useEffect(()=>{
+        setCuentaForm(undefined);
+        if(!modalOpen || !form.cliente) return;
+        let vigente = true;
+        ccBuscarCuenta(form.cliente).then(c => { if(vigente) setCuentaForm(c || null); }).catch(e => console.error(e));
+        return () => { vigente = false; };
+      },[modalOpen, form.cliente]);
+
+      // Cambiar el cliente o el crédito es otra operación: no se reusa el id de un intento anterior
+      const cambiarCliente = v => { idDevolucion.current = null; setForm(f=>({...f,cliente:v})); };
+      const cambiarMonto = v => { idDevolucion.current = null; setForm(f=>({...f,monto:v})); };
+
+      const [guardar, guardando] = SersaleBase.useAccion(async () => {
+        const falta = t => { SersaleUI.toast(t, { tipo: "error" }); };
+        const cliente = form.cliente;
+        const producto = form.producto.trim();
+        if(!cliente) return falta("Seleccioná el cliente");
+        if(!producto) return falta("Ingresá el producto");
+        if(!form.motivo.trim()) return falta("Ingresá el motivo");
+        const cantidad = parseFloat(form.cantidad)||0;
+        const monto = SersaleBase.redondear(parseFloat(form.monto)||0, 2);
+        if(cantidad<0) return falta("La cantidad no puede ser negativa");
+        if(monto<0) return falta("El crédito no puede ser negativo");
+        if(navigator.onLine === false) return falta("Sin conexión: la devolución no se registró. Probá de nuevo cuando vuelva la señal.");
         try {
-          const { db, collection, addDoc } = fb();
-          await addDoc(collection(db,"devoluciones"), {
-            ...form,
-            cantidad: parseFloat(form.cantidad)||0,
-            monto: parseFloat(form.monto)||0,
-            createdAt: new Date().toISOString(),
-            fecha: new Date().toISOString().split("T")[0]
-          });
-          // Si hay monto, generar crédito en cuenta corriente
-          if(parseFloat(form.monto)>0 && form.cliente) {
-            try {
-              const { getDocs, query, where, updateDoc, doc, addDoc: addDoc2 } = fb();
-              const snap = await getDocs(query(collection(db,"cuentas_corrientes"), where("nombre","==",form.cliente)));
-              const monto = parseFloat(form.monto);
-              if(!snap.empty) {
-                const ccDoc = snap.docs[0];
-                const saldoActual = ccDoc.data().saldo || 0;
-                await updateDoc(doc(db,"cuentas_corrientes",ccDoc.id), {
-                  saldo: saldoActual - monto,
-                  ultimoMovimiento: new Date().toISOString().split("T")[0]
-                });
-                await addDoc2(collection(db,"cc_movimientos"), {
-                  cliente: form.cliente, tipo:"pago",
-                  monto, movimiento:-monto, saldo: saldoActual - monto,
-                  fecha: new Date().toISOString().split("T")[0],
-                  detalle:"Crédito por devolución: "+form.producto,
-                  obs:"Devolución registrada automáticamente",
-                  origen:"devolucion", createdAt: new Date().toISOString()
-                });
-              }
-            } catch(e){ console.error("Error cc:",e); }
+          const { db, collection, doc, runTransaction } = fb();
+          const hoy = SersaleBase.hoy(); // día de Buenos Aires (con el de UTC, después de las 21 quedaba con fecha de mañana)
+          const ahora = new Date().toISOString();
+          // El crédito va a la cuenta del cliente aunque el nombre esté escrito con otra
+          // mayúscula o acento (antes se buscaba por nombre idéntico y, si no aparecía,
+          // la devolución quedaba con "Crédito" pero la cuenta sin tocar y sin aviso).
+          let cuenta = null;
+          if(monto>0) {
+            cuenta = await ccBuscarCuenta(cliente);
+            if(!cuenta) {
+              const ok = await SersaleUI.confirmar({
+                titulo: cliente+" no tiene cuenta corriente",
+                cuerpo: "La devolución se registra, pero el crédito de "+SersaleBase.fmtMonto(monto)+" no se asienta en ninguna cuenta. Si corresponde, abrile antes la cuenta en la pestaña CC.",
+                aceptar: "Registrar sin crédito", cancelar: "Volver"
+              });
+              if(!ok) return;
+            }
           }
-          setForm({cliente:"",producto:"",cantidad:"",unidad:"kg",motivo:"",descripcion:"",fechaPedidoOrig:"",monto:"",estado:"pendiente"});
+          if(!idDevolucion.current) idDevolucion.current = doc(collection(db,"devoluciones")).id;
+          const devRef = doc(db,"devoluciones",idDevolucion.current);
+          const datos = { ...form, producto, cantidad, monto, createdAt: ahora, fecha: hoy };
+          // Campo nuevo y opcional: dice si el crédito quedó asentado en la cuenta corriente
+          if(monto>0) datos.creditoAsentado = !!cuenta;
+          const asiento = cuenta
+            ? await ccPrepararAsiento({ cliente, cuenta, movId: "dev_"+devRef.id, conSaldo: true, ultimoMovimiento: hoy })
+            : null;
+          // Devolución, movimiento y saldo se guardan juntos (o no se guarda nada). El saldo
+          // nuevo sale del saldo guardado en ese momento, no del que tenía este teléfono.
+          const res = await runTransaction(db, async tx => {
+            if(asiento) { asiento.marca = null; await ccLeerAsiento(tx, asiento); }
+            tx.set(devRef, datos);
+            if(!asiento) return null;
+            const r = ccEscribirAsiento(tx, asiento, {
+              tipo:"pago", monto, fecha: hoy,
+              detalle:"Crédito por devolución: "+producto,
+              obs:"Devolución registrada automáticamente",
+              origen:"devolucion", devolucionId: devRef.id
+            });
+            if(!r.asentado) throw new Error("La cuenta corriente de "+cliente+" ya no existe");
+            return r;
+          });
+          // Que la lista (y la cuenta corriente) ya traigan lo guardado
+          await esperarCopiaLocal(devRef, d => !!d && d.createdAt === ahora);
+          if(asiento) await ccEsperarAsiento(asiento);
+          idDevolucion.current = null;
+          SersaleUI.toast(res
+            ? "Devolución registrada. Crédito de "+SersaleBase.fmtMonto(monto)+" en la cuenta: saldo "+ccFmtSaldo(res.saldo)
+            : (monto>0 ? "Devolución registrada sin crédito en cuenta" : "Devolución registrada"), { tipo: "ok", ms: 4500 });
+          setForm(FORM_VACIO);
           setModalOpen(false);
           cargar();
-        } catch(e){ alert("Error al guardar"); console.error(e); }
-        setGuardando(false);
-      }
+        } catch(e){
+          console.error(e);
+          SersaleUI.toast("No se pudo registrar la devolución. Revisá la conexión y probá de nuevo.", { tipo: "error" });
+        }
+      });
+      // Mientras se guarda no se cierra: parecería cancelada y se cargaría de nuevo
+      const cerrarModal = () => { if(!guardando) setModalOpen(false); };
 
-      async function cambiarEstado(id, nuevoEstado) {
+      const [cambiarEstado, cambiando] = SersaleBase.useAccion(async (id, nuevoEstado) => {
+        const aviso = e => {
+          console.error(e);
+          SersaleUI.toast("No se pudo cambiar el estado de la devolución. Probá de nuevo.", { tipo: "error" });
+        };
         try {
           const { db, doc, updateDoc } = fb();
-          await updateDoc(doc(db,"devoluciones",id), { estado: nuevoEstado });
-          cargar();
-        } catch(e){ console.error(e); }
-      }
+          // No se espera al servidor (sin señal el cambio queda en cola y se envía solo);
+          // si falla, se avisa y se vuelve a leer lo que quedó guardado.
+          updateDoc(doc(db,"devoluciones",id), { estado: nuevoEstado }).catch(e => { aviso(e); cargar(); });
+          await cargar();
+        } catch(e){ aviso(e); }
+      });
 
       function compartirWA(d) {
-        const nl="%0A";
-        let msg="Devolución registrada"+nl+nl;
-        msg+="Cliente: "+d.cliente+nl;
-        msg+="Producto: "+d.producto+" ("+d.cantidad+" "+d.unidad+")"+nl;
-        msg+="Motivo: "+d.motivo+nl;
-        if(d.descripcion) msg+="Detalle: "+d.descripcion+nl;
-        if(d.monto>0) msg+="Crédito a favor: $"+Math.round(d.monto).toLocaleString("es-AR")+nl;
-        msg+="Estado: "+(d.estado==="resuelta"?"Resuelta":"Pendiente")+nl;
-        msg+=nl+"Frigorífico Sersale";
-        window.open("https://wa.me/?text="+msg,"_blank");
+        // El texto va codificado entero: con "%0A" a mano, un "&" o un "#" en el nombre
+        // del cliente cortaba el mensaje ("Pérez & Hijos" llegaba hasta "Pérez").
+        const lineas = [
+          "Devolución registrada", "",
+          "Cliente: "+d.cliente,
+          "Producto: "+d.producto+" ("+SersaleBase.fmtNumero(d.cantidad)+" "+d.unidad+")",
+          "Motivo: "+d.motivo
+        ];
+        if(d.descripcion) lineas.push("Detalle: "+d.descripcion);
+        if(d.monto>0) lineas.push("Crédito a favor: "+SersaleBase.fmtMonto(d.monto));
+        lineas.push("Estado: "+(d.estado==="resuelta"?"Resuelta":"Pendiente"), "", "Frigorífico Sersale");
+        window.open(SersaleBase.waLink(lineas.join("\n")),"_blank");
       }
 
-      const fmtFecha = f => f ? f.split("-").reverse().join("/") : "-";
-      const fmt$ = n => n ? "$"+Math.round(n).toLocaleString("es-AR") : "";
+      const fmtFecha = f => SersaleBase.fmtFecha(f) || "-";
+      const fmt$ = n => n ? SersaleBase.fmtMonto(n) : "";
+      const clientesOrdenados = [...(clientes||[])].sort(p8OrdenNombres);
 
       const lista = (devoluciones||[])
         .filter(d => filtro==="todos" || d.estado===filtro)
-        .filter(d => !filtroCliente || d.cliente===filtroCliente);
+        .filter(d => !filtroCliente || ccMismoCliente(d.cliente, filtroCliente));
 
       const pendientes = (devoluciones||[]).filter(d=>d.estado==="pendiente").length;
 
@@ -605,10 +702,11 @@
               style={{padding:"9px 14px",borderRadius:12,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
               + Nueva
             </button>
-            <select value={filtroCliente} onChange={e=>setFiltroCliente(e.target.value)}
-              style={{flex:1,padding:"9px 10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}>
+            {/* minWidth:0 → el selector se achica en vez de estirar la página hasta el nombre más largo */}
+            <select value={filtroCliente} onChange={e=>setFiltroCliente(e.target.value)} aria-label="Filtrar por cliente"
+              style={{flex:1,minWidth:0,padding:"9px 10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}>
               <option value="">Todos los clientes</option>
-              {(clientes||[]).sort().map(cl=><option key={cl} value={cl}>{cl}</option>)}
+              {clientesOrdenados.map(cl=><option key={cl} value={cl}>{cl}</option>)}
             </select>
             <select value={filtro} onChange={e=>setFiltro(e.target.value)}
               style={{padding:"9px 10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}>
@@ -619,7 +717,12 @@
           </div>
 
           {/* Lista */}
-          {devoluciones===null ? <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>
+          {devoluciones===null ? (errorCarga
+            ? <div style={{textAlign:"center",marginTop:40}}>
+                <p style={{color:"#7E1A20",fontWeight:600,fontSize:14,marginBottom:14}}>No se pudieron cargar las devoluciones.</p>
+                <button onClick={cargar} style={{padding:"12px 20px",minHeight:44,borderRadius:10,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>Reintentar</button>
+              </div>
+            : <p style={{textAlign:"center",color:"#79828B",marginTop:40}}>Cargando...</p>)
           : lista.length===0 ? (
             <div style={{textAlign:"center",color:"#A3ABB3",marginTop:60}}>
               <div style={{fontSize:48}}>↩️</div>
@@ -642,10 +745,12 @@
                       </span>
                     </div>
                     <div style={{fontSize:13,color:"#555",marginBottom:2}}>
-                      <strong>{d.producto}</strong> — {d.cantidad} {d.unidad}
+                      <strong>{d.producto}</strong> — {SersaleBase.fmtNumero(d.cantidad)} {d.unidad}
                     </div>
                     <div style={{fontSize:12,color:"#79828B"}}>{d.motivo}</div>
-                    {d.monto>0&&<div style={{fontSize:12,color:"#2F6B4F",fontWeight:600,marginTop:2}}>Crédito: {fmt$(d.monto)}</div>}
+                    {d.monto>0&&(d.creditoAsentado===false
+                      ? <div style={{fontSize:12,color:"#A8702A",fontWeight:600,marginTop:2}}>Crédito: {fmt$(d.monto)} · sin asentar (sin cuenta corriente)</div>
+                      : <div style={{fontSize:12,color:"#2F6B4F",fontWeight:600,marginTop:2}}>Crédito: {fmt$(d.monto)}</div>)}
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
                     <div style={{fontSize:11,color:"#A3ABB3"}}>{fmtFecha(d.fecha)}</div>
@@ -660,8 +765,8 @@
                     {d.descripcion&&<div style={{fontSize:12,color:"#555",background:"#F7F8F9",borderRadius:8,padding:"8px 10px",marginBottom:10}}>{d.descripcion}</div>}
                     <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                       {/* Cambiar estado */}
-                      <button onClick={()=>cambiarEstado(d.id, resuelta?"pendiente":"resuelta")}
-                        style={{flex:1,padding:"9px 0",borderRadius:8,border:"none",background:resuelta?"#C33039":"#2F6B4F",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                      <button onClick={()=>cambiarEstado(d.id, resuelta?"pendiente":"resuelta")} disabled={cambiando}
+                        style={{flex:1,padding:"9px 0",borderRadius:8,border:"none",background:resuelta?"#C33039":"#2F6B4F",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer",opacity:cambiando?0.6:1}}>
                         {resuelta?"Marcar pendiente":"✓ Marcar resuelta"}
                       </button>
                       <button onClick={()=>compartirWA(d)}
@@ -678,19 +783,19 @@
           {/* Modal nueva devolución */}
           {modalOpen && (
             <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
-              onClick={e=>{if(e.target===e.currentTarget)setModalOpen(false);}}>
+              onClick={e=>{if(e.target===e.currentTarget)cerrarModal();}}>
               <div style={{background:"#fff",borderRadius:"20px 20px 0 0",padding:"24px 20px 32px",width:"100%",maxWidth:480,maxHeight:"92vh",overflowY:"auto"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
                   <span style={{fontWeight:800,fontSize:16}}>Nueva Devolución</span>
-                  <button onClick={()=>setModalOpen(false)} style={{background:"#EDEEF0",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:18}}>×</button>
+                  <button onClick={cerrarModal} aria-label="Cerrar" style={{background:"#EDEEF0",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:18}}>×</button>
                 </div>
 
                 {/* Cliente */}
                 <label style={{display:"block",fontWeight:600,fontSize:12,color:"#3A424A",marginBottom:5}}>Cliente *</label>
                 <select style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none",marginBottom:12}}
-                  value={form.cliente} onChange={e=>setForm({...form,cliente:e.target.value})}>
+                  aria-label="Cliente de la devolución" value={form.cliente} onChange={e=>cambiarCliente(e.target.value)}>
                   <option value="">Seleccionar cliente...</option>
-                  {(clientes||[]).sort().map(cl=><option key={cl} value={cl}>{cl}</option>)}
+                  {clientesOrdenados.map(cl=><option key={cl} value={cl}>{cl}</option>)}
                 </select>
 
                 {/* Producto y cantidad */}
@@ -702,7 +807,7 @@
                   </div>
                   <div>
                     <label style={{display:"block",fontWeight:600,fontSize:12,color:"#3A424A",marginBottom:5}}>Cantidad</label>
-                    <input type="number" style={{width:"100%",padding:"10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
+                    <input type="number" inputMode="decimal" min="0" step="any" aria-label="Cantidad devuelta" style={{width:"100%",padding:"10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
                       placeholder="0" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})} />
                   </div>
                   <div>
@@ -717,7 +822,7 @@
                 {/* Motivo */}
                 <label style={{display:"block",fontWeight:600,fontSize:12,color:"#3A424A",marginBottom:5}}>Motivo *</label>
                 <select style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none",marginBottom:12}}
-                  value={form.motivo} onChange={e=>setForm({...form,motivo:e.target.value})}>
+                  aria-label="Motivo de la devolución" value={form.motivo} onChange={e=>setForm({...form,motivo:e.target.value})}>
                   <option value="">Seleccionar motivo...</option>
                   {["Producto en mal estado","Error en el pedido","Producto vencido","Daño en el transporte","Cantidad incorrecta","Calidad no conforme","Otro"].map(m=><option key={m} value={m}>{m}</option>)}
                 </select>
@@ -737,14 +842,17 @@
                   <div>
                     <label style={{display:"block",fontWeight:600,fontSize:12,color:"#3A424A",marginBottom:5}}>Crédito a favor ($)</label>
                     <InputMonto style={{width:"100%",padding:"10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
-                      placeholder="0" value={form.monto} onChange={v=>setForm({...form,monto:v})} />
+                      aria-label="Crédito a favor" placeholder="0" value={form.monto} onChange={cambiarMonto} />
                   </div>
                 </div>
 
-                {form.monto>0 && form.cliente && (
-                  <div style={{background:"#E7EDF1",border:"1px solid #AED6F1",borderRadius:8,padding:"8px 12px",marginBottom:16,fontSize:12,color:"#26536E"}}>
-                    Se generará un crédito de {fmt$(parseFloat(form.monto)||0)} en la cuenta corriente de {form.cliente}
-                  </div>
+                {form.monto>0 && form.cliente && (cuentaForm===null
+                  ? <div style={{background:"#F3EEE2",border:"1px solid #B5872F",borderRadius:8,padding:"8px 12px",marginBottom:16,fontSize:12,color:"#784212"}}>
+                      {form.cliente} no tiene cuenta corriente: el crédito de {fmt$(parseFloat(form.monto)||0)} no se va a asentar en ninguna cuenta
+                    </div>
+                  : <div style={{background:"#E7EDF1",border:"1px solid #AED6F1",borderRadius:8,padding:"8px 12px",marginBottom:16,fontSize:12,color:"#26536E"}}>
+                      Se generará un crédito de {fmt$(parseFloat(form.monto)||0)} en la cuenta corriente de {form.cliente}
+                    </div>
                 )}
 
                 <button onClick={guardar} disabled={guardando}
@@ -760,36 +868,98 @@
 
         // ── BANNER TIEMPO REAL ──────────────────────────────────
     function BannerNuevoPedido({ pedido, onClose }) {
-      useEffect(()=>{ const t=setTimeout(onClose,6000); return()=>clearTimeout(t); },[]);
+      // El reloj arranca de nuevo con cada pedido: si entraban dos seguidos, el aviso del
+      // segundo se iba cuando vencía el reloj del primero.
+      useEffect(()=>{ const t=setTimeout(onClose,6000); return()=>clearTimeout(t); },[pedido]);
+      const cantidad = (pedido.items||[]).length;
       return (
         <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",zIndex:9999,width:"100%",maxWidth:480,padding:"0",pointerEvents:"none"}}>
           <div style={{background:"#2F6B4F",color:"#fff",padding:"14px 20px",boxShadow:"0 4px 20px rgba(0,0,0,0.3)",display:"flex",alignItems:"center",gap:12}}>
             <span style={{fontSize:24}}>🛒</span>
             <div style={{flex:1}}>
               <div style={{fontWeight:700,fontSize:14}}>Nuevo pedido cargado</div>
-              <div style={{fontSize:13,opacity:0.9}}>{pedido.cliente} · {pedido.items.length} producto{pedido.items.length!==1?"s":""}</div>
+              <div style={{fontSize:13,opacity:0.9}}>{pedido.cliente} · {cantidad} producto{cantidad!==1?"s":""}</div>
             </div>
           </div>
         </div>
       );
     }
 
+    // ── SI UNA PANTALLA FALLA ────────────────────────────────
+    // Sin esto, un error al dibujar (un pedido con datos rotos, por ejemplo) dejaba la
+    // página en blanco y, como la vista queda recordada, seguía en blanco al recargar.
+    class P8Barrera extends React.Component {
+      constructor(props) { super(props); this.state = { fallo: false }; }
+      static getDerivedStateFromError() { return { fallo: true }; }
+      componentDidCatch(error, info) { console.error("Error al mostrar la pantalla:", error, info && info.componentStack); }
+      render() {
+        if (!this.state.fallo) return this.props.children;
+        const esOperario = sessionStorage.getItem("sersale_role") === "operario";
+        const salir = () => { try { sessionStorage.setItem("sersale_vista","home"); } catch(e) {} window.location.reload(); };
+        return (
+          <div className="crm-page" style={{padding:"60px 24px",textAlign:"center"}}>
+            <div style={{fontSize:44,marginBottom:12}}>⚠️</div>
+            <p style={{fontWeight:800,fontSize:17,color:"#191E23",marginBottom:8}}>Esta pantalla no se pudo mostrar</p>
+            <p style={{fontSize:14,color:"#5C666F",marginBottom:20}}>Probá de nuevo. Si se repite, avisá qué estabas haciendo.</p>
+            <button onClick={salir} style={{padding:"14px 24px",minHeight:44,borderRadius:12,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer"}}>{esOperario ? "Recargar" : "Volver al inicio"}</button>
+          </div>
+        );
+      }
+    }
+
     // ── APP ─────────────────────────────────────────────────
     function App() {
       const esOperario = sessionStorage.getItem("sersale_role") === "operario";
-      const [vista, _setVista] = useState(()=> esOperario ? "deposito" : (sessionStorage.getItem("sersale_vista")||"home"));
-      function setVista(v) {
-        if (esOperario) { _setVista("deposito"); return; } // bloquear cambio de vista
-        sessionStorage.setItem("sersale_vista",v); _setVista(v);
-      }
-      // El gesto "atrás" del teléfono vuelve al inicio de Pedidos en vez de salir de la página.
-      SersaleBase.useAtras(!esOperario && vista !== "home", () => {
-        sessionStorage.setItem("sersale_vista", "home");
-        _setVista("home");
+      const [vista, _setVista] = useState(()=> {
+        if (esOperario) return "deposito";
+        // Acceso rápido "Registrar una venta rápida" del panel (pedidos.html?vr=1): la venta
+        // rápida está en el panel del director. Antes solo se abría si justo se había
+        // quedado en esa vista; si no, caía en el inicio y no pasaba nada.
+        if (new URLSearchParams(window.location.search).get("vr") === "1") {
+          try { sessionStorage.setItem("sersale_vista","director"); } catch(e) {}
+          return "director";
+        }
+        // Una vista recordada que no existe dejaba la página en blanco
+        const v = sessionStorage.getItem("sersale_vista");
+        return ["home","productos","comercial","deposito","director","clientes"].includes(v) ? v : "home";
       });
       const [nuevosPedidos, setNuevosPedidos] = useState(0);
       const [bannerPedido, setBannerPedido] = useState(null);
       const inicioSesion = React.useRef(new Date().toISOString());
+      // Fechas de carga de los pedidos pendientes (las trae la escucha de más abajo)
+      const pendientesISO = React.useRef([]);
+      // "Pedidos nuevos": los pendientes cargados después de la última visita. Se cuenta
+      // con la marca del momento (antes quedaba la de cuando se abrió la página).
+      function contarNuevos() {
+        const visto = getLastSeen();
+        setNuevosPedidos(pendientesISO.current.filter(f => f > visto).length);
+      }
+      // "Visto" se anota al SALIR de una vista con pedidos (volver al inicio, cerrar o dejar
+      // la app en segundo plano), no al entrar: Comercial y Director leen esa marca para la
+      // cinta NUEVO y, como se pisaba justo antes de abrirlos, NUEVO no aparecía nunca.
+      const conPedidos = v => ["comercial","deposito","director"].includes(v);
+      function marcarVisto() { setLastSeen(); contarNuevos(); }
+      function setVista(v) {
+        if (esOperario) { _setVista("deposito"); return; } // bloquear cambio de vista
+        if (v === "home" && conPedidos(vista)) marcarVisto();
+        sessionStorage.setItem("sersale_vista",v); _setVista(v);
+      }
+      // El gesto "atrás" del teléfono vuelve al inicio de Pedidos en vez de salir de la página.
+      SersaleBase.useAtras(!esOperario && vista !== "home", () => {
+        if (conPedidos(vista)) marcarVisto();
+        sessionStorage.setItem("sersale_vista", "home");
+        _setVista("home");
+      });
+      useEffect(()=>{
+        if (esOperario || !conPedidos(vista)) return;
+        const alOcultar = () => { if (document.visibilityState === "hidden") marcarVisto(); };
+        document.addEventListener("visibilitychange", alOcultar);
+        window.addEventListener("pagehide", marcarVisto);
+        return () => {
+          document.removeEventListener("visibilitychange", alOcultar);
+          window.removeEventListener("pagehide", marcarVisto);
+        };
+      },[vista]);
 
       // Si es operario, ocultar la nav inferior global
       useEffect(()=>{
@@ -803,17 +973,17 @@
       }, []);
 
       useEffect(()=>{
+        let unsub = null, cortado = false;
         function init() {
+          if (cortado) return;
           const { db, collection, query, orderBy, onSnapshot } = fb();
-          const lastSeen = getLastSeen();
           // Badge: pedidos pendientes desde última visita
           const q = query(collection(db,"pedidos"), orderBy("fechaPedido","desc"));
-          const unsub = onSnapshot(q, (snap) => {
-            const nuevos = snap.docs.filter(d => {
-              const data = d.data();
-              return data.fechaPedidoISO > lastSeen && data.estado==="pendiente";
-            }).length;
-            setNuevosPedidos(nuevos);
+          unsub = onSnapshot(q, (snap) => {
+            pendientesISO.current = snap.docs.map(d => d.data())
+              .filter(data => data.estado==="pendiente" && typeof data.fechaPedidoISO === "string")
+              .map(data => data.fechaPedidoISO);
+            contarNuevos();
             // Banner en tiempo real: pedidos nuevos DESPUÉS de abrir la app
             snap.docChanges().forEach(change => {
               if (change.type === "added") {
@@ -823,17 +993,13 @@
                 }
               }
             });
-          });
-          return unsub;
+          }, (e) => { console.error("Escucha de pedidos nuevos:", e); });
         }
-        let unsub;
-        if (window.__fbReady) { unsub = init(); }
-        else { document.addEventListener("fbReady", ()=>{ unsub = init(); }); }
-        return ()=> unsub && unsub();
+        if (window.__fbReady) init(); else document.addEventListener("fbReady", init);
+        return ()=>{ cortado = true; document.removeEventListener("fbReady", init); if (unsub) unsub(); };
       },[]);
 
       function seleccionar(key) {
-        setLastSeen();
         // Director ya está autenticado al entrar - sin PINs intermedios
         setVista(key);
       }
@@ -851,4 +1017,4 @@
       );
     }
 
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    ReactDOM.createRoot(document.getElementById("root")).render(<P8Barrera><App /></P8Barrera>);
