@@ -67,14 +67,18 @@ input[type=text]:focus{outline:none;border-color:#A4232A}
 .ld{text-align:center;padding:12px;color:#79828B;font-size:13px;display:none;margin-top:8px}
 .ld.show{display:block}
 .custom-items{background:#fff;border-radius:16px;border:1px solid #D8DCE0;box-shadow:0 2px 10px rgba(0,0,0,.05);padding:20px;margin-bottom:14px}
-.custom-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;padding:8px 0;border-bottom:1px solid #EDEEF0}
+.custom-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;padding:8px 0;border-bottom:1px solid #EDEEF0}
 .custom-row:last-child{border-bottom:none}
-.custom-row input{padding:8px 10px;border-radius:8px;border:1.5px solid #E4E7EA;font-size:13px;font-family:'IBM Plex Sans','Inter',sans-serif}
+.custom-row input{padding:10px;border-radius:8px;border:1.5px solid #E4E7EA;font-size:16px;font-family:'IBM Plex Sans','Inter',sans-serif}
 .custom-row input:focus{outline:none;border-color:#A4232A}
-.custom-row .ci-desc{flex:2;min-width:120px}
-.custom-row .ci-peso{flex:1;min-width:60px}
-.custom-row .ci-precio{width:100px;text-align:right;font-weight:700;color:#A4232A}
-.custom-row .ci-del{width:32px;height:32px;border-radius:8px;border:none;background:#F7EAEA;color:#A4232A;font-size:16px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.custom-row .ci-desc{flex:1 1 100%;min-width:0}
+.custom-row .ci-peso{flex:1 1 0;min-width:0;width:auto}
+.custom-row .ci-precio{flex:0 0 120px;width:120px;text-align:right;font-weight:700;color:#A4232A}
+.custom-row .ci-del{width:44px;height:44px;border-radius:8px;border:none;background:#F7EAEA;color:#A4232A;font-size:18px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+/* Modo selección en el teléfono: el nombre ocupa su renglón; abajo van el ajuste y el precio */
+#lista.modo-sel .prod-row{flex-wrap:wrap}
+#lista.modo-sel .prod-info{flex:1 1 calc(100% - 30px) !important;cursor:pointer}
+#lista.modo-sel .prod-ajuste{margin-left:auto}
 .btn-add-custom{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:10px;border-radius:10px;border:2px dashed #A4232A;background:#F7EAEA;color:#A4232A;font-weight:700;font-size:13px;cursor:pointer;font-family:'IBM Plex Sans','Inter',sans-serif;margin-top:8px}
 .btn-add-custom:hover{background:#F7EAEA}
 .sel-all-btn{font-size:11px;color:#A4232A;background:none;border:none;cursor:pointer;font-weight:700;font-family:'IBM Plex Sans','Inter',sans-serif;padding:0;display:none}
@@ -167,7 +171,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
       <div style="flex:1">
         <label>Porcentaje</label>
         <div style="display:flex;align-items:center;border:1.5px solid #D8DCE0;border-radius:10px;overflow:hidden">
-          <input type="number" id="ajuste-pct" min="0" max="100" step="0.5" value="0"
+          <input type="number" inputmode="decimal" id="ajuste-pct" min="0" max="100" step="0.5" value="0"
             style="flex:1;padding:10px 14px;border:none;font-size:18px;font-weight:800;color:#A4232A;text-align:center;outline:none;font-family:'IBM Plex Sans','Inter',sans-serif"
             oninput="upd()">
           <span style="padding:0 14px;font-size:16px;font-weight:700;color:#A3ABB3;background:#F7F8F9">%</span>
@@ -274,8 +278,11 @@ let customIdCounter = 0;
 
 function addCustomItem() {
   const id = 'ci_' + (customIdCounter++);
-  customItems.push({ id, desc: '', peso: '', precio: 0 });
+  // precio null = sin precio todavía (sale "Consultar", igual que en el catálogo)
+  customItems.push({ id, desc: '', peso: '', precio: null });
   renderCustomItems();
+  const nuevo = document.querySelector('#custom-list .custom-row:last-child .ci-desc');
+  if (nuevo) nuevo.focus();
 }
 
 function removeCustomItem(id) {
@@ -287,30 +294,44 @@ function removeCustomItem(id) {
 function updateCustomItem(id, field, value) {
   const item = customItems.find(ci => ci.id === id);
   if (item) {
-    item[field] = field === 'precio' ? (parseFloat(value) || 0) : value;
+    if (field === 'precio') {
+      // "8.990" es ocho mil novecientos noventa (parseFloat lo leía como 8,99).
+      const n = SersaleBase.numero(value);
+      item.precio = n > 0 ? n : null;
+    } else {
+      item[field] = value;
+    }
+    contarCustomItems();
     upd();
   }
 }
 
+function contarCustomItems() {
+  const countEl = document.getElementById('custom-count');
+  if (!countEl) return;
+  const active = customItems.filter(ci => ci.desc.trim()).length;
+  countEl.textContent = active > 0 ? active + ' agregado' + (active !== 1 ? 's' : '') : '';
+}
+
 function renderCustomItems() {
   const container = document.getElementById('custom-list');
-  const countEl = document.getElementById('custom-count');
   if (!container) return;
 
+  // Se guarda en cada tecla (oninput): en el iPhone tocar un botón no saca el
+  // cursor del campo, y con onchange lo último escrito no llegaba al PDF.
   container.innerHTML = customItems.map(ci => `
     <div class="custom-row">
-      <input class="ci-desc" type="text" placeholder="Descripción del producto" 
-        value="${esc(ci.desc)}" onchange="updateCustomItem('${ci.id}','desc',this.value)" />
-      <input class="ci-peso" type="text" placeholder="Peso/Unidad" 
-        value="${esc(ci.peso)}" onchange="updateCustomItem('${ci.id}','peso',this.value)" />
-      <input class="ci-precio" type="text" placeholder="Precio" 
-        value="${esc(ci.precio || '')}" onchange="updateCustomItem('${ci.id}','precio',this.value)" />
-      <button class="ci-del" onclick="removeCustomItem('${ci.id}')" title="Eliminar">×</button>
+      <input class="ci-desc" type="text" placeholder="Descripción del producto"
+        value="${esc(ci.desc)}" oninput="updateCustomItem('${ci.id}','desc',this.value)" />
+      <input class="ci-peso" type="text" placeholder="Peso/Unidad"
+        value="${esc(ci.peso)}" oninput="updateCustomItem('${ci.id}','peso',this.value)" />
+      <input class="ci-precio monto" type="text" inputmode="decimal" placeholder="Precio x kilo"
+        value="${esc(ci.precio ? fmtMilesTxt(String(ci.precio)) : '')}" oninput="updateCustomItem('${ci.id}','precio',this.value)" />
+      <button class="ci-del" type="button" onclick="removeCustomItem('${ci.id}')" title="Eliminar" aria-label="Eliminar artículo">×</button>
     </div>
   `).join('');
 
-  const active = customItems.filter(ci => ci.desc.trim()).length;
-  countEl.textContent = active > 0 ? active + ' agregado' + (active !== 1 ? 's' : '') : '';
+  contarCustomItems();
 }
 let modo='comp';
 let tipoAjuste='aumento';
@@ -329,6 +350,43 @@ function getAjusteFactor(){
   if(v===0) return 1;
   return tipoAjuste==='aumento'?(1+v/100):(1-v/100);
 }
+function leerPct(id){
+  const el=document.getElementById(id);
+  return el?(parseFloat(el.value)||0):0;
+}
+// Un porcentaje vale entre 0 y 100; una bonificación, menos de 100 (si no, el precio queda en cero o negativo).
+function pctFueraDeRango(id,tipo){
+  const el=document.getElementById(id);
+  if(!el) return false;
+  if(el.validity&&el.validity.badInput) return true;
+  const v=parseFloat(el.value);
+  if(isNaN(v)) return false;
+  return v<0||v>100||(tipo==='bonif'&&v>=100);
+}
+function hayPctInvalido(){
+  if(pctFueraDeRango('ajuste-pct',tipoAjuste)) return true;
+  if(modo!=='sel') return false;
+  // Solo cuentan los productos marcados: un porcentaje mal escrito en uno que no entra al PDF no frena nada.
+  return CATS.some((c,ci)=>{
+    const marcados=c.prods.filter(p=>document.getElementById('cb-'+p.uid)?.checked);
+    if(!marcados.length) return false;
+    return pctFueraDeRango('cat-pct-'+ci,document.getElementById('cat-tipo-'+ci)?.value)
+      ||marcados.some(p=>pctFueraDeRango('prod-pct-'+p.uid,document.getElementById('prod-tipo-'+p.uid)?.value));
+  });
+}
+const MSJ_PCT='Revisá los porcentajes de ajuste: van de 0 a 100 (una bonificación, menos de 100).';
+// Modo selección: cuántas categorías y productos marcados tienen un porcentaje propio.
+function ajustesPropios(){
+  let cats=0,prods=0;
+  if(modo!=='sel') return {cats,prods};
+  CATS.forEach((c,ci)=>{
+    const marcados=c.prods.filter(p=>{const cb=document.getElementById('cb-'+p.uid);return cb&&cb.checked;});
+    if(!marcados.length) return;
+    if(leerPct('cat-pct-'+ci)>0) cats++;
+    marcados.forEach(p=>{ if(leerPct('prod-pct-'+p.uid)>0) prods++; });
+  });
+  return {cats,prods};
+}
 function aplicarAjuste(precio){
   if(precio==null) return null;
   return Math.round(precio * getAjusteFactor());
@@ -343,8 +401,15 @@ function setModo(m){
     ?'Catálogo completo — editá los precios si querés cambiarlos'
     :'Selección — marcá los productos a incluir en el presupuesto';
   document.querySelectorAll('.prod-cb').forEach(c=>c.style.display=m==='sel'?'':'none');
+  document.getElementById('lista').classList.toggle('modo-sel',m==='sel');
   toggleAjusteFields(m);
   upd();
+}
+// En modo selección, tocar el nombre marca o desmarca el producto (la casilla sola es muy chica para el dedo).
+function tocarProd(uid){
+  if(modo!=='sel') return;
+  const cb=document.getElementById('cb-'+uid);
+  if(cb){ cb.checked=!cb.checked; upd(); }
 }
 function selAll(){
   const all=[...document.querySelectorAll('.prod-cb')];
@@ -376,7 +441,7 @@ function fmtMilesTxt(raw){
 function blurPrecio(el){
   if(!el.value||el.value==='Consultar'){ el.value='Consultar'; return; }
   const n=parseFloat(desfmtMiles(el.value));
-  el.value=isNaN(n)?'Consultar':fmtP(n);
+  el.value=(isNaN(n)||n<=0)?'Consultar':fmtP(n);
 }
 document.addEventListener('input',function(e){
   const el=e.target;
@@ -420,9 +485,13 @@ function getPrecioFinal(uid, precioBase){
   let ci=-1;
   CATS.forEach((cat,i)=>{ if(cat.prods.some(p=>p.uid===uid)) ci=i; });
 
+  // Los ajustes por categoría y por producto son del modo selección: en
+  // "Catálogo completo" esos campos están ocultos y no tienen que aplicarse.
+  const conPropios=modo==='sel';
+
   // Factor individual del producto (prioridad máxima)
   const prodPctEl=document.getElementById('prod-pct-'+uid);
-  const prodPct=prodPctEl?parseFloat(prodPctEl.value)||0:0;
+  const prodPct=conPropios&&prodPctEl?parseFloat(prodPctEl.value)||0:0;
   if(prodPct>0){
     const prodTipo=document.getElementById('prod-tipo-'+uid)?.value||'aumento';
     const factor=prodTipo==='aumento'?(1+prodPct/100):(1-prodPct/100);
@@ -430,7 +499,7 @@ function getPrecioFinal(uid, precioBase){
   }
 
   // Factor de categoría (segunda prioridad)
-  if(ci>=0){
+  if(conPropios&&ci>=0){
     const catPctEl=document.getElementById('cat-pct-'+ci);
     const catPct=catPctEl?parseFloat(catPctEl.value)||0:0;
     if(catPct>0){
@@ -447,7 +516,7 @@ function getPrecioFinal(uid, precioBase){
 function getP(uid){
   const inp=document.getElementById('p-'+uid); if(!inp)return null;
   const v=parseFloat(inp.value.replace(/[$. ]/g,'').replace(',','.'));
-  if(isNaN(v)) return null;
+  if(isNaN(v)||v<=0) return null;
   return getPrecioFinal(uid, v);
 }
 function upd(){
@@ -469,14 +538,31 @@ function upd(){
   // Preview ajuste
   const pct=parseFloat(document.getElementById('ajuste-pct').value)||0;
   const prev=document.getElementById('ajuste-preview');
-  if(pct>0){
+  const propios=ajustesPropios();
+  const partes=[];
+  if(propios.cats) partes.push(propios.cats+' categoría'+(propios.cats!==1?'s':''));
+  if(propios.prods) partes.push(propios.prods+' producto'+(propios.prods!==1?'s':''));
+  const txtPropios=partes.length?'Ajuste propio en '+partes.join(' y ')+' (tiene prioridad sobre el general).':'';
+  if(hayPctInvalido()){
     prev.style.display='block';
-    const tipo=tipoAjuste==='aumento'?'aumento':'bonificación';
+    prev.textContent='⚠ '+MSJ_PCT;
+    prev.style.background='#F7EAEA';
+    prev.style.borderColor='#E3B5B8';
+    prev.style.color='#7E1A20';
+  } else if(pct>0){
+    prev.style.display='block';
+    const tipo=tipoAjuste==='aumento'?'un aumento':'una bonificación';
     const signo=tipoAjuste==='aumento'?'+':'-';
-    prev.textContent=`✓ Se aplicará un ${tipo} del ${signo}${pct}% a todos los precios al generar el PDF`;
+    prev.textContent=`✓ Se aplicará ${tipo} del ${signo}${pct}% a ${txtPropios?'los demás precios':'todos los precios'} al generar el PDF`+(txtPropios?'. '+txtPropios:'');
     prev.style.background=tipoAjuste==='aumento'?'#F3EEE2':'#EDF3EF';
     prev.style.borderColor=tipoAjuste==='aumento'?'#C9A24B':'#DDE9E2';
     prev.style.color=tipoAjuste==='aumento'?'#96601F':'#24523D';
+  } else if(txtPropios){
+    prev.style.display='block';
+    prev.textContent='✓ '+txtPropios;
+    prev.style.background='#F3EEE2';
+    prev.style.borderColor='#C9A24B';
+    prev.style.color='#96601F';
   } else {
     prev.style.display='none';
   }
@@ -492,14 +578,14 @@ function render(){
         <span class="sec-nombre">${c.cat}</span>
         <span class="sec-count">${c.prods.length}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()">
-        <div class="cat-ajuste" id="cat-ajuste-${ci}" style="display:none;align-items:center;gap:4px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="cat-ajuste" id="cat-ajuste-${ci}" style="display:none;align-items:center;gap:4px" onclick="event.stopPropagation()">
           <select id="cat-tipo-${ci}" onchange="aplicarCat(${ci})"
             style="padding:4px 6px;border-radius:6px;border:1.5px solid #D8DCE0;font-size:11px;font-family:'IBM Plex Sans','Inter',sans-serif;color:#555">
             <option value="aumento">▲</option>
             <option value="bonif">▼</option>
           </select>
-          <input type="number" id="cat-pct-${ci}" min="0" max="100" step="0.5" placeholder="%" 
+          <input type="number" inputmode="decimal" id="cat-pct-${ci}" min="0" max="100" step="0.5" placeholder="%" 
             style="width:52px;padding:4px 6px;border-radius:6px;border:1.5px solid #D8DCE0;font-size:12px;font-weight:700;color:#A4232A;text-align:center;font-family:'IBM Plex Sans','Inter',sans-serif"
             oninput="aplicarCat(${ci})">
           <span style="font-size:11px;color:#A3ABB3">%</span>
@@ -515,17 +601,17 @@ function render(){
       row.style.cssText='display:flex;align-items:center;gap:6px;padding:7px 12px;border-bottom:1px solid #F7F8F9;background:#fff';
       row.innerHTML=`
         <input type="checkbox" class="prod-cb" id="cb-${p.uid}" onchange="upd()" style="display:none;width:17px;height:17px;accent-color:#A4232A;flex-shrink:0;cursor:pointer">
-        <div class="prod-info" style="flex:1;min-width:0">
+        <div class="prod-info" style="flex:1;min-width:0" onclick="tocarProd(${p.uid})">
           <div class="prod-n" style="font-size:13px;font-weight:600;color:#111">${p.n}</div>
           <div class="prod-d" style="font-size:11px;color:#A3ABB3">${p.art} · ${p.peso}</div>
         </div>
         <div class="prod-ajuste" id="prod-ajuste-${p.uid}" style="display:none;align-items:center;gap:3px;flex-shrink:0">
-          <select id="prod-tipo-${p.uid}"
+          <select id="prod-tipo-${p.uid}" onchange="upd()"
             style="padding:3px 5px;border-radius:6px;border:1.5px solid #D8DCE0;font-size:10px;font-family:'IBM Plex Sans','Inter',sans-serif;color:#555">
             <option value="aumento">▲</option>
             <option value="bonif">▼</option>
           </select>
-          <input type="number" id="prod-pct-${p.uid}" min="0" max="100" step="0.5" placeholder="%"
+          <input type="number" inputmode="decimal" id="prod-pct-${p.uid}" min="0" max="100" step="0.5" placeholder="%" oninput="upd()"
             style="width:46px;padding:3px 5px;border-radius:6px;border:1.5px solid #D8DCE0;font-size:11px;font-weight:700;color:#A4232A;text-align:center;font-family:'IBM Plex Sans','Inter',sans-serif"
             title="Sobreescribe el ajuste de categoría para este producto">
           <span style="font-size:10px;color:#B9BFC5" title="Ajuste individual">✎</span>
@@ -551,29 +637,62 @@ function toggleSec(i){
 // ═══════════════════════════════════════
 // GENERADOR PDF — fondo blanco, prolijo
 // ═══════════════════════════════════════
+let generando=false;
 async function gen(){
-  const cli=document.getElementById('cli').value.trim()||'Cliente';
+  if(generando) return; // un doble toque no arma dos PDF
+  generando=true;
+  const btn=document.getElementById('btnGen');
+  btn.disabled=true;
+  try{
+    await generarPDF();
+  }catch(e){
+    console.error(e);
+    SersaleUI.toast('No se pudo generar el PDF. Probá de nuevo.',{tipo:'error'});
+  }finally{
+    document.getElementById('ld').classList.remove('show');
+    btn.disabled=false;
+    generando=false;
+  }
+}
+async function generarPDF(){
+  // En el iPhone tocar el botón no saca el cursor del campo: se cierra el teclado antes de leer la pantalla.
+  if(document.activeElement&&document.activeElement.blur) document.activeElement.blur();
+  const cliTxt=document.getElementById('cli').value.trim();
   const items=[];
   CATS.forEach(c=>{
     c.prods.forEach(p=>{
       if(modo==='sel'){const cb=document.getElementById('cb-'+p.uid);if(!cb||!cb.checked)return;}
-      items.push({cat:c.cat,n:p.n,art:p.art,peso:p.peso,precio:getP(p.uid)??p.p});
+      // Sin precio en pantalla ("Consultar") = sin precio en el PDF: no se vuelve al precio de lista.
+      items.push({cat:c.cat,n:p.n,art:p.art,peso:p.peso,precio:getP(p.uid)});
     });
   });
   // Add custom items
   customItems.forEach(ci => {
     if(ci.desc.trim()) {
-      const precio = ci.precio || 0;
-      items.push({cat:"ARTÍCULOS VARIOS", n:ci.desc, art:"", peso:ci.peso, precio: aplicarAjuste(precio) ?? precio});
+      items.push({cat:"ARTÍCULOS VARIOS", n:ci.desc.trim(), art:"", peso:ci.peso, precio: ci.precio>0 ? aplicarAjuste(ci.precio) : null});
     }
   });
-  if(!items.length){alert('Seleccioná al menos un producto');return;}
+  if(!items.length){SersaleUI.toast('Seleccioná al menos un producto',{tipo:'error'});return;}
+  if(hayPctInvalido()){SersaleUI.toast(MSJ_PCT,{tipo:'error'});return;}
+  if(!window.jspdf||typeof LOGO_B64==='undefined'){
+    SersaleUI.toast('La página no terminó de cargar. Recargala y probá de nuevo.',{tipo:'error'});
+    return;
+  }
+  if(!cliTxt){
+    const seguir=await SersaleUI.confirmar({
+      titulo:'Falta el nombre del cliente',
+      cuerpo:'El PDF va a salir con la palabra "Cliente" en la portada.',
+      aceptar:'Generar igual',cancelar:'Volver'
+    });
+    if(!seguir) return;
+  }
+  const cli=cliTxt||'Cliente';
+  const tituloDoc=modo==='comp'?'LISTA DE PRECIOS':'PRESUPUESTO';
 
   document.getElementById('ld').classList.add('show');
-  document.getElementById('btnGen').disabled=true;
   await new Promise(r=>setTimeout(r,50));
 
-  try{
+  {
     const {jsPDF}=window.jspdf;
     const pdf=new jsPDF({orientation:'portrait',unit:'pt',format:'a4'});
     const PW=pdf.internal.pageSize.getWidth();
@@ -581,7 +700,7 @@ async function gen(){
     const M=40, W=PW-M*2;
 
     // Cargar logo
-    const logoImg=await new Promise(r=>{const img=new Image();img.onload=()=>r(img);img.src='data:image/jpeg;base64,'+LOGO_B64;});
+    const logoImg=await new Promise((r,rej)=>{const img=new Image();img.onload=()=>r(img);img.onerror=()=>rej(new Error('No se pudo cargar el logo'));img.src='data:image/jpeg;base64,'+LOGO_B64;});
     const cv=document.createElement('canvas'); cv.width=380; cv.height=380;
     cv.getContext('2d').drawImage(logoImg,0,0,380,380);
     const logoData=cv.toDataURL('image/jpeg',0.95);
@@ -612,20 +731,23 @@ async function gen(){
     pdf.setFont('helvetica','bold');
     pdf.setFontSize(11);
     pdf.setTextColor(192,57,43);
-    pdf.text(modo==='comp'?'LISTA DE PRECIOS':'PRESUPUESTO',PW/2,PH*0.48,{align:'center'});
+    pdf.text(tituloDoc,PW/2,PH*0.48,{align:'center'});
 
-    // Nombre cliente
+    // Nombre cliente: si no entra en el ancho se achica la letra y, si hace falta, va en más de un renglón
     pdf.setFont('helvetica','bold');
-    pdf.setFontSize(30);
+    let tamCli=30;
+    pdf.setFontSize(tamCli);
+    while(tamCli>16&&pdf.getTextWidth(cli)>W){ tamCli-=2; pdf.setFontSize(tamCli); }
+    const lineasCli=pdf.splitTextToSize(cli,W).slice(0,3);
     pdf.setTextColor(30,30,30);
-    pdf.text(cli,PW/2,PH*0.56,{align:'center'});
+    pdf.text(lineasCli,PW/2,PH*0.56,{align:'center'});
 
-    // Fecha
-    const hoy=new Date().toLocaleDateString('es-AR',{day:'2-digit',month:'long',year:'numeric'});
+    // Fecha (día de Buenos Aires)
+    const hoy=new Date().toLocaleDateString('es-AR',{day:'2-digit',month:'long',year:'numeric',timeZone:SersaleBase.ZONA});
     pdf.setFont('helvetica','normal');
     pdf.setFontSize(10);
     pdf.setTextColor(150,150,150);
-    pdf.text(hoy,PW/2,PH*0.61,{align:'center'});
+    pdf.text(hoy,PW/2,PH*0.61+(lineasCli.length-1)*tamCli*1.15,{align:'center'});
 
     // Caja datos empresa
     const boxY=PH*0.68, boxH=80;
@@ -666,7 +788,7 @@ async function gen(){
       pdf.setFillColor(146,43,33); pdf.rect(0,0,8,HDR_H,'F');
       // Título
       pdf.setFont('helvetica','bold'); pdf.setFontSize(15); pdf.setTextColor(255,255,255);
-      pdf.text('LISTA DE PRECIOS',M+8,HDR_H/2+6);
+      pdf.text(tituloDoc,M+8,HDR_H/2+6);
       // Derecha: empresa
       pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(255,200,200);
       pdf.text('Frigorífico Sersale  ·  precios por kilo',PW-M,HDR_H/2+4,{align:'right'});
@@ -695,6 +817,14 @@ async function gen(){
       pdf.text(cat,M+12,y+SEP_H/2+3.5);
     }
 
+    // Recorta un texto escrito a mano para que no pise la columna de al lado
+    function recortar(txt,maxW){
+      let t=String(txt==null?'':txt);
+      if(pdf.getTextWidth(t)<=maxW) return t;
+      while(t.length>1&&pdf.getTextWidth(t+'...')>maxW) t=t.slice(0,-1);
+      return t.trimEnd()+'...';
+    }
+
     function drawRow(prod,y,idx){
       // Fondo alternado muy sutil
       if(idx%2===0){pdf.setFillColor(255,255,255);}
@@ -707,13 +837,12 @@ async function gen(){
       pdf.line(M+1,y+ROW_H,M+W,y+ROW_H);
       // Nombre
       pdf.setFont('helvetica','bold'); pdf.setFontSize(10); pdf.setTextColor(30,30,30);
-      let nom=prod.n; if(nom.length>50)nom=nom.substring(0,48)+'...';
-      pdf.text(nom,M+10,y+ROW_H/2+4);
+      pdf.text(recortar(prod.n,W*0.53-16),M+10,y+ROW_H/2+4);
       // Artículo
       pdf.setFont('helvetica','normal'); pdf.setFontSize(8.5); pdf.setTextColor(140,140,140);
       pdf.text(prod.art,M+W*0.53,y+ROW_H/2+4);
       // Peso
-      pdf.text(prod.peso,M+W*0.69,y+ROW_H/2+4);
+      pdf.text(recortar(prod.peso,W*0.15-6),M+W*0.69,y+ROW_H/2+4);
       // Precio
       pdf.setFont('helvetica','bold'); pdf.setFontSize(12); pdf.setTextColor(192,57,43);
       const pTxt=prod.precio!=null?'$'+Math.round(prod.precio).toLocaleString('es-AR'):'Consultar';
@@ -807,29 +936,34 @@ async function gen(){
     pdf.setTextColor(160,160,160);
     pdf.text('@sersalefrigorifico  ·  Atención por Mayor y Menor',M+16,cboxY+80);
 
-    const fecha=new Date().toLocaleDateString('es-AR').replace(/\//g,'-');
-    pdf.save(`Presupuesto_Sersale_${cli.replace(/\s+/g,'_')}_${fecha}.pdf`);
-
-  }catch(e){alert('Error: '+e.message);console.error(e);}
-
-  document.getElementById('ld').classList.remove('show');
-  document.getElementById('btnGen').disabled=false;
+    const fecha=SersaleBase.fmtFecha(SersaleBase.hoy()).replace(/\//g,'-');
+    pdf.save(`Presupuesto_Sersale_${nombreArchivo(cli)}_${fecha}.pdf`);
+    SersaleUI.toast('PDF generado',{tipo:'ok'});
+  }
+}
+// El nombre del cliente va en el nombre del archivo: sin acentos, barras ni signos que
+// algunos navegadores no aceptan (con "Almacén" el archivo podía bajar sin nombre).
+function nombreArchivo(txt){
+  return String(txt).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,'_');
 }
 render();
 
 // Exporta a CSV el presupuesto que está armado en pantalla (no es un historial:
 // este módulo todavía no persiste presupuestos).
 function csvCell(v){
-  return String(v===null||v===undefined?'':v).replace(/[;\r\n]/g,' ').trim();
+  const t=String(v===null||v===undefined?'':v).replace(/[;\r\n]/g,' ').trim();
+  // Un texto que empieza con = + - @ Excel lo toma como fórmula: va con apóstrofo adelante.
+  return /^[=+\-@]/.test(t)?"'"+t:t;
 }
 function exportarPresupuesto(){
   const cli = (document.getElementById('cli')?.value || '').trim() || 'Sin cliente';
+  if(hayPctInvalido()){ SersaleUI.toast(MSJ_PCT,{tipo:'error'}); return; }
   const pct = parseFloat(document.getElementById('ajuste-pct').value)||0;
   const tipoTxt = tipoAjuste==='aumento' ? 'Aumento' : 'Bonificación';
 
   let csv = '\uFEFF' + 'sep=;\n';
   csv += 'PRESUPUESTO — Frigorífico Sersale\n';
-  csv += 'Generado: ' + new Date().toLocaleDateString('es-AR') + '\n';
+  csv += 'Generado: ' + SersaleBase.fmtFecha(SersaleBase.hoy()) + '\n';
   csv += 'Cliente: ' + csvCell(cli) + '\n';
   csv += 'Modo: ' + (modo==='comp' ? 'Catálogo completo' : 'Selección de ítems') + '\n';
   csv += 'Ajuste global: ' + (pct>0 ? tipoTxt + ' ' + pct + '%' : 'Sin ajuste') + '\n';
@@ -858,23 +992,26 @@ function exportarPresupuesto(){
     csv += '\nARTÍCULOS VARIOS\n';
     csv += 'Producto;Artículo;Peso;Precio final (x kilo)\n';
     varios.forEach(ci=>{
-      const precio = aplicarAjuste(ci.precio || 0);
-      csv += csvCell(ci.desc) + ';;' + csvCell(ci.peso) + ';' + Math.round(precio||0) + '\n';
+      const precio = ci.precio>0 ? aplicarAjuste(ci.precio) : null;
+      csv += csvCell(ci.desc) + ';;' + csvCell(ci.peso) + ';' + (precio==null ? 'Consultar' : Math.round(precio)) + '\n';
       filasTotales++;
     });
   }
 
-  if(!filasTotales){ alert('No hay productos para exportar'); return; }
+  if(!filasTotales){ SersaleUI.toast('No hay productos para exportar',{tipo:'error'}); return; }
 
   const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'Presupuesto_' + cli.replace(/\s+/g,'_') + '_' + new Date().toISOString().slice(0,10) + '.csv';
+  // Fecha de Buenos Aires (toISOString da el día UTC: después de las 21 hs ya es "mañana").
+  a.download = 'Presupuesto_' + nombreArchivo(cli) + '_' + SersaleBase.hoy() + '.csv';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Safari empieza la descarga un instante después del toque: si el enlace se libera ya, no baja nada.
+  setTimeout(()=>URL.revokeObjectURL(url),40000);
+  SersaleUI.toast('CSV exportado',{tipo:'ok'});
 }
 </script>
 
