@@ -295,7 +295,13 @@
     listo(function () {
       var sin = navigator.onLine === false;
       if (sin && !cartel) {
-        cartel = el("div", { class: "ss-sin-conexion", role: "status", text: "Sin conexión · se muestran los datos guardados" });
+        // Las páginas con copia local (js/fb.js) siguen mostrando lo guardado; las demás necesitan señal.
+        var conCopia = !!window.__sersaleDatos;
+        cartel = el("div", {
+          class: "ss-sin-conexion",
+          role: "status",
+          text: conCopia ? "Sin conexión · se muestran los datos guardados" : "Sin conexión · esta pantalla necesita señal",
+        });
         document.body.appendChild(cartel);
       } else if (!sin && cartel) {
         cartel.parentNode.removeChild(cartel);

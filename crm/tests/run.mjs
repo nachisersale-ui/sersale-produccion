@@ -12,7 +12,7 @@ const args = process.argv.slice(2);
 const archivos = args.filter((a) => a.endsWith(".mjs"));
 const resto = args.filter((a) => !a.endsWith(".mjs"));
 const lista = archivos.length ? archivos : fs.readdirSync(AQUI).filter((f) => f.endsWith(".test.mjs")).sort().map((f) => path.join(AQUI, f));
-const hijo = spawn(process.execPath, ["--test", "--test-concurrency=3", ...resto, ...lista], {
+const hijo = spawn(process.execPath, ["--test", "--test-concurrency=2", ...resto, ...lista], {
   stdio: "inherit",
   env: { ...process.env, FIRESTORE_EMULATOR_HOST: emu.hostPort },
 });

@@ -5,9 +5,8 @@ anotado acá para quien los tome después.
 
 | Archivo | Qué | De dónde salió |
 |---|---|---|
-| `src/pedidos/03-pedidos-comercial-remito.jsx` | La `fecha` del remito se guarda con el día UTC (después de las 21:00 queda con el día siguiente). Usar `SersaleBase.hoy()`. | dashboard |
+| `src/backup.html` | El backup tiene que leerse siempre del servidor (`get({ source: "server" })`): sin señal debe avisar y no generar un Excel con datos viejos o vacíos. | ventas |
 | `src/pedidos/05-venta-rapida-precios.jsx` | La venta rápida usa el día UTC como `fechaEntrega`. Usar `SersaleBase.hoy()`. | dashboard |
-| `src/ventas.html` | La fecha propuesta por defecto es el día UTC. Usar `SersaleBase.hoy()`. | dashboard |
 
 Además, cada informe de `docs/auditoria/*.md` tiene una sección "Pendiente en
 otros archivos". Antes de empezar con un archivo, buscar ahí lo que lo nombra:
