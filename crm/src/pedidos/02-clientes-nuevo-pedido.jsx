@@ -1,76 +1,170 @@
+    // ── CLIENTES: lo que está guardado a nombre de un cliente ──
+    // Pedidos, remitos, precios, devoluciones y cuenta corriente no guardan el id
+    // del cliente: lo nombran. Estas son las colecciones (y el campo) donde figura.
+    const P2_DONDE_FIGURA_EL_CLIENTE = [
+      ["cuentas_corrientes","nombre"], ["cc_movimientos","cliente"], ["precios_cliente","cliente"],
+      ["pedidos","cliente"], ["remitos","cliente"], ["devoluciones","cliente"],
+    ];
+
+    /** Documentos de esas colecciones que nombran al cliente (misma regla que la cuenta corriente: sin mirar mayúsculas ni acentos). */
+    async function p2GuardadoANombreDe(nombre, colecciones) {
+      const { db, collection, getDocs } = fb();
+      const out = [];
+      for (const [col, campo] of colecciones) {
+        const snap = await getDocs(collection(db, col));
+        snap.docs.forEach(d => {
+          const valor = d.data()[campo];
+          if (ccMismoCliente(valor, nombre)) out.push({ col, id: d.id, campo, valor });
+        });
+      }
+      return out;
+    }
+
+    /**
+     * Guarda muchas escrituras de a tandas. Cada tanda se guarda entera o no se
+     * guarda; `alFinal` va en la última (ahí se escribe la ficha del cliente, así
+     * si algo falla antes la ficha queda como estaba y se puede reintentar).
+     */
+    async function p2GuardarEnTandas(pasos, alFinal) {
+      const { db, runTransaction } = fb();
+      const TANDA = 400; // una transacción admite hasta 500 escrituras
+      let i = 0;
+      do {
+        const tanda = pasos.slice(i, i + TANDA);
+        i += TANDA;
+        const ultima = i >= pasos.length;
+        await runTransaction(db, async tx => { tanda.forEach(p => p(tx)); if (ultima) alFinal(tx); });
+      } while (i < pasos.length);
+    }
+
+    /**
+     * Cambia el nombre de un cliente y lleva el nombre nuevo a todo lo que estaba
+     * guardado con el anterior. Si hay otra ficha con el mismo nombre no se sabe
+     * de cuál de las dos es cada cosa: ahí solo se cambia la ficha.
+     * `guardado` es lo que devolvió p2GuardadoANombreDe para el nombre anterior.
+     */
+    async function p2RenombrarCliente(actual, datos, guardado) {
+      const { db, doc } = fb();
+      const ref = doc(db, "clientes", actual.id);
+      const pasos = guardado
+        .filter(g => g.valor !== datos.nombre)
+        .map(g => tx => tx.update(doc(db, g.col, g.id), { [g.campo]: datos.nombre }));
+      await p2GuardarEnTandas(pasos, tx => tx.update(ref, datos));
+      await esperarCopiaLocal(ref, d => !!d && d.nombre === datos.nombre);
+    }
+
     function GestionClientes({ onBack }) {
       const [clientes, setClientes] = useState(null);
+      const [errorCarga, setErrorCarga] = useState(false);
       const [nombre, setNombre] = useState("");
       const [telefono, setTelefono] = useState("");
       const [direccion, setDireccion] = useState("");
       const [cuentaCorriente, setCuentaCorriente] = useState(false);
-      const [guardando, setGuardando] = useState(false);
       const [editando, setEditando] = useState(null);
       const [clientePrecios, setClientePrecios] = useState(null);
 
       function verPrecios(nombreCliente) { setClientePrecios(nombreCliente); }
 
       async function cargar() {
-        const { db, collection, getDocs, query, orderBy } = fb();
-        const snap = await getDocs(query(collection(db,"clientes"), orderBy("nombre","asc")));
-        setClientes(snap.docs.map(d=>({id:d.id,...d.data()})));
-      }
-
-      async function guardar() {
-        if (!nombre.trim()) return alert("Ingresá el nombre del cliente");
-        setGuardando(true);
-        const { db, collection, addDoc, doc, updateDoc, Timestamp } = fb();
         try {
-          if (editando) {
-            await updateDoc(doc(db,"clientes",editando), { nombre:nombre.trim(), telefono:telefono.trim(), direccion:direccion.trim(), cuentaCorriente });
-          } else {
-            await addDoc(collection(db,"clientes"), { nombre:nombre.trim(), telefono:telefono.trim(), direccion:direccion.trim(), cuentaCorriente, creadoEn:Timestamp.now() });
-          }
-          setNombre(""); setTelefono(""); setCuentaCorriente(false); setEditando(null);
-          cargar();
-        } catch(e) { alert("Error al guardar"); }
-        setGuardando(false);
-      }
-
-      async function eliminar(id, nombre) {
-        if (!confirm(`¿Eliminar a "${nombre}"? Se borrarán también sus precios guardados, cuenta corriente y movimientos CC.`)) return;
-        const { db, doc, deleteDoc, collection, getDocs, query, where } = fb();
-        try {
-          // 1. Delete client doc
-          await deleteDoc(doc(db,"clientes",id));
-          
-          // 2. Delete saved prices (precios_cliente)
-          const lower = nombre.toLowerCase().trim();
-          const snapPrecios = await getDocs(collection(db,"precios_cliente"));
-          for(const d of snapPrecios.docs) {
-            if(d.data().cliente && d.data().cliente.toLowerCase().trim() === lower) {
-              await deleteDoc(doc(db,"precios_cliente",d.id));
-            }
-          }
-          
-          // 3. Delete CC movements (cc_movimientos)
-          const snapCC = await getDocs(collection(db,"cc_movimientos"));
-          for(const d of snapCC.docs) {
-            if(d.data().cliente && d.data().cliente.toLowerCase().trim() === lower) {
-              await deleteDoc(doc(db,"cc_movimientos",d.id));
-            }
-          }
-          
-          // 4. Delete CC account (cuentas_corrientes)
-          const snapCuentas = await getDocs(collection(db,"cuentas_corrientes"));
-          for(const d of snapCuentas.docs) {
-            if(d.data().nombre && d.data().nombre.toLowerCase().trim() === lower) {
-              await deleteDoc(doc(db,"cuentas_corrientes",d.id));
-            }
-          }
-          
-          console.log("[Clientes] Eliminado completo:", nombre);
-        } catch(e) { 
-          console.error("[Clientes] Error al eliminar:", e);
-          alert("Error al eliminar el cliente"); 
+          const { db, collection, getDocs, query, orderBy } = fb();
+          const snap = await getDocs(query(collection(db,"clientes"), orderBy("nombre","asc")));
+          setClientes(snap.docs.map(d=>({id:d.id,...d.data()})));
+          setErrorCarga(false);
+        } catch(e) {
+          console.error("[Clientes] No se pudo cargar la lista:", e);
+          setErrorCarga(true);
         }
-        cargar();
       }
+
+      const [guardar, guardando] = SersaleBase.useAccion(async () => {
+        const nom = nombre.trim();
+        if (!nom) { SersaleUI.toast("Ingresá el nombre del cliente", { tipo: "error" }); return; }
+        const { db, collection, addDoc, doc, updateDoc, getDocs, Timestamp } = fb();
+        try {
+          const todos = (await getDocs(collection(db,"clientes"))).docs.map(d=>({id:d.id,...d.data()}));
+          const actual = editando ? todos.find(c=>c.id===editando) : null;
+          if (editando && !actual) {
+            SersaleUI.toast("Ese cliente ya no existe: lo eliminaron desde otro teléfono.", { tipo: "error" });
+            cancelarEdicion();
+            await cargar();
+            return;
+          }
+          const datos = { nombre:nom, telefono:telefono.trim(), direccion:direccion.trim(), cuentaCorriente };
+          const cambiaNombre = !!actual && actual.nombre !== nom;
+          // Dos fichas con el mismo nombre parten el historial del cliente (y al borrar una se llevaba lo de la otra).
+          if (!actual || cambiaNombre) {
+            const repetido = todos.find(c => c.id !== editando && ccMismoCliente(c.nombre, nom));
+            if (repetido) { SersaleUI.toast(`Ya hay un cliente cargado como "${repetido.nombre}".`, { tipo: "error" }); return; }
+          }
+          let aviso = actual ? "Cliente actualizado" : "Cliente guardado";
+          if (cambiaNombre) {
+            const hayOtroIgual = todos.some(c => c.id !== actual.id && ccMismoCliente(c.nombre, actual.nombre));
+            const guardado = hayOtroIgual ? [] : (await p2GuardadoANombreDe(actual.nombre, P2_DONDE_FIGURA_EL_CLIENTE)).filter(g => g.valor !== nom);
+            if (guardado.length) {
+              const ok = await SersaleUI.confirmar({
+                titulo: "¿Cambiar el nombre del cliente?",
+                cuerpo: `"${actual.nombre}" pasa a llamarse "${nom}". El nombre nuevo se pone también en sus pedidos, remitos, precios y cuenta corriente (${guardado.length} registro${guardado.length!==1?"s":""}).`,
+                aceptar: "Cambiar nombre"
+              });
+              if (!ok) return;
+              aviso = "Nombre cambiado en la ficha, los pedidos, los precios y la cuenta corriente";
+            }
+            try {
+              await p2RenombrarCliente(actual, datos, guardado);
+            } catch(e) {
+              // La ficha se escribe al final: si se cortó antes, sigue con el nombre viejo y repetir el cambio completa lo que faltó.
+              console.error("[Clientes] Cambio de nombre incompleto:", e);
+              SersaleUI.toast("No se pudo terminar el cambio de nombre. Tocá Actualizar otra vez para completarlo.", { tipo: "error", ms: 8000 });
+              return;
+            }
+          } else if (actual) {
+            await updateDoc(doc(db,"clientes",editando), datos);
+          } else {
+            await addDoc(collection(db,"clientes"), { ...datos, creadoEn:Timestamp.now() });
+          }
+          cancelarEdicion();
+          SersaleUI.toast(aviso, { tipo: "ok" });
+          await cargar();
+        } catch(e) {
+          console.error("[Clientes] Error al guardar:", e);
+          SersaleUI.toast("No se pudo guardar. Probá de nuevo.", { tipo: "error" });
+        }
+      });
+
+      const [eliminar, eliminando] = SersaleBase.useAccion(async (c) => {
+        const { db, doc, collection, getDocs } = fb();
+        try {
+          const todos = (await getDocs(collection(db,"clientes"))).docs.map(d=>({id:d.id,...d.data()}));
+          const hayOtroIgual = todos.some(x => x.id !== c.id && ccMismoCliente(x.nombre, c.nombre));
+          let cuerpo, borrar = [];
+          if (hayOtroIgual) {
+            // Los precios y la cuenta se unen por nombre: con dos fichas iguales son de la que queda.
+            cuerpo = "Hay otro cliente cargado con el mismo nombre: se borra solo esta ficha. Los precios, la cuenta corriente y sus movimientos quedan para el otro.";
+          } else {
+            const cuenta = await ccBuscarCuenta(c.nombre);
+            const movs = await ccMovimientosDe(c.nombre, cuenta);
+            const resto = await p2GuardadoANombreDe(c.nombre, [["precios_cliente","cliente"],["cuentas_corrientes","nombre"]]);
+            borrar = [...movs.map(m=>({ col:"cc_movimientos", id:m.id })), ...resto];
+            const saldo = cuenta ? Math.round(Number(cuenta.saldo)||0) : 0;
+            cuerpo = "Se borran también sus precios guardados, su cuenta corriente y los movimientos de la cuenta."
+              + (saldo>0 ? ` Hoy debe ${ccFmtSaldo(saldo)}: esa deuda deja de figurar.` : saldo<0 ? ` Tiene ${ccFmtSaldo(-saldo)} a favor: ese saldo deja de figurar.` : "")
+              + " Los pedidos y remitos no se borran.";
+          }
+          const ok = await SersaleUI.confirmar({ titulo: `¿Eliminar a "${c.nombre}"?`, cuerpo, aceptar: "Eliminar", peligro: true });
+          if (!ok) return;
+          // Todo junto y la ficha al final: si se corta, el cliente sigue en la lista y se puede volver a eliminar.
+          const ref = doc(db,"clientes",c.id);
+          await p2GuardarEnTandas(borrar.map(b => tx => tx.delete(doc(db,b.col,b.id))), tx => tx.delete(ref));
+          await esperarCopiaLocal(ref, d => d === null);
+          if (editando === c.id) cancelarEdicion();
+          SersaleUI.toast("Cliente eliminado", { tipo: "ok" });
+        } catch(e) {
+          console.error("[Clientes] Error al eliminar:", e);
+          SersaleUI.toast("No se pudo eliminar el cliente. Probá de nuevo.", { tipo: "error" });
+        }
+        await cargar();
+      });
 
       function iniciarEdicion(c) {
         setEditando(c.id); setNombre(c.nombre); setTelefono(c.telefono||""); setDireccion(c.direccion||""); setCuentaCorriente(c.cuentaCorriente||false);
@@ -120,7 +214,12 @@
             <p style={{fontWeight:700,fontSize:13,color:"#5C666F",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>
               Clientes registrados {clientes && `(${clientes.length})`}
             </p>
-            {clientes===null ? <p style={{textAlign:"center",color:"#79828B",marginTop:20}}>Cargando...</p>
+            {clientes===null ? (errorCarga
+                ? <div style={{textAlign:"center",color:"#A4232A",marginTop:20}}>
+                    <p style={{marginBottom:10}}>No se pudieron cargar los clientes.</p>
+                    <button onClick={cargar} style={{padding:"12px 18px",borderRadius:12,border:"1.5px solid #A4232A",background:"#fff",color:"#A4232A",fontWeight:700,fontSize:14,cursor:"pointer"}}>Reintentar</button>
+                  </div>
+                : <p style={{textAlign:"center",color:"#79828B",marginTop:20}}>Cargando...</p>)
             : clientes.length===0
               ? <div style={{textAlign:"center",color:"#A3ABB3",marginTop:40}}><div style={{fontSize:48}}>👥</div><p>Sin clientes aún</p></div>
               : clientes.map(c=>(
@@ -134,8 +233,8 @@
                     {c.direccion && <div style={{fontSize:12,color:"#79828B",marginTop:2}}>📍 {c.direccion}</div>}
                   </div>
                   <button onClick={()=>verPrecios(c.nombre)} style={{padding:"6px 10px",borderRadius:8,border:"1.5px solid #26536E",background:"transparent",color:"#26536E",cursor:"pointer",fontSize:13}}>📈</button>
-                  <button onClick={()=>iniciarEdicion(c)} style={{padding:"6px 10px",borderRadius:8,border:"1.5px solid #D8DCE0",background:"transparent",color:"#5C666F",cursor:"pointer",fontSize:13}}>✏️</button>
-                  <button onClick={()=>eliminar(c.id,c.nombre)} style={{padding:"6px 10px",borderRadius:8,border:"1.5px solid #fee",background:"#fee",color:"#A4232A",cursor:"pointer",fontSize:13}}>🗑️</button>
+                  <button onClick={()=>iniciarEdicion(c)} aria-label={"Editar "+c.nombre} style={{padding:"6px 10px",borderRadius:8,border:"1.5px solid #D8DCE0",background:"transparent",color:"#5C666F",cursor:"pointer",fontSize:13}}>✏️</button>
+                  <button onClick={()=>eliminar(c)} disabled={eliminando} aria-label={"Eliminar "+c.nombre} style={{padding:"6px 10px",borderRadius:8,border:"1.5px solid #fee",background:"#fee",color:"#A4232A",cursor:"pointer",fontSize:13}}>🗑️</button>
                 </div>
               ))
             }
@@ -158,13 +257,19 @@
     };
     // Aplicar override desde Firebase si existe
     if(window.__productosOverride) PRODUCTOS = window.__productosOverride;
+    // El catálogo de Firestore llega después de que corre este archivo (pedidos.html
+    // avisa con "fbReady"): recién ahí se puede tomar. Sin esto PRODUCTOS quedaba
+    // siempre con la lista fija y lo que la lee directo (pestaña Precios) no veía
+    // los productos agregados desde "Productos".
+    document.addEventListener("fbReady", () => { if(window.__productosOverride) PRODUCTOS = window.__productosOverride; });
     // Helper que siempre devuelve la versión más reciente
     function getProductos(){ return window.__productosOverride || PRODUCTOS; }
 
     const UNIDADES = ["kg","piezas","ganchos","bolsas","unidades"];
-    const fmt  = iso => new Date(iso).toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"});
-    const fmtH = iso => new Date(iso).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
-    const today = () => new Date().toISOString().slice(0,10);
+    // Un pedido viejo sin fecha mostraba "Invalid Date": ahora una raya.
+    const fmt  = iso => { const d = new Date(iso); return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"}); };
+    const fmtH = iso => { const d = new Date(iso); return isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"}); };
+    const today = () => SersaleBase.hoy();
     // ── EMAILJS ──────────────────────────────────────────────
     const EMAILJS_SVC = "service_u0mi57u";
     const EMAILJS_TPL = "template_efcs57a";
@@ -173,7 +278,8 @@
     async function enviarEmailAlertas(alertas) {
       if (typeof emailjs === "undefined" || alertas.length === 0) return false;
       emailjs.init({ publicKey: EMAILJS_KEY });
-      const fF = f => f ? new Date(f+"T00:00:00").toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"}) : "-";
+      // fechaPedido es un Timestamp (o falta): la fecha ya resuelta viene en _fechaDisplay.
+      const fF = f => SersaleBase.fmtFecha(f) || "-";
       const hoyStr = new Date().toLocaleDateString("es-AR",{weekday:"long",day:"2-digit",month:"long",year:"numeric"});
       let body = "ALERTAS DE RECONTACTO - " + hoyStr.toUpperCase() + "\n\n";
       body += alertas.length + " cliente(s) requieren recontacto:\n\n";
@@ -183,7 +289,7 @@
         const total = (up.items||[]).reduce((s,it)=>{ const kg=it.kgReal!=null?it.kgReal:parseFloat(it.cantidad)||0; return s+kg*(parseFloat(it.precio)||0); },0);
         body += (i+1)+". "+a.cliente+"\n";
         body += "   Dias sin pedir: "+a.diasSinPedir+"d (limite: "+a.diasAlerta+"d)\n";
-        body += "   Ultimo pedido: "+fF(up.fechaPedido)+" - "+prods+"\n";
+        body += "   Ultimo pedido: "+fF(up._fechaDisplay || up.fechaEntrega || up.fechaPedido)+" - "+prods+"\n";
         if (total>0) body += "   Monto: $"+Math.round(total).toLocaleString("es-AR")+"\n";
         body += "\n";
       });
@@ -198,7 +304,7 @@
       if (!alertas || alertas.filter(a=>a.enAlerta).length === 0) return;
       try {
         const { db, doc, getDoc, setDoc } = fb();
-        const hoy = new Date().toISOString().split("T")[0];
+        const hoy = SersaleBase.hoy(); // día de Buenos Aires: con el de UTC, después de las 21 mandaba otro mail y al día siguiente ninguno
         const ref = doc(db, "config", "ultima_alerta_email");
         const snap = await getDoc(ref);
         if (snap.exists() && snap.data().fecha === hoy) return;
@@ -211,22 +317,23 @@
         const fb = () => ({ db: window.__db, ...window.__fb });
 
     // Mark client as recently contacted (removes from alerts/suggestions)
-    async function marcarContacto(nombreCliente) {
+    // `opciones.cuentaCorriente`: si hay que crear la ficha (cliente cargado con "Otro"),
+    // se guarda con la marca de cuenta corriente que se tildó en el pedido.
+    async function marcarContacto(nombreCliente, opciones) {
       if(!nombreCliente) return;
       try {
         const { db, collection, getDocs, query, where, doc, updateDoc, addDoc } = fb();
-        const lower = nombreCliente.toLowerCase().trim();
-        // Find client doc by case-insensitive name match
+        // Find client doc by name (sin mirar mayúsculas, acentos ni espacios de más)
         const snap = await getDocs(collection(db,"clientes"));
         let found = null;
         snap.docs.forEach(d => {
           const data = d.data();
-          if(data.nombre && data.nombre.toLowerCase().trim() === lower) found = d;
+          if(data.nombre && SersaleBase.mismoNombre(data.nombre, nombreCliente)) found = d;
         });
         if(found) {
-          await updateDoc(doc(db,"clientes",found.id), { 
+          await updateDoc(doc(db,"clientes",found.id), {
             ultimoContacto: new Date().toISOString(),
-            ultimoPedidoRegistrado: new Date().toISOString().split("T")[0]
+            ultimoPedidoRegistrado: SersaleBase.hoy()
           });
           console.log("[Contacto] Marked as contacted:", nombreCliente);
         } else {
@@ -235,9 +342,9 @@
             nombre: nombreCliente,
             telefono: "",
             direccion: "",
-            cuentaCorriente: false,
+            cuentaCorriente: !!(opciones && opciones.cuentaCorriente),
             ultimoContacto: new Date().toISOString(),
-            ultimoPedidoRegistrado: new Date().toISOString().split("T")[0],
+            ultimoPedidoRegistrado: SersaleBase.hoy(),
             creadoEn: new Date().toISOString()
           });
           console.log("[Contacto] Created client + marked as contacted:", nombreCliente);
@@ -316,11 +423,13 @@
       const resto = clientes.filter(c=>c!=="Otro").sort((a,b)=>a.localeCompare(b,"es",{sensitivity:"base"}));
       const ordenados = tieneOtro ? [...resto, "Otro"] : resto;
 
-      const q = busqueda.toLowerCase().trim();
-      const filtrados = q ? ordenados.filter(c=>c.toLowerCase().includes(q)) : ordenados;
+      // Sin mirar acentos ni mayúsculas ("lopez" encuentra "López"). "Otro" queda
+      // siempre a mano: si el cliente no está, se toca ahí y el nombre buscado ya va cargado.
+      const q = busqueda.trim();
+      const filtrados = q ? ordenados.filter(c=>c==="Otro" || SersaleBase.coincide(c, q)) : ordenados;
 
       function seleccionar(c) {
-        onChange(c);
+        onChange(c, q);
         setAbierto(false);
         setBusqueda("");
       }
@@ -374,14 +483,15 @@
         .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
         .replace(/[^a-z0-9\s]/g," ").replace(/\s+/g," ").trim();
 
-      // Catálogo plano: producto + su categoría
+      // Catálogo plano: producto + su categoría. Se rearma si llega (o cambia) el catálogo de Firestore.
+      const productosAhora = getProductos();
       const catalogo = React.useMemo(()=>{
         const out = [];
-        Object.entries(getProductos()).forEach(([cat, prods])=>{
+        Object.entries(productosAhora).forEach(([cat, prods])=>{
           (prods||[]).forEach(prod=>{ if(prod) out.push({prod, cat, norm:normalizar(prod), normCat:normalizar(cat)}); });
         });
         return out;
-      },[]);
+      },[productosAhora]);
 
       const resultados = React.useMemo(()=>{
         const term = normalizar(q);
@@ -485,34 +595,54 @@
       const [items, setItems] = useState([{categoria:"",producto:"",cantidad:"",unidad:"kg",obs:""}]);
       const [tipo, setTipo] = useState("");
       const [obsGeneral, setObsGeneral] = useState("");
-      const [guardando, setGuardando] = useState(false);
       const [clientesDB, setClientesDB] = useState([]);
       const [saldoCC, setSaldoCC] = useState(null);
+      const consultaSaldo = React.useRef(0);
 
       useEffect(()=>{
         async function cargarClientes() {
-          const { db, collection, getDocs, query, orderBy } = fb();
-          const snap = await getDocs(query(collection(db,"clientes"), orderBy("nombre","asc")));
-          setClientesDB(snap.docs.map(d=>({id:d.id,...d.data()})));
+          try {
+            const { db, collection, getDocs, query, orderBy } = fb();
+            const snap = await getDocs(query(collection(db,"clientes"), orderBy("nombre","asc")));
+            setClientesDB(snap.docs.map(d=>({id:d.id,...d.data()})));
+          } catch(e) {
+            console.error("[Pedido] No se pudieron cargar los clientes:", e);
+            SersaleUI.toast("No se pudieron cargar los clientes. Volvé a entrar a Nuevo Pedido.", { tipo: "error" });
+          }
         }
         if(window.__fbReady) cargarClientes(); else document.addEventListener("fbReady",cargarClientes);
       },[]);
 
-      // Al seleccionar cliente, auto-marcar cuenta corriente si corresponde
-      async function onSelectCliente(val) {
+      // Al seleccionar cliente, auto-marcar cuenta corriente si corresponde.
+      // `buscado` es lo que se había escrito en el buscador (sirve de nombre al elegir "Otro").
+      async function onSelectCliente(val, buscado) {
         setCliente(val);
         setSaldoCC(null);
+        const turno = ++consultaSaldo.current; // si se cambia de cliente antes de que llegue el saldo, el que llega tarde se descarta
+        if (val==="Otro" && buscado && !clienteCustom.trim()) setClienteCustom(buscado);
         const found = clientesDB.find(c=>c.nombre===val);
-        if (found) {
-          setCuentaCorriente(!!found.cuentaCorriente);
-          if (found.cuentaCorriente) {
-            try {
-              const { db, collection, getDocs, query, where } = fb();
-              const snap = await getDocs(query(collection(db,"cuentas_corrientes"), where("nombre","==",val)));
-              if (!snap.empty) setSaldoCC(snap.docs[0].data().saldo||0);
-            } catch(e){}
-          }
-        } else setCuentaCorriente(false);
+        setCuentaCorriente(!!(found && found.cuentaCorriente));
+        if (!val || val==="Otro") return;
+        try {
+          // La cuenta se busca aunque la ficha no tenga la marca: las que se abren
+          // desde "Cuentas Corrientes" no la ponen, y la deuda tiene que verse igual.
+          const cuenta = await ccBuscarCuenta(val);
+          if (turno !== consultaSaldo.current) return;
+          if (cuenta) { setSaldoCC(Number(cuenta.saldo)||0); setCuentaCorriente(true); }
+        } catch(e) {
+          console.error("[Pedido] No se pudo leer la cuenta corriente:", e);
+          if (turno === consultaSaldo.current) SersaleUI.toast("No se pudo consultar el saldo de la cuenta corriente.", { tipo: "error" });
+        }
+      }
+
+      // Volver con un pedido a medio cargar: se pregunta antes de perderlo.
+      async function volver() {
+        const hayCarga = items.some(it=>it.producto||it.cantidad) || !!obsGeneral.trim();
+        if (hayCarga) {
+          const salir = await SersaleUI.confirmar({ titulo: "¿Salir sin guardar?", cuerpo: "Se pierde lo que cargaste en este pedido.", aceptar: "Salir", cancelar: "Seguir cargando", peligro: true });
+          if (!salir) return;
+        }
+        onBack();
       }
 
       const addItem = () => setItems([...items,{categoria:"",producto:"",cantidad:"",unidad:"kg",obs:""}]);
@@ -536,17 +666,34 @@
         "Otro"
       ];
 
-      async function guardar() {
-        const nombreCliente = cliente==="Otro" ? clienteCustom.trim() : cliente;
-        if (!nombreCliente) return alert("Seleccioná o ingresá el cliente");
-        if (!tipo) return alert("Seleccioná si es envío o retiro");
-        if (!entrega) return alert("Ingresá la fecha de entrega");
-        const val = items.filter(it=>it.producto&&it.cantidad);
-        if (!val.length) return alert("Agregá al menos un producto");
-        setGuardando(true);
+      const [guardar, guardando] = SersaleBase.useAccion(async () => {
+        const falta = texto => { SersaleUI.toast(texto, { tipo: "error" }); };
+        let nombreCliente = cliente==="Otro" ? clienteCustom.trim() : cliente;
+        if (!nombreCliente) return falta("Seleccioná o ingresá el cliente");
+        if (cliente==="Otro") {
+          // Si el nombre escrito a mano es el de un cliente que ya está (con otra
+          // mayúscula o sin acento), el pedido va a nombre de ese cliente.
+          const existente = clientesDB.find(c=>SersaleBase.mismoNombre(c.nombre, nombreCliente));
+          if (existente) nombreCliente = existente.nombre;
+        }
+        if (!tipo) return falta("Seleccioná si es envío o retiro");
+        if (!entrega) return falta("Ingresá la fecha de entrega");
+        // Una fila a medio cargar (producto sin cantidad o al revés) frena el guardado:
+        // antes se descartaba sin avisar y el pedido salía incompleto.
+        const val = [];
+        for (let i=0; i<items.length; i++) {
+          const it = items[i];
+          const prod = String(it.producto||"").trim(), cant = String(it.cantidad==null?"":it.cantidad).trim();
+          if (!prod && !cant) continue;
+          if (!prod) return falta(`Al ítem ${i+1} le falta el producto`);
+          if (!cant) return falta(`Al ítem ${i+1} (${prod}) le falta la cantidad`);
+          if (!(parseFloat(cant) > 0)) return falta(`La cantidad del ítem ${i+1} (${prod}) tiene que ser mayor a 0`);
+          val.push(it);
+        }
+        if (!val.length) return falta("Agregá al menos un producto");
         try {
           const { db, collection, addDoc, Timestamp } = fb();
-          await addDoc(collection(db,"pedidos"), {
+          const pedidoRef = await addDoc(collection(db,"pedidos"), {
             cliente: nombreCliente, cuentaCorriente, tipo,
             fechaPedido: Timestamp.now(),
             fechaPedidoISO: new Date().toISOString(),
@@ -555,44 +702,41 @@
             estado: "pendiente",
             historial: [{estado:"pendiente", fecha:new Date().toISOString(), nota:"Pedido creado"}]
           });
-          // Si tiene CC, registrar el movimiento automáticamente (aunque no tenga precio aún)
+          // Si tiene cuenta corriente, se anota el "Pendiente de facturar" ($0, el importe lo pone
+          // el remito) atado al pedido con pedidoId. Sin cuenta abierta no se anota nada: la
+          // cuenta y el cargo los crea el remito.
+          let sinPendiente = false;
           if(cuentaCorriente) {
             try {
-              const { getDocs: gD, query: q2, where: w2, updateDoc: uD, doc: d2, addDoc: aC2 } = fb();
-              const totalPedido = val.reduce((s,it)=>{
-                const kg=it.kgReal!=null?it.kgReal:parseFloat(it.cantidad)||0;
-                return s+(kg*(parseFloat(it.precio)||0));
-              },0);
-              const productos = val.map(it=>it.producto).join(", ");
-              const ccMovData = {
-                cliente:nombreCliente, tipo:"pedido",
-                monto:Math.round(totalPedido), movimiento:Math.round(totalPedido),
-                fecha:entrega||new Date().toISOString().split("T")[0],
-                detalle:productos, obs:totalPedido<=0?"Pendiente de facturar":"",
-                origen:"pedido_app", createdAt:new Date().toISOString()
-              };
-              await aC2(collection(db,"cc_movimientos"), ccMovData);
-              // Actualizar saldo solo si hay monto real
-              if(totalPedido > 0) {
-                const snapMovs = await gD(q2(collection(db,"cc_movimientos"),w2("cliente","==",nombreCliente)));
-                let saldo=0;
-                snapMovs.docs.forEach(dd=>{ const m=dd.data(); if(m.monto>0) saldo+=m.tipo==="pedido"?m.monto:-m.monto; });
-                const snapCC = await gD(q2(collection(db,"cuentas_corrientes"),w2("nombre","==",nombreCliente)));
-                if(!snapCC.empty) await uD(d2(db,"cuentas_corrientes",snapCC.docs[0].id),{saldo:Math.round(saldo),ultimoMovimiento:entrega||new Date().toISOString().split("T")[0]});
+              const cuenta = await ccBuscarCuenta(nombreCliente);
+              if (cuenta) {
+                await ccAsentarMovimiento({
+                  cliente: nombreCliente, cuenta,
+                  ultimoMovimiento: cuenta.ultimoMovimiento, // un pendiente de $0 no cambia la fecha del último movimiento
+                  datos: {
+                    tipo:"pedido", monto:0, fecha:entrega,
+                    detalle:val.map(it=>it.producto).join(", "), obs:"Pendiente de facturar",
+                    origen:"pedido_app", pedidoId:pedidoRef.id
+                  }
+                });
               }
-            } catch(e){ console.error("Error CC:", e); }
+            } catch(e){ console.error("[Pedido] No se pudo anotar el pendiente en la cuenta corriente:", e); sinPendiente = true; }
           }
           // Mark client as contacted for alerts/suggestions
-          marcarContacto(nombreCliente);
+          marcarContacto(nombreCliente, { cuentaCorriente });
+          if (sinPendiente) SersaleUI.toast("Pedido guardado. No se pudo anotar el pendiente en la cuenta corriente: el cargo se hace con el remito.", { tipo: "info", ms: 6000 });
+          else SersaleUI.toast("Pedido guardado", { tipo: "ok" });
           onSaved();
-        } catch(e) { alert("Error al guardar"); console.error(e); }
-        setGuardando(false);
-      }
+        } catch(e) {
+          console.error("[Pedido] Error al guardar:", e);
+          SersaleUI.toast("No se pudo guardar el pedido. Probá de nuevo.", { tipo: "error" });
+        }
+      });
 
       return (
         <div className="crm-page">
           <div className="chapa" style={{background:"#12161A",borderBottom:"2px solid #A4232A",color:"#fff",padding:"18px 20px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:10,boxShadow:"0 4px 20px rgba(192,57,43,0.35)"}}>
-            <button onClick={onBack} style={{background:"none",color:"#fff",border:"none",cursor:"pointer",fontSize:20,padding:0}}>←</button>
+            <button onClick={volver} aria-label="Volver" style={{background:"none",color:"#fff",border:"none",cursor:"pointer",fontSize:20,padding:0}}>←</button>
             <div style={{flex:1,fontWeight:800,fontSize:16}}>Nuevo Pedido</div>
           </div>
           <div style={{padding:20}}>
@@ -603,13 +747,15 @@
                 placeholder="Nombre del cliente" value={clienteCustom} onChange={e=>setClienteCustom(e.target.value)} />
             )}
             {saldoCC !== null && (
-              <div style={{borderRadius:12,padding:"10px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:8,
+              <div data-saldo-cc style={{borderRadius:12,padding:"10px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:8,
                 background:saldoCC>50000?"#F7EAEA":saldoCC>0?"#F3EEE2":"#E9F0EC",
                 border:`1.5px solid ${saldoCC>50000?"#C33039":saldoCC>0?"#B5872F":"#2F6B4F"}`}}>
                 <span style={{fontSize:18}}>{saldoCC>50000?"⚠️":saldoCC>0?"💳":"✅"}</span>
                 <div>
                   <div style={{fontWeight:700,fontSize:13,color:saldoCC>50000?"#A4232A":saldoCC>0?"#A8702A":"#2F6B4F"}}>
-                    {saldoCC>0 ? "Saldo pendiente: $"+Math.round(saldoCC).toLocaleString("es-AR") : "Cuenta corriente al día"}
+                    {ccEstadoSaldo(saldoCC)==="debe" ? "Saldo pendiente: "+ccFmtSaldo(saldoCC)
+                      : ccEstadoSaldo(saldoCC)==="a_favor" ? "Saldo a favor: "+ccFmtSaldo(-saldoCC)
+                      : "Cuenta corriente al día"}
                   </div>
                   {saldoCC>50000&&<div style={{fontSize:11,color:"#C33039"}}>Este cliente tiene deuda elevada</div>}
                 </div>
@@ -653,12 +799,12 @@
                     : <select style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none",marginBottom:8}}
                         value={item.producto} onChange={e=>updItem(i,"producto",e.target.value)}>
                         <option value="">— Producto —</option>
-                        {(getProductos()[item.categoria]||[]).sort((a,b)=>a.localeCompare(b,"es")).map(p=><option key={p} value={p}>{p}</option>)}
+                        {[...(getProductos()[item.categoria]||[])].sort((a,b)=>a.localeCompare(b,"es")).map(p=><option key={p} value={p}>{p}</option>)}
                       </select>
                 )}
                 <div style={{display:"flex",gap:8}}>
                   <input style={{flex:1,padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
-                    type="number" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
+                    type="number" inputMode="decimal" min="0" step="any" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
                   <select style={{width:110,padding:"12px 10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
                     value={item.unidad} onChange={e=>updItem(i,"unidad",e.target.value)}>
                     {UNIDADES.map(u=><option key={u} value={u}>{u}</option>)}
