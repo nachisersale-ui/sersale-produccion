@@ -414,8 +414,10 @@ test("alertas: los días sin pedir se cuentan con el día argentino del último 
     // Cliente con historial: el límite se calcula solo, se avisa en vez de aparentar que se guardó
     const trebol = tarjetaAlerta(h, TREBOL);
     const limite = despues.clientes.cli_03.diasAlerta;
-    await trebol.locator('input[type="number"]').fill("45");
-    await trebol.locator('input[type="number"]').blur();
+    // (Desde que se integró el arreglo de Alertas, ese campo dice "Auto:" y no se puede editar:
+    // al tocarlo explica por qué. Antes esta prueba escribía 45 en el campo y ya no podía.)
+    assert.equal(await trebol.locator('input[type="number"]').getAttribute("readonly"), "", "el campo de un límite automático no se edita");
+    await trebol.locator('input[type="number"]').click();
     await toast(h, "se calcula solo", "info").waitFor();
     assert.equal((await h.dump()).clientes.cli_03.diasAlerta, limite);
 

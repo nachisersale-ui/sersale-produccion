@@ -547,6 +547,7 @@
       // Id de esta devolución (y de su crédito): si hay que reintentar después de un
       // error, se corrige lo mismo en vez de cargar la devolución y el crédito dos veces.
       const idDevolucion = React.useRef(null);
+      const intentoConCredito = React.useRef(false); // ¿el último intento con ese id asentaba un crédito?
 
       async function cargar() {
         try {
@@ -623,7 +624,12 @@
               if(!ok) return;
             }
           }
+          // Si el intento anterior con este id llevaba crédito (y pudo haber quedado guardado) y este
+          // ya no lo lleva, es otra devolución: con el mismo id aquel crédito quedaría en la cuenta
+          // sin una devolución que lo explique.
+          if(idDevolucion.current && intentoConCredito.current && !cuenta) idDevolucion.current = null;
           if(!idDevolucion.current) idDevolucion.current = doc(collection(db,"devoluciones")).id;
+          intentoConCredito.current = !!cuenta;
           const devRef = doc(db,"devoluciones",idDevolucion.current);
           const datos = { ...form, producto, cantidad, monto, createdAt: ahora, fecha: hoy };
           // Campo nuevo y opcional: dice si el crédito quedó asentado en la cuenta corriente

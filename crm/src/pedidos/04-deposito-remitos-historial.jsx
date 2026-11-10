@@ -317,6 +317,7 @@
       // (se cierra su hoja) y al reabrirla trae el pedido al día.
       const tarjetas = React.useRef({});    // id -> { firma, n }
       const firmaPropia = React.useRef({}); // id -> firma de lo que acaba de guardar ESTE teléfono
+      const listaActual = React.useRef(null); // la última lista recibida (para mirarla justo después de guardar)
       function setPedidos(lista) {
         const conHojaAbierta = [];
         (lista||[]).forEach(p => {
@@ -333,6 +334,7 @@
           } catch(e) {}
         });
         if (conHojaAbierta.length) SersaleUI.toast("Otro teléfono cambió el pedido de " + (conHojaAbierta[0].cliente||"este cliente") + " mientras anotabas los kg. No se guardó lo que estabas escribiendo: abrí la hoja de nuevo, ya trae el pedido al día.", { tipo:"info", ms: 9000 });
+        listaActual.current = lista;
         setPedidosCrudo(lista);
       }
       // NUEVO = entró después de la última vez que este teléfono tuvo el depósito a la vista.
@@ -439,6 +441,9 @@
               : r.freno === "items" ? "Cambiaron los productos de este pedido. Revisá los ítems antes de marcarlo como listo."
               : r.estado === "cancelado" ? "Este pedido fue cancelado desde otro teléfono. No se cambió nada."
               : r.estado === "despachado" ? "Este pedido ya figura como despachado. No se cambió nada."
+              // Ya está como se lo quería dejar: lo cambiaron recién (quizá desde este mismo teléfono) y la
+              // lista todavía no lo muestra. "Probá de nuevo" acá no tiene sentido: daría siempre lo mismo.
+              : r.estado === nuevoEstado ? "Este pedido ya está " + (nombres[r.estado] || r.estado) + ": la lista de este teléfono todavía no se actualizó (señal lenta). No se cambió nada."
               : "Otro teléfono ya cambió este pedido (ahora está " + (nombres[r.estado] || r.estado || "distinto") + "). Revisalo y probá de nuevo.";
             SersaleUI.toast(msg, { tipo:"error", ms: 6000 });
             if (r.freno === "items") avisadoItems.current = id; // para no repetir el aviso al refrescarse la lista de ítems
@@ -446,6 +451,13 @@
             return false;
           }
           if (r.cambiaronItems) SersaleUI.toast("Ojo: el pedido cambió mientras lo tenías abierto. Revisá los productos.", { tipo:"info", ms: 6000 });
+          // El cambio quedó guardado, ¿y la lista de este teléfono ya lo trae? Con la señal entrecortada
+          // las novedades pueden tardar (llegan por otro camino que el guardado) y la tarjeta sigue
+          // como antes: se avisa, para que nadie lo repita creyendo que no se guardó.
+          const enLista = (listaActual.current||[]).find(p => p.id === id);
+          if (enLista && !(Array.isArray(enLista.historial) && enLista.historial.some(x => x && x.fecha === marca))) {
+            SersaleUI.toast("Guardado. La lista de este teléfono todavía no se actualizó (señal lenta): el pedido va a cambiar solo, no hace falta repetirlo.", { tipo:"info", ms: 9000 });
+          }
           // Cancelado desde el depósito (lo puede hacer un director): igual que en Comercial,
           // su "Pendiente de facturar" sale de la cuenta corriente.
           if (nuevoEstado === "cancelado" && visto) await czAlCancelarPedido(visto);
