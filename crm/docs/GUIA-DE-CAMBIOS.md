@@ -19,7 +19,7 @@ crm/
     css/shell.css      estilos compartidos
   build.mjs            src -> dist (compila el JSX; dist es lo que se publica)
   tests/               pruebas con Chromium + emulador de Firestore
-  docs/                modelo de datos, auditoría, esta guía
+  docs/                cambios, decisiones pendientes, auditoría y esta guía
 ```
 
 `dist/` no se edita ni se versiona: se genera con `node build.mjs`.

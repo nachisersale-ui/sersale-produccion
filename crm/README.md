@@ -23,7 +23,7 @@ Para verlo en la computadora: `node tests/lib/server.mjs dist 8080` y abrir
 | `src/` | Código fuente: una página `.html` por módulo, el React de pedidos y producción en `pedidos/` y `produccion/`, y lo compartido en `js/` y `css/`. |
 | `dist/` | Sitio listo para publicar. Lo genera `build.mjs`; no se edita ni se versiona. |
 | `tests/` | Pruebas de punta a punta y datos de ejemplo. |
-| `docs/` | Guía de cambios, modelo de datos y resultados de la auditoría. |
+| `docs/` | Qué cambió (`CAMBIOS.md`), decisiones pendientes (`PARA-DECIDIR.md`), guía de cambios y auditoría. |
 | `tools/` | Utilidades sueltas (generar los íconos de la app). |
 
 ## Publicar
