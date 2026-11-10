@@ -8,7 +8,7 @@ estaba publicada.
 
 - Cerca de **285 errores corregidos**, entre ellos 11 críticos (datos o saldos
   mal guardados) y 41 altos.
-- **220 pruebas automáticas** que abren las pantallas reales como en un iPhone,
+- **232 pruebas automáticas** que abren las pantallas reales como en un iPhone,
   contra una base de datos de prueba idéntica a la real.
 - La pantalla de Pedidos pasa de tardar **10,8 s a 0,56 s** en aparecer
   (medido simulando un teléfono).
