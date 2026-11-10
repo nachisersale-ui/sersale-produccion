@@ -53,9 +53,15 @@ button:disabled {
   cursor: default;
 }
 
-/* ── Zona segura (notch / isla y barra de inicio) con la app instalada ── */
+/* ── Zona segura (notch / isla y barra de inicio) con la app instalada ──
+   La barra de estado del iPhone se pide negra y opaca (el sistema ubica la
+   página debajo), así los encabezados fijos de cada pantalla no quedan
+   tapados. Lo de abajo cubre el caso de que el sistema la deje translúcida
+   y el teléfono apaisado. */
 body {
   padding-top: var(--ss-arriba);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 body::before {
   content: "";
