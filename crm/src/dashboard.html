@@ -294,7 +294,13 @@ function fmtK(n){
 // Lo que se factura de un ítem: precio × kilos pesados (o la cantidad pedida si
 // todavía no se pesó), igual que lo calcula el remito. Una sola cuenta para
 // todas las tarjetas, así no difieren entre sí.
-function cantFact(it){ return parseFloat(it.kgReal||it.cantidad||0)||0; }
+// Un ítem pesado en 0 kg ("no había") no se factura: el remito no lo cobra ni lo carga a la
+// cuenta corriente. (Los remitos de la versión anterior sí cobraban la cantidad pedida en ese
+// caso, y la dejaron anotada en sus kg: completarConRemito la toma de ahí.)
+function cantFact(it){
+  if(it.kgReal!=null && it.kgReal!=='') return parseFloat(it.kgReal)||0;
+  return parseFloat(it.cantidad)||0;
+}
 function factItem(it){ return (parseFloat(it.precio)||0) * cantFact(it); }
 function factPedido(p){ return (p.items||[]).reduce((s,it)=>s+factItem(it),0); }
 
@@ -312,13 +318,16 @@ function initMeses(){
   }
 }
 
-// Remito de cada pedido. Si un pedido tiene más de un remito, vale el último que se guardó.
+// Remito de cada pedido. Si un pedido tiene más de un remito (los duplicados que dejaba la
+// versión anterior), vale el último que se guardó. Corregir un remito también es guardarlo:
+// la corrección deja su fecha en updatedAt y no cambia createdAt.
 function remitoPorPedido(remitos){
   const por = {};
+  const guardadoEn = r => String(r.updatedAt||r.createdAt||'');
   remitos.forEach(r => {
     if(!r.pedidoId) return;
     const otro = por[r.pedidoId];
-    if(!otro || String(r.createdAt||'') >= String(otro.createdAt||'')) por[r.pedidoId] = r;
+    if(!otro || guardadoEn(r) >= guardadoEn(otro)) por[r.pedidoId] = r;
   });
   return por;
 }
@@ -1046,6 +1055,14 @@ function armarPDF(D) {
     pdf.setTextColor(0,0,0);
   }
 
+  // Un nombre que no entra en su columna se recorta con "..." (si no, tapa el importe de la columna de al lado)
+  function recortar(txt, maxW) {
+    let t = String(txt);
+    if (pdf.getTextWidth(t) <= maxW) return t;
+    while (t.length > 1 && pdf.getTextWidth(t + '...') > maxW) t = t.slice(0, -1);
+    return t.trimEnd() + '...';
+  }
+
   function tableRow(cols, widths, bold, bg) {
     checkPage(18);
     if(bg) { pdf.setFillColor(bg[0],bg[1],bg[2]); pdf.rect(M,y,CW,16,'F'); }
@@ -1053,7 +1070,8 @@ function armarPDF(D) {
     if(bold) pdf.setFont(undefined,'bold'); else pdf.setFont(undefined,'normal');
     let x = M + 4;
     cols.forEach((c,i) => {
-      pdf.text(String(c), x, y+11);
+      // la última columna no tiene nada a su derecha
+      pdf.text(i < cols.length-1 ? recortar(c, widths[i]-6) : String(c), x, y+11);
       x += widths[i];
     });
     y += 16;

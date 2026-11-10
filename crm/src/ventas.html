@@ -565,6 +565,14 @@ function formVacio() {
   return !v('fZ') && !v('fEfec') && !v('fTarj') && !v('fMP') && !v('fOtro') && !getExtras().length && !getGastos().length && !document.getElementById('fObs').value.trim();
 }
 function nombreSuc(s){ return s==='PP' ? 'Parque Patricios' : s==='CAB' ? 'Caballito' : String(s||''); }
+// ¿Lo que ya está guardado es exactamente lo que se está por guardar? Pasa con mala señal:
+// el servidor guarda, la confirmación no llega y el guardado se reintenta solo. En ese caso
+// no hay nada que reemplazar ni que preguntar: el registro ya quedó guardado.
+function mismoRegistro(a, b) {
+  const lista = l => JSON.stringify((Array.isArray(l) ? l : []).map(x => [x && x.desc, x && x.monto]));
+  return ['fecha','sucursal','totalZ','cobEfec','cobTarj','cobMP','cobOtro','usdOficial','usdBlue','extraZ','extraDesc','totalGasto','totalCobros','totalVentas','totalNeto','obs'].every(k => a[k] === b[k])
+    && lista(a.extras) === lista(b.extras) && lista(a.gastos) === lista(b.gastos);
+}
 let _guardando = false;
 async function guardar() {
   if(_guardando) return;
@@ -607,7 +615,7 @@ async function guardar() {
         existente = (s.exists && !reemplazar) ? (s.data()||{}) : null;
         if(!existente) tx.set(ref, datos);
       });
-      if(!existente){ guardado=true; break; }
+      if(!existente || mismoRegistro(existente, datos)){ guardado=true; break; }
       const ok = await SersaleUI.confirmar({
         titulo: 'Ya hay un registro de ese día',
         cuerpo: SersaleBase.fmtFecha(fecha)+' · '+nombreSuc(sucG)+' ya tiene cargado Total Z '+fmt(existente.totalZ)+' (ventas '+fmt(existente.totalVentas)+'). Si seguís, se reemplaza por lo que cargaste ahora (Total Z '+fmt(totalZ)+').',
