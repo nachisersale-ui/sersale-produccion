@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<script>
+  (function(){
+    var role = sessionStorage.getItem("sersale_role");
+    if (role === "director") return;
+    if (role === "operario") { window.location.href = "pedidos.html"; return; }
+    if (sessionStorage.getItem("sersale_auth") === "ok") return;
+    window.location.href = "index.html";
+  })();
+</script>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<title>Migración de clientes — Frigorífico Sersale</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --carbon:#12161A; --pizarra:#1B2228;
+  --lacre:#A4232A;  --lacre-cl:#C33039;
+  --hueso:#EFEAE1;  --fondo:#EDEEF0;
+  --tinta:#191E23;  --acero:#79828B;
+  --linea:#D8DCE0;  --verde:#2F6B4F; --ambar:#A8702A; --azul:#26536E;
+  --app-max-w:1020px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'IBM Plex Sans',system-ui,-apple-system,sans-serif;background:var(--fondo);color:var(--tinta);
+     -webkit-font-smoothing:antialiased;padding-bottom:40px}
+.display{font-family:'Barlow Condensed','IBM Plex Sans',sans-serif;text-transform:uppercase;font-weight:700;
+     line-height:1;letter-spacing:.035em}
+.eyebrow{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10px;font-weight:500;letter-spacing:.17em;
+     text-transform:uppercase;color:var(--acero)}
+.dato{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:var(--app-max-w);margin:0 auto;padding:0 16px}
+
+.topbar{background:var(--carbon);color:var(--hueso);padding:16px 0 18px;position:relative;margin-bottom:22px}
+.topbar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--lacre)}
+.volver{background:rgba(239,234,225,.09);color:var(--hueso);border:1px solid rgba(239,234,225,.18);
+     border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit}
+.volver:hover{background:rgba(196,48,57,.85);border-color:transparent}
+
+.panel{background:#fff;border:1px solid var(--linea);border-radius:14px;padding:18px 16px;margin-bottom:16px}
+.panel h2{font-size:19px;margin-bottom:4px}
+.panel .sub{font-size:12.5px;color:var(--acero);line-height:1.5;margin-bottom:14px}
+
+.btn{border:none;border-radius:9px;padding:13px 18px;font-family:'Barlow Condensed',sans-serif;
+     text-transform:uppercase;letter-spacing:.08em;font-weight:600;font-size:17px;cursor:pointer}
+.btn-1{background:var(--azul);color:#fff}
+.btn-1:hover{background:#2E6383}
+.btn-2{background:var(--lacre);color:var(--hueso)}
+.btn-2:hover{background:var(--lacre-cl)}
+.btn-3{background:#fff;color:var(--acero);border:1px solid var(--linea);font-family:inherit;
+     text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500;padding:10px 14px}
+.btn-3:hover{background:#F6F7F9}
+.btn:disabled{background:#B9BFC5;color:#fff;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi{border:1px solid var(--linea);border-radius:11px;padding:12px 13px;background:#FBFBFC}
+.kpi .n{font-family:'IBM Plex Mono',monospace;font-size:23px;font-weight:600;font-variant-numeric:tabular-nums}
+.kpi .l{font-size:11px;color:var(--acero);margin-top:2px;line-height:1.3}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--acero);
+   font-family:'IBM Plex Mono',monospace;font-weight:500;padding:8px 9px;border-bottom:1px solid var(--linea);
+   white-space:nowrap}
+td{padding:9px;border-bottom:1px solid #EDEFF1;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.num{text-align:right;font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+
+select,input[type=text]{font-family:inherit;font-size:13px;padding:7px 9px;border:1px solid var(--linea);
+   border-radius:7px;background:#FBFBFC;color:var(--tinta);max-width:100%}
+select:focus,input:focus{outline:none;border-color:var(--lacre);background:#fff}
+label.chk{display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.45;cursor:pointer}
+label.chk input{margin-top:2px;flex-shrink:0}
+
+.tag{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.06em;
+   padding:3px 7px;border-radius:5px;white-space:nowrap}
+.t-ok{background:#E9F0EC;color:var(--verde)}
+.t-warn{background:#F7F0E2;color:var(--ambar)}
+.t-bad{background:#F9EBEC;color:var(--lacre)}
+.t-info{background:#E7EDF1;color:var(--azul)}
+.t-off{background:#F2F3F5;color:var(--acero)}
+
+.aviso{border-left:3px solid var(--ambar);background:#FDFaF4;padding:12px 14px;border-radius:0 9px 9px 0;
+   font-size:13px;line-height:1.6;margin-bottom:14px}
+.aviso.rojo{border-left-color:var(--lacre);background:#FDF6F6}
+.aviso.verde{border-left-color:var(--verde);background:#F5FAF7}
+.aviso b{font-weight:600}
+
+#log{font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.75;background:var(--carbon);
+   color:#C7D0D8;border-radius:10px;padding:14px;max-height:300px;overflow-y:auto;white-space:pre-wrap}
+#log .ok{color:#7FBF9B} #log .err{color:#E8868F} #log .hd{color:#E8C98A}
+
+.barra{height:7px;background:#E4E7EA;border-radius:99px;overflow:hidden;margin:10px 0 4px}
+.barra > div{height:100%;background:var(--lacre);width:0;transition:width .2s}
+.oculto{display:none!important}
+.mini{font-size:11.5px;color:var(--acero)}
+.nombre{font-weight:600}
+.idmono{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--acero)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <p class="eyebrow" style="color:rgba(239,234,225,.45);margin-bottom:4px">Herramienta de mantenimiento</p>
+        <h1 class="display" style="font-size:25px">Migración de clientes</h1>
+      </div>
+      <button class="volver" onclick="location.href='index.html'">← Volver al CRM</button>
+    </div>
+    <p style="font-size:12.5px;color:rgba(239,234,225,.62);margin-top:12px;line-height:1.5;max-width:70ch">
+      Le asigna a cada cliente un identificador estable y lo propaga a pedidos, cuentas corrientes, movimientos,
+      precios, remitos y devoluciones. El nombre se conserva en todos los documentos: nada deja de funcionar.
+    </p>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="panel">
+    <h2 class="display">Paso 1 · Auditoría</h2>
+    <p class="sub">Solo lectura. Trae todas las colecciones que referencian clientes y te muestra qué hay,
+      qué está duplicado y qué quedó huérfano. No escribe nada.</p>
+    <div class="row">
+      <button class="btn btn-1" id="btnAuditar" onclick="auditar()">Auditar la base</button>
+      <span class="mini" id="estadoFb">Conectando con Firestore…</span>
+    </div>
+    <div class="barra oculto" id="barraA"><div></div></div>
+  </div>
+
+  <div id="informe" class="oculto"></div>
+
+  <div class="panel oculto" id="panelAplicar">
+    <h2 class="display">Paso 2 · Aplicar</h2>
+    <p class="sub">Escribe el campo <code>clienteId</code> en cada documento. Es idempotente: si lo corrés dos
+      veces, la segunda no vuelve a escribir lo que ya está bien.</p>
+
+    <div class="aviso rojo">
+      <b>Antes de aplicar, bajá un backup.</b> Entrá a <a href='/backup'>backup.html</a> y guardá el Excel.
+      Si algo sale mal, ese archivo es la única vuelta atrás.
+    </div>
+
+    <label class="chk" style="margin-bottom:12px">
+      <input type="checkbox" id="okBackup" onchange="refrescarBotonAplicar()">
+      <span>Ya descargué el backup en Excel y lo tengo guardado fuera del navegador.</span>
+    </label>
+    <label class="chk" style="margin-bottom:16px">
+      <input type="checkbox" id="okSolo" onchange="refrescarBotonAplicar()">
+      <span>Nadie más está cargando pedidos en este momento.</span>
+    </label>
+
+    <div class="row">
+      <button class="btn btn-2" id="btnAplicar" disabled onclick="aplicar()">Aplicar migración</button>
+      <button class="btn btn-3" onclick="exportarPlan()">Bajar el plan en CSV</button>
+    </div>
+    <div class="barra oculto" id="barraB"><div></div></div>
+  </div>
+
+  <div class="panel oculto" id="panelLog">
+    <h2 class="display" style="margin-bottom:12px">Registro</h2>
+    <div id="log"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn btn-3" onclick="exportarLog()">Bajar el registro</button>
+      <button class="btn btn-3" onclick="auditar()">Volver a auditar</button>
+    </div>
+  </div>
+
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
+import { getFirestore, collection, getDocs, doc, updateDoc, writeBatch }
+  from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDyijnox-MMjZTefC3LpT-KApfcU6uev8g",
+  authDomain: "sersale-produccion.firebaseapp.com",
+  projectId: "sersale-produccion",
+  storageBucket: "sersale-produccion.firebasestorage.app",
+  messagingSenderId: "925974326060",
+  appId: "1:925974326060:web:12143f2ebb812d19dfda89"
+};
+const app = initializeApp(firebaseConfig);
+window.__db = getFirestore(app);
+window.__fb = { collection, getDocs, doc, updateDoc, writeBatch };
+document.getElementById("estadoFb").textContent = "Conectado a sersale-produccion";
+</script>
+
+<script>
+/* ============================================================
+   Migración de clientes — Frigorífico Sersale
+   Propaga el ID de documento de `clientes` a todo lo que hoy
+   referencia al cliente solo por su nombre en texto.
+   ============================================================ */
+
+// Colecciones que referencian un cliente, y el campo donde guardan el nombre.
+var REFS = [
+  { col:"pedidos",            campo:"cliente", etiqueta:"Pedidos" },
+  { col:"cuentas_corrientes", campo:"nombre",  etiqueta:"Cuentas corrientes" },
+  { col:"cc_movimientos",     campo:"cliente", etiqueta:"Movimientos de CC" },
+  { col:"precios_cliente",    campo:"cliente", etiqueta:"Precios por cliente" },
+  { col:"remitos",            campo:"cliente", etiqueta:"Remitos" },
+  { col:"devoluciones",       campo:"cliente", etiqueta:"Devoluciones" }
+];
+
+var BATCH_MAX = 400;            // Firestore admite 500; dejamos margen.
+var datos = null;               // { clientes:[], refs:{col:[docs]} }
+var plan = null;                // resultado de la auditoría
+var logLineas = [];
+
+function fb(){ return window.__fb ? Object.assign({db:window.__db}, window.__fb) : null; }
+function esc(s){
+  return String(s===null||s===undefined?"":s).replace(/[&<>"']/g,function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+function n(x){ return (Number(x)||0).toLocaleString("es-AR"); }
+function $(id){ return document.getElementById(id); }
+
+/* ---------- normalización de nombres ----------
+   Deliberadamente conservadora: solo neutraliza diferencias que
+   son con certeza tipográficas. No toca abreviaturas ni razones
+   sociales, para no fusionar dos clientes que de verdad son dos. */
+function normaliza(s){
+  return String(s||"")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")  // saca tildes
+    .toLowerCase()
+    .replace(/\s+/g," ")                               // espacios repetidos
+    .replace(/[.,;:]+$/,"")                            // puntuación final
+    .trim();
+}
+
+function logear(txt, clase){
+  var hora = new Date().toLocaleTimeString("es-AR");
+  logLineas.push("["+hora+"] "+txt);
+  var el = $("log");
+  var span = document.createElement("span");
+  if (clase) span.className = clase;
+  span.textContent = "["+hora+"] "+txt+"\n";
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function progreso(barraId, hechos, total){
+  var b = $(barraId);
+  b.classList.remove("oculto");
+  b.firstElementChild.style.width = (total ? Math.round(hechos/total*100) : 0)+"%";
+}
+
+/* ============================ AUDITORÍA ============================ */
+
+async function auditar(){
+  var f = fb();
+  if (!f) { alert("Todavía no terminó de conectar con Firestore. Probá de nuevo en un segundo."); return; }
+
+  $("btnAuditar").disabled = true;
+  $("panelLog").classList.remove("oculto");
+  $("log").innerHTML = "";
+  logLineas = [];
+  logear("Auditoría iniciada (solo lectura)", "hd");
+
+  try {
+    datos = { clientes:[], refs:{} };
+    var pasos = REFS.length + 1, hechos = 0;
+
+    var snapC = await f.getDocs(f.collection(f.db, "clientes"));
+    snapC.forEach(function(d){ datos.clientes.push(Object.assign({__id:d.id}, d.data())); });
+    logear("clientes: "+datos.clientes.length+" documentos");
+    progreso("barraA", ++hechos, pasos);
+
+    for (var i=0;i<REFS.length;i++){
+      var r = REFS[i];
+      try {
+        var snap = await f.getDocs(f.collection(f.db, r.col));
+        var arr = [];
+        snap.forEach(function(d){ arr.push(Object.assign({__id:d.id}, d.data())); });
+        datos.refs[r.col] = arr;
+        logear(r.col+": "+arr.length+" documentos");
+      } catch(e){
+        datos.refs[r.col] = [];
+        logear(r.col+": no se pudo leer ("+e.message+")", "err");
+      }
+      progreso("barraA", ++hechos, pasos);
+    }
+
+    plan = construirPlan();
+    renderInforme();
+    $("panelAplicar").classList.remove("oculto");
+    logear("Auditoría terminada. Revisá el informe antes de aplicar.", "ok");
+  } catch(e){
+    console.error(e);
+    logear("Error en la auditoría: "+e.message, "err");
+    alert("No se pudo completar la auditoría: "+e.message);
+  } finally {
+    $("btnAuditar").disabled = false;
+  }
+}
+
+function construirPlan(){
+  var p = {
+    clientes: datos.clientes,
+    porNorm: {},        // nombre normalizado -> [clientes]
+    duplicados: [],     // grupos con 2+ clientes
+    huerfanos: {},      // nombre normalizado -> {nombre, usos:{col:n}, total}
+    yaOk: 0,            // referencias que ya tienen el clienteId correcto
+    aEscribir: 0,       // referencias que hay que escribir
+    sinNombre: 0,       // referencias sin nombre de cliente: no se pueden resolver
+    conteos: {},
+    ccPorNorm: {}       // para detectar saldos partidos
+  };
+
+  datos.clientes.forEach(function(c){
+    var k = normaliza(c.nombre);
+    if (!k) { k = "(sin nombre)"; }
+    (p.porNorm[k] = p.porNorm[k] || []).push(c);
+  });
+
+  Object.keys(p.porNorm).forEach(function(k){
+    if (p.porNorm[k].length > 1) {
+      p.duplicados.push({ norm:k, clientes:p.porNorm[k], canonico:p.porNorm[k][0].__id, consolidarSaldo:false });
+    }
+  });
+
+  // Saldos de cuenta corriente por nombre normalizado (para avisar si quedan partidos)
+  (datos.refs["cuentas_corrientes"]||[]).forEach(function(cc){
+    var k = normaliza(cc.nombre);
+    (p.ccPorNorm[k] = p.ccPorNorm[k] || []).push(cc);
+  });
+
+  REFS.forEach(function(r){
+    var arr = datos.refs[r.col] || [];
+    var c = { total:arr.length, yaOk:0, aEscribir:0, huerfanos:0, sinNombre:0 };
+    arr.forEach(function(d){
+      var nombre = d[r.campo];
+      var k = normaliza(nombre);
+      if (!k) { c.sinNombre++; p.sinNombre++; return; }
+      var cands = p.porNorm[k];
+      if (!cands || !cands.length) {
+        c.huerfanos++;
+        var h = p.huerfanos[k] || (p.huerfanos[k] = { nombre:nombre, usos:{}, total:0, accion:"ignorar", destino:"" });
+        h.usos[r.col] = (h.usos[r.col]||0) + 1;
+        h.total++;
+        return;
+      }
+      var idEsperado = cands[0].__id;   // si hay duplicados, el canónico se decide después
+      if (d.clienteId && d.clienteId === idEsperado) { c.yaOk++; p.yaOk++; }
+      else { c.aEscribir++; p.aEscribir++; }
+    });
+    p.conteos[r.col] = c;
+  });
+
+  return p;
+}
+
+/* ============================ INFORME ============================ */
+
+function renderInforme(){
+  var p = plan;
+  var totalRefs = REFS.reduce(function(s,r){ return s + (p.conteos[r.col].total||0); }, 0);
+  var totalHuerf = Object.keys(p.huerfanos).length;
+
+  var h = "";
+
+  /* --- Resumen --- */
+  h += '<div class="panel"><h2 class="display">Resumen</h2>';
+  h += '<p class="sub">Qué hay hoy en la base.</p><div class="kpis">';
+  h += kpi(p.clientes.length, "clientes cargados");
+  h += kpi(totalRefs, "documentos que referencian un cliente");
+  h += kpi(p.aEscribir, "referencias a vincular");
+  h += kpi(p.yaOk, "referencias ya vinculadas");
+  h += kpi(p.duplicados.length, "clientes posiblemente duplicados");
+  h += kpi(totalHuerf, "nombres sin cliente que los respalde");
+  h += '</div>';
+
+  h += '<div class="scroll" style="margin-top:16px"><table><thead><tr>'
+    +  '<th>Colección</th><th class="num">Documentos</th><th class="num">Ya vinculados</th>'
+    +  '<th class="num">A vincular</th><th class="num">Huérfanos</th><th class="num">Sin nombre</th>'
+    +  '</tr></thead><tbody>';
+  REFS.forEach(function(r){
+    var c = p.conteos[r.col];
+    h += '<tr><td><span class="nombre">'+esc(r.etiqueta)+'</span><br><span class="idmono">'+esc(r.col)+'</span></td>'
+      +  '<td class="num">'+n(c.total)+'</td>'
+      +  '<td class="num">'+(c.yaOk? '<span class="tag t-ok">'+n(c.yaOk)+'</span>' : '—')+'</td>'
+      +  '<td class="num">'+(c.aEscribir? '<span class="tag t-info">'+n(c.aEscribir)+'</span>' : '—')+'</td>'
+      +  '<td class="num">'+(c.huerfanos? '<span class="tag t-bad">'+n(c.huerfanos)+'</span>' : '—')+'</td>'
+      +  '<td class="num">'+(c.sinNombre? '<span class="tag t-warn">'+n(c.sinNombre)+'</span>' : '—')+'</td></tr>';
+  });
+  h += '</tbody></table></div></div>';
+
+  /* --- Duplicados --- */
+  if (p.duplicados.length){
+    h += '<div class="panel"><h2 class="display">Clientes posiblemente duplicados</h2>';
+    h += '<p class="sub">Estos nombres son el mismo una vez que se ignoran tildes, mayúsculas y espacios de más. '
+      +  'Elegí cuál queda como ficha principal: el resto apunta a esa y queda marcado como fusionado '
+      +  '(no se borra, por si hay que deshacerlo).</p>';
+    h += '<div class="aviso">Si dos de estos son <b>clientes distintos de verdad</b> (dos sucursales, por ejemplo), '
+      +  'dejalos separados: elegí <i>no fusionar</i> y después diferenciá los nombres en la ficha.</div>';
+    p.duplicados.forEach(function(g, gi){
+      h += '<div style="border:1px solid var(--linea);border-radius:11px;padding:12px;margin-bottom:10px">';
+      h += '<p class="eyebrow" style="margin-bottom:8px">Grupo '+(gi+1)+'</p>';
+      h += '<div class="scroll"><table><thead><tr><th>Ficha principal</th><th>Nombre</th><th>Teléfono</th>'
+        +  '<th class="num">Pedidos</th><th class="num">Saldo CC</th><th>ID</th></tr></thead><tbody>';
+      g.clientes.forEach(function(c, ci){
+        var pedidos = (datos.refs["pedidos"]||[]).filter(function(d){ return normaliza(d.cliente)===normaliza(c.nombre); }).length;
+        var cc = (datos.refs["cuentas_corrientes"]||[]).filter(function(d){ return normaliza(d.nombre)===normaliza(c.nombre); });
+        var saldo = cc.reduce(function(s,x){ return s+(Number(x.saldo)||0); },0);
+        h += '<tr><td><input type="radio" name="dup'+gi+'" value="'+esc(c.__id)+'"'
+          +  (ci===0?' checked':'')+' onchange="setCanonico('+gi+',this.value)"></td>'
+          +  '<td class="nombre">'+esc(c.nombre||"(sin nombre)")+'</td>'
+          +  '<td class="mini">'+esc(c.telefono||"—")+'</td>'
+          +  '<td class="num">'+n(pedidos)+'</td>'
+          +  '<td class="num">'+(cc.length? "$"+n(Math.round(saldo)) : "—")+'</td>'
+          +  '<td class="idmono">'+esc(c.__id)+'</td></tr>';
+      });
+      h += '</tbody></table></div>';
+      h += '<label class="chk" style="margin-top:10px"><input type="checkbox" onchange="setNoFusionar('+gi+',this.checked)">'
+        +  '<span>No fusionar este grupo: son clientes distintos.</span></label>';
+      var ccs = p.ccPorNorm[g.norm] || [];
+      if (ccs.length > 1){
+        var suma = ccs.reduce(function(s,x){ return s+(Number(x.saldo)||0); },0);
+        h += '<label class="chk" style="margin-top:8px"><input type="checkbox" onchange="setConsolidar('+gi+',this.checked)">'
+          +  '<span>Consolidar el saldo de cuenta corriente en la ficha principal '
+          +  '(<span class="dato">$'+n(Math.round(suma))+'</span> en total, hoy repartido en '+ccs.length+' cuentas). '
+          +  '<b>Es una operación sobre plata: confirmá el número antes de marcarlo.</b></span></label>';
+      }
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+
+  /* --- Huérfanos --- */
+  var claves = Object.keys(p.huerfanos).sort(function(a,b){ return p.huerfanos[b].total - p.huerfanos[a].total; });
+  if (claves.length){
+    h += '<div class="panel"><h2 class="display">Nombres sin ficha de cliente</h2>';
+    h += '<p class="sub">Aparecen en pedidos, cuentas corrientes o precios, pero no existe un cliente con ese nombre. '
+      +  'Son los que hoy rompen el cruce de datos. Decidí qué hacer con cada uno.</p>';
+    h += '<div class="aviso"><b>Asignar a un cliente existente</b> es lo habitual cuando el nombre está escrito '
+      +  'distinto (abreviado, con apodo, con la razón social). <b>Crear ficha</b> conviene cuando es un cliente '
+      +  'real que nunca se cargó. <b>Ignorar</b> deja el documento como está, sin vincular.</div>';
+
+    var opciones = '<option value="">— elegir cliente —</option>' + p.clientes
+      .slice()
+      .sort(function(a,b){ return String(a.nombre||"").localeCompare(String(b.nombre||""),"es"); })
+      .map(function(c){ return '<option value="'+esc(c.__id)+'">'+esc(c.nombre||c.__id)+'</option>'; })
+      .join("");
+
+    h += '<div class="scroll"><table><thead><tr><th>Nombre que aparece</th><th>Dónde</th>'
+      +  '<th class="num">Docs</th><th>Qué hacer</th></tr></thead><tbody>';
+    claves.forEach(function(k){
+      var hh = p.huerfanos[k];
+      var donde = Object.keys(hh.usos).map(function(col){
+        var et = (REFS.filter(function(r){return r.col===col;})[0]||{}).etiqueta || col;
+        return esc(et)+' <span class="dato">'+hh.usos[col]+'</span>';
+      }).join('<br>');
+      h += '<tr><td class="nombre">'+esc(hh.nombre)+'</td>'
+        +  '<td class="mini">'+donde+'</td>'
+        +  '<td class="num">'+n(hh.total)+'</td>'
+        +  '<td><select onchange="setAccionHuerfano(\''+esc(k).replace(/'/g,"\\'")+'\',this.value)">'
+        +     '<option value="ignorar">Ignorar</option>'
+        +     '<option value="asignar">Asignar a un cliente…</option>'
+        +     '<option value="crear">Crear ficha nueva</option>'
+        +   '</select> '
+        +   '<select class="oculto" data-destino="'+esc(k)+'" '
+        +     'onchange="setDestinoHuerfano(\''+esc(k).replace(/'/g,"\\'")+'\',this.value)">'+opciones+'</select>'
+        +  '</td></tr>';
+    });
+    h += '</tbody></table></div></div>';
+  } else {
+    h += '<div class="panel"><div class="aviso verde">No hay nombres huérfanos: todo lo que referencia a un '
+      +  'cliente tiene su ficha. Es la mejor señal posible antes de migrar.</div></div>';
+  }
+
+  /* --- Sin nombre --- */
+  if (p.sinNombre){
+    h += '<div class="panel"><div class="aviso"><b>'+n(p.sinNombre)+' documentos no tienen nombre de cliente.</b> '
+      +  'No se pueden vincular automáticamente y quedan como están. Si son pedidos viejos de prueba, conviene '
+      +  'revisarlos a mano desde el CRM.</div></div>';
+  }
+
+  $("informe").innerHTML = h;
+  $("informe").classList.remove("oculto");
+}
+
+function kpi(valor, etiqueta){
+  return '<div class="kpi"><div class="n">'+n(valor)+'</div><div class="l">'+esc(etiqueta)+'</div></div>';
+}
+
+/* ---------- decisiones del usuario ---------- */
+window.setCanonico = function(gi, id){ plan.duplicados[gi].canonico = id; };
+window.setNoFusionar = function(gi, v){ plan.duplicados[gi].noFusionar = !!v; };
+window.setConsolidar = function(gi, v){ plan.duplicados[gi].consolidarSaldo = !!v; };
+window.setAccionHuerfano = function(k, v){
+  plan.huerfanos[k].accion = v;
+  var sel = document.querySelector('select[data-destino="'+k.replace(/"/g,'\\"')+'"]');
+  if (sel) sel.classList.toggle("oculto", v !== "asignar");
+  if (v !== "asignar") plan.huerfanos[k].destino = "";
+};
+window.setDestinoHuerfano = function(k, v){ plan.huerfanos[k].destino = v; };
+
+window.refrescarBotonAplicar = function(){
+  $("btnAplicar").disabled = !($("okBackup").checked && $("okSolo").checked);
+};
+
+/* ============================ APLICAR ============================ */
+
+// Mapa final nombre-normalizado -> clienteId, con los duplicados ya resueltos.
+function mapaFinal(){
+  var m = {};
+  Object.keys(plan.porNorm).forEach(function(k){
+    m[k] = plan.porNorm[k][0].__id;
+  });
+  plan.duplicados.forEach(function(g){
+    if (!g.noFusionar) m[g.norm] = g.canonico;
+  });
+  Object.keys(plan.huerfanos).forEach(function(k){
+    var hh = plan.huerfanos[k];
+    if (hh.accion === "asignar" && hh.destino) m[k] = hh.destino;
+  });
+  return m;
+}
+
+async function aplicar(){
+  var f = fb();
+  if (!f || !plan) return;
+
+  var pendientesSinDestino = Object.keys(plan.huerfanos).filter(function(k){
+    return plan.huerfanos[k].accion === "asignar" && !plan.huerfanos[k].destino;
+  });
+  if (pendientesSinDestino.length){
+    alert("Hay "+pendientesSinDestino.length+" nombre(s) marcados para asignar pero sin cliente elegido. "
+      + "Completalos o pasalos a Ignorar.");
+    return;
+  }
+  var aCrear = Object.keys(plan.huerfanos).filter(function(k){ return plan.huerfanos[k].accion==="crear"; });
+  if (aCrear.length){
+    alert("La creación de fichas nuevas todavía no está habilitada en esta versión: pasá esos "+aCrear.length
+      + " nombre(s) a Ignorar, creá los clientes desde el CRM y volvé a auditar.");
+    return;
+  }
+
+  if (!confirm("Se van a escribir hasta "+n(plan.aEscribir)+" documentos. ¿Seguimos?")) return;
+
+  $("btnAplicar").disabled = true;
+  $("panelLog").classList.remove("oculto");
+  logear("— MIGRACIÓN —", "hd");
+
+  var mapa = mapaFinal();
+  var totales = { escritos:0, saltados:0, sinResolver:0, errores:0 };
+
+  try {
+    // 1) Marcar los clientes fusionados
+    var fusiones = [];
+    plan.duplicados.forEach(function(g){
+      if (g.noFusionar) return;
+      g.clientes.forEach(function(c){
+        if (c.__id !== g.canonico) fusiones.push({ id:c.__id, hacia:g.canonico });
+      });
+    });
+    if (fusiones.length){
+      for (var i=0;i<fusiones.length;i++){
+        try {
+          await f.updateDoc(f.doc(f.db, "clientes", fusiones[i].id),
+            { mergedInto: fusiones[i].hacia, activo: false, migradoEn: new Date().toISOString() });
+          logear("cliente "+fusiones[i].id+" marcado como fusionado en "+fusiones[i].hacia);
+        } catch(e){ totales.errores++; logear("no se pudo marcar "+fusiones[i].id+": "+e.message, "err"); }
+      }
+    }
+
+    // 2) Propagar clienteId a cada colección
+    var pasos = REFS.length, hechos = 0;
+    for (var ri=0; ri<REFS.length; ri++){
+      var r = REFS[ri];
+      var arr = datos.refs[r.col] || [];
+      var batch = f.writeBatch(f.db), enBatch = 0, escritosCol = 0;
+
+      for (var di=0; di<arr.length; di++){
+        var d = arr[di];
+        var k = normaliza(d[r.campo]);
+        if (!k) { totales.sinResolver++; continue; }
+        var id = mapa[k];
+        if (!id) { totales.sinResolver++; continue; }
+        if (d.clienteId === id) { totales.saltados++; continue; }
+
+        batch.update(f.doc(f.db, r.col, d.__id), { clienteId: id });
+        enBatch++; escritosCol++; totales.escritos++;
+
+        if (enBatch >= BATCH_MAX){
+          await batch.commit();
+          batch = f.writeBatch(f.db); enBatch = 0;
+          logear(r.col+": "+escritosCol+" escritos…");
+        }
+      }
+      if (enBatch > 0) await batch.commit();
+      logear(r.col+": "+escritosCol+" documentos vinculados", escritosCol?"ok":null);
+      progreso("barraB", ++hechos, pasos);
+    }
+
+    // 3) Consolidar saldos solo donde el usuario lo pidió explícitamente
+    for (var gi=0; gi<plan.duplicados.length; gi++){
+      var g = plan.duplicados[gi];
+      if (g.noFusionar || !g.consolidarSaldo) continue;
+      var ccs = (plan.ccPorNorm[g.norm] || []);
+      if (ccs.length < 2) continue;
+      var canon = plan.clientes.filter(function(c){ return c.__id === g.canonico; })[0];
+      var nombreCanon = canon ? canon.nombre : null;
+      var principal = ccs.filter(function(x){ return normaliza(x.nombre) === normaliza(nombreCanon); })[0] || ccs[0];
+      var suma = ccs.reduce(function(s,x){ return s+(Number(x.saldo)||0); },0);
+      try {
+        await f.updateDoc(f.doc(f.db, "cuentas_corrientes", principal.__id),
+          { saldo: Math.round(suma*100)/100, clienteId: g.canonico,
+            ultimoMovimiento: new Date().toISOString().slice(0,10) });
+        for (var ci=0; ci<ccs.length; ci++){
+          if (ccs[ci].__id === principal.__id) continue;
+          await f.updateDoc(f.doc(f.db, "cuentas_corrientes", ccs[ci].__id),
+            { saldo: 0, mergedInto: principal.__id, clienteId: g.canonico });
+        }
+        logear("saldo consolidado en "+principal.__id+": $"+n(Math.round(suma)), "ok");
+      } catch(e){ totales.errores++; logear("no se pudo consolidar el saldo: "+e.message, "err"); }
+    }
+
+    logear("— LISTO — escritos: "+n(totales.escritos)
+      + " · ya estaban: "+n(totales.saltados)
+      + " · sin resolver: "+n(totales.sinResolver)
+      + " · errores: "+n(totales.errores), totales.errores?"err":"ok");
+
+    if (totales.sinResolver){
+      logear("Los 'sin resolver' son documentos cuyo nombre quedó en Ignorar o está vacío. "
+        + "Siguen funcionando por nombre, como antes.", null);
+    }
+    alert("Migración terminada.\n\nEscritos: "+n(totales.escritos)
+      + "\nYa estaban bien: "+n(totales.saltados)
+      + "\nSin resolver: "+n(totales.sinResolver)
+      + "\nErrores: "+n(totales.errores)
+      + "\n\nVolvé a auditar para confirmar que quedó todo en verde.");
+  } catch(e){
+    console.error(e);
+    logear("La migración se cortó: "+e.message, "err");
+    alert("La migración se cortó: "+e.message+"\n\nEs segura de reintentar: lo que ya se escribió no se vuelve a escribir.");
+  } finally {
+    $("btnAplicar").disabled = false;
+  }
+}
+
+/* ============================ EXPORTS ============================ */
+
+function bajar(nombre, texto){
+  var blob = new Blob(["\ufeff"+texto], {type:"text/plain;charset=utf-8"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nombre;
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+function exportarPlan(){
+  if (!plan) { alert("Primero corré la auditoría."); return; }
+  var hoy = new Date().toISOString().slice(0,10);
+  var csv = "sep=;\n";
+  csv += "PLAN DE MIGRACION DE CLIENTES - FRIGORIFICO SERSALE\n";
+  csv += "Generado;"+new Date().toLocaleString("es-AR")+"\n\n";
+  csv += "RESUMEN POR COLECCION\n";
+  csv += "Coleccion;Documentos;Ya vinculados;A vincular;Huerfanos;Sin nombre\n";
+  REFS.forEach(function(r){
+    var c = plan.conteos[r.col];
+    csv += [r.col,c.total,c.yaOk,c.aEscribir,c.huerfanos,c.sinNombre].join(";")+"\n";
+  });
+  csv += "\nCLIENTES DUPLICADOS\n";
+  csv += "Grupo;Nombre;ID;Es ficha principal\n";
+  plan.duplicados.forEach(function(g,gi){
+    g.clientes.forEach(function(c){
+      csv += [gi+1, String(c.nombre||"").replace(/;/g,","), c.__id, (c.__id===g.canonico && !g.noFusionar)?"SI":"NO"].join(";")+"\n";
+    });
+  });
+  csv += "\nNOMBRES HUERFANOS\n";
+  csv += "Nombre;Documentos;Accion;Destino\n";
+  Object.keys(plan.huerfanos).forEach(function(k){
+    var hh = plan.huerfanos[k];
+    csv += [String(hh.nombre||"").replace(/;/g,","), hh.total, hh.accion, hh.destino||""].join(";")+"\n";
+  });
+  bajar("Plan_migracion_clientes_"+hoy+".csv", csv);
+}
+
+function exportarLog(){
+  bajar("Registro_migracion_"+new Date().toISOString().slice(0,10)+".txt", logLineas.join("\n"));
+}
+
+window.auditar = auditar;
+window.aplicar = aplicar;
+window.exportarPlan = exportarPlan;
+window.exportarLog = exportarLog;
+</script>
+</body>
+</html>
