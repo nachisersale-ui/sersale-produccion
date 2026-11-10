@@ -52,11 +52,9 @@ if (PRUEBA) fs.connectFirestoreEmulator(db, PRUEBA.emulatorHost, PRUEBA.emulator
 // ── Lecturas rápidas ───────────────────────────────────────────────────────
 
 const ESPERA_PRIMERA_SYNC_MS = 6000; // cuánto esperar a la escucha antes de ir al servidor
-const CUARENTENA_MS = 3000; // después de una transacción, preguntar al servidor
 
 const origen = new WeakMap(); // referencia o consulta -> nombre de la colección raíz
 const escuchas = new Map(); // nombre de colección -> estado de su escucha
-let cuarentenaHasta = 0;
 
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 const sinConexion = () => typeof navigator !== "undefined" && navigator.onLine === false;
@@ -155,14 +153,12 @@ export function doc(padre, ...ruta) {
 
 async function copiaAlDia(nombre) {
   const st = vigilar(nombre);
-  if (Date.now() < cuarentenaHasta) return null;
   if (st.sincronizado) return st;
   if (sinConexion()) {
     if (!hayCopiaGuardada(nombre)) throw errorSinDatos(nombre);
     return st; // sin señal: lo guardado es lo mejor que hay
   }
   await Promise.race([st.primeraSync, espera(ESPERA_PRIMERA_SYNC_MS)]);
-  if (Date.now() < cuarentenaHasta) return null;
   return st.sincronizado ? st : null;
 }
 
@@ -184,7 +180,7 @@ export async function getDoc(ref) {
   const nombre = origen.get(ref);
   // Solo se responde desde la copia local si esa colección ya se está escuchando.
   const st = nombre && escuchas.get(nombre);
-  if (!st || !st.sincronizado || Date.now() < cuarentenaHasta) return fs.getDoc(ref);
+  if (!st || !st.sincronizado) return fs.getDoc(ref);
   try {
     const snap = await fs.getDocFromCache(ref);
     st.lecturas++;
@@ -194,14 +190,30 @@ export async function getDoc(ref) {
   }
 }
 
-// Las transacciones se confirman directo en el servidor: la copia local se
-// entera un instante después. Por unos segundos, leer del servidor.
+// Las transacciones se confirman directo en el servidor y la copia local se
+// entera un instante después, por la escucha. Para que la pantalla que lee
+// apenas termina de guardar vea el cambio, al confirmar se vuelve a pedir al
+// servidor cada documento que la transacción escribió: eso actualiza la copia
+// local antes de devolver el control.
 export async function runTransaction(base, fn, opciones) {
-  try {
-    return await fs.runTransaction(base, fn, opciones);
-  } finally {
-    cuarentenaHasta = Date.now() + CUARENTENA_MS;
-  }
+  const escritos = new Map();
+  const resultado = await fs.runTransaction(
+    base,
+    (tx) => {
+      escritos.clear(); // la función puede volver a ejecutarse si hubo choque con otro teléfono
+      const anotar = (ref) => escritos.set(ref.path, ref);
+      const envoltura = {
+        get: (ref) => tx.get(ref),
+        set: (ref, ...resto) => (anotar(ref), tx.set(ref, ...resto), envoltura),
+        update: (ref, ...resto) => (anotar(ref), tx.update(ref, ...resto), envoltura),
+        delete: (ref) => (anotar(ref), tx.delete(ref), envoltura),
+      };
+      return fn(envoltura);
+    },
+    opciones
+  );
+  await Promise.all([...escritos.values()].map((ref) => fs.getDocFromServer(ref).catch(() => null)));
+  return resultado;
 }
 
 window.addEventListener("online", avisar);

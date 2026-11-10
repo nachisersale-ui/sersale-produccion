@@ -73,6 +73,48 @@ test("después de una transacción, la lectura siguiente ya ve el cambio", async
   }
 });
 
+test("transacciones seguidas: cada lectura ve el último saldo (20 veces)", async () => {
+  const h = await abrir();
+  try {
+    const saldos = await h.page.evaluate(async () => {
+      const m = await import("/js/fb.js");
+      const ref = m.doc(m.db, "cuentas_corrientes", "cc1");
+      const vistos = [];
+      for (let i = 0; i < 20; i++) {
+        await m.runTransaction(m.db, async (tx) => {
+          const s = await tx.get(ref);
+          tx.update(ref, { saldo: s.data().saldo + 1 });
+        });
+        const todos = await m.getDocs(m.collection(m.db, "cuentas_corrientes"));
+        const filtrado = await m.getDocs(m.query(m.collection(m.db, "cuentas_corrientes"), m.where("nombre", "==", "Almacén Don Pepe")));
+        const uno = await m.getDoc(ref);
+        vistos.push([todos.docs[0].data().saldo, filtrado.docs[0].data().saldo, uno.data().saldo]);
+      }
+      return vistos;
+    });
+    saldos.forEach((v, i) => assert.deepEqual(v, [1001 + i, 1001 + i, 1001 + i], "vuelta " + i));
+  } finally {
+    await h.close();
+  }
+});
+
+test("una transacción que crea y borra documentos se refleja enseguida", async () => {
+  const h = await abrir();
+  try {
+    const nombres = await h.page.evaluate(async () => {
+      const m = await import("/js/fb.js");
+      await m.runTransaction(m.db, async (tx) => {
+        tx.set(m.doc(m.db, "clientes", "nuevo"), { nombre: "Creado en transacción" });
+        tx.delete(m.doc(m.db, "clientes", "c2"));
+      });
+      return (await m.getDocs(m.collection(m.db, "clientes"))).docs.map((d) => d.data().nombre).sort();
+    });
+    assert.deepEqual(nombres, ["Almacén Don Pepe", "Creado en transacción"]);
+  } finally {
+    await h.close();
+  }
+});
+
 test("una escritura común se ve enseguida en la lectura siguiente", async () => {
   const h = await abrir();
   try {

@@ -264,7 +264,7 @@
     const DEPOSITO_VISTO_KEY = "sersale_deposito_visto";
 
     // Qué productos tiene un pedido, para saber si cambió mientras se lo tenía abierto.
-    function firmaItemsPedido(items) {
+    function firmaItemsDeposito(items) {
       return (Array.isArray(items) ? items : []).map(it => [it && it.producto, it && it.cantidad, it && it.unidad].join("¦")).join("║");
     }
 
@@ -366,7 +366,7 @@
             const actual = snap.data();
             const cerrado = ["despachado","cancelado"].includes(actual.estado);
             if (cerrado || (visto && actual.estado !== visto.estado)) return { freno:"estado", estado: actual.estado };
-            const cambiaronItems = !!visto && firmaItemsPedido(actual.items) !== firmaItemsPedido(visto.items);
+            const cambiaronItems = !!visto && firmaItemsDeposito(actual.items) !== firmaItemsDeposito(visto.items);
             // Marcar "listo" sin haber visto los productos que tiene ahora el pedido: mejor que lo revisen.
             if (cambiaronItems && !itemsConKg && nuevoEstado === "listo") return { freno:"items" };
             const upd = {
@@ -422,7 +422,7 @@
 
       // La lista de ítems siempre muestra el pedido como está ahora, no como estaba al abrirla.
       const prepDetalle = prepId ? ((pedidos||[]).find(p=>p.id===prepId) || null) : null;
-      const firmaPrep = prepDetalle ? firmaItemsPedido(prepDetalle.items) : null;
+      const firmaPrep = prepDetalle ? firmaItemsDeposito(prepDetalle.items) : null;
       const prepAnterior = React.useRef(null);
       useEffect(()=>{
         if (!prepId || pedidos===null) { prepAnterior.current = null; return; }

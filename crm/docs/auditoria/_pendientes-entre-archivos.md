@@ -8,3 +8,10 @@ anotado acá para quien los tome después.
 | `src/pedidos/03-pedidos-comercial-remito.jsx` | La `fecha` del remito se guarda con el día UTC (después de las 21:00 queda con el día siguiente). Usar `SersaleBase.hoy()`. | dashboard |
 | `src/pedidos/05-venta-rapida-precios.jsx` | La venta rápida usa el día UTC como `fechaEntrega`. Usar `SersaleBase.hoy()`. | dashboard |
 | `src/ventas.html` | La fecha propuesta por defecto es el día UTC. Usar `SersaleBase.hoy()`. | dashboard |
+
+Además, cada informe de `docs/auditoria/*.md` tiene una sección "Pendiente en
+otros archivos". Antes de empezar con un archivo, buscar ahí lo que lo nombra:
+
+```
+grep -n -A40 "Pendiente en otros archivos" docs/auditoria/*.md
+```
