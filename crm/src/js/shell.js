@@ -98,8 +98,11 @@
           // doble toque sobre «Confirmar» no tiene que caer en lo que hay debajo
           // (la barra de secciones cambiaba de página con la operación en curso).
           setTimeout(function () {
+            // El cursor vuelve a donde estaba, salvo que mientras tanto ya esté en otro campo.
+            var a = document.activeElement;
+            var libre = !a || a === document.body || fondo.contains(a);
             if (fondo.parentNode) fondo.parentNode.removeChild(fondo);
-            if (previo && previo.focus)
+            if (libre && previo && previo.focus)
               try {
                 previo.focus({ preventScroll: true });
               } catch (e) {}

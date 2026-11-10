@@ -26,6 +26,23 @@ async function hasta(fn, que = "la condición", ms = 20000) {
   }
 }
 const cartel = (p) => p.locator(".ss-sin-conexion");
+/**
+ * Abre el navegador y prepara la pantalla con `preparar(h)`. Si la preparación
+ * falla, cierra todo antes de avisar (si no, la corrida queda colgada) y dice
+ * en qué estaba la copia de datos y qué errores tiró la página.
+ */
+async function abrirCon(opciones, preparar) {
+  const h = await launch({ rol: "director", etiqueta: "revinfra", ...opciones });
+  try {
+    await preparar(h);
+    return h;
+  } catch (e) {
+    const estado = await h.page.evaluate(() => (window.__sersaleDatos ? window.__sersaleDatos.estado() : null)).catch(() => null);
+    e.message += "\n[preparación] copia de datos: " + JSON.stringify(estado) + "\n[preparación] errores de la página: " + JSON.stringify(h.errores.slice(0, 5));
+    await h.close();
+    throw e;
+  }
+}
 
 const SEED_CHICO = {
   clientes: {
@@ -37,15 +54,15 @@ const SEED_CHICO = {
 
 // ── 1. Hoja de confirmación y doble toque ────────────────────────────────────
 
-async function abrirStock() {
-  const h = await launch({ rol: "director", etiqueta: "revinfra", seed: buildSeed() });
-  const p = h.page;
-  await h.ir("produccion.html");
-  await p.getByRole("button", { name: "Vista Director" }).click();
-  await p.getByText("Panel Director").waitFor();
-  await p.getByRole("button", { name: /📦 Stock/ }).first().click();
-  await p.locator("button", { hasText: /^🗑️$/ }).first().waitFor();
-  return h;
+function abrirStock() {
+  return abrirCon({ seed: buildSeed() }, async (h) => {
+    const p = h.page;
+    await h.ir("produccion.html");
+    await p.getByRole("button", { name: "Vista Director" }).click();
+    await p.getByText("Panel Director").waitFor();
+    await p.getByRole("button", { name: /📦 Stock/ }).first().click();
+    await p.locator("button", { hasText: /^🗑️$/ }).first().waitFor();
+  });
 }
 const cuantosEnStock = async (h) => Object.keys((await h.dump()).stock_produccion).length;
 /** Dos toques seguidos en el mismo punto, como un doble toque con el dedo. */
@@ -138,15 +155,17 @@ const TREBOL = "Carnicería El Trébol";
 
 /** Director → pestaña CC, con todo bajado al teléfono. Devuelve la tarjeta de la cuenta de `cliente`. */
 async function abrirCuentas(cliente) {
-  const h = await launch({ rol: "director", etiqueta: "revinfra", seed: buildSeed() });
+  const h = await abrirCon({ seed: buildSeed() }, async (h) => {
+    const p = h.page;
+    await h.ir("pedidos.html");
+    await h.sincronizar();
+    await p.getByText("¿Quién sos?").waitFor();
+    await p.locator("button", { hasText: "Panel general y cuentas corrientes" }).click();
+    await p.getByText("Activos", { exact: true }).first().waitFor();
+    await p.locator("button", { hasText: "💳 CC" }).click();
+    await p.getByText("Deuda total").waitFor();
+  });
   const p = h.page;
-  await h.ir("pedidos.html");
-  await h.sincronizar();
-  await p.getByText("¿Quién sos?").waitFor();
-  await p.locator("button", { hasText: "Panel general y cuentas corrientes" }).click();
-  await p.getByText("Activos", { exact: true }).first().waitFor();
-  await p.locator("button", { hasText: "💳 CC" }).click();
-  await p.getByText("Deuda total").waitFor();
   const tarjeta = p.locator("div", { has: p.getByText(cliente, { exact: true }) }).filter({ has: p.locator("button", { hasText: "Ver movimientos" }) }).last();
   const saldoEnPantalla = async () => (await tarjeta.locator("[data-saldo]").innerText()).trim();
   return { h, p, tarjeta, saldoEnPantalla };
@@ -344,6 +363,7 @@ test("copia grande (más de 40 MB): dejar la app abierta no borra del teléfono 
     const leido = await leerColeccion(p, "clientes");
     assert.ok(leido.error === "unavailable" || leido.cantidad === 30, "sin señal se ven los 30 clientes guardados (o se avisa que no hay copia), no una lista incompleta: " + JSON.stringify({ error: leido.error, cantidad: leido.cantidad }));
   } finally {
+    await h.limpiar().catch(() => {}); // 43 MB menos en el emulador para las pruebas que siguen
     await h.close();
   }
 });

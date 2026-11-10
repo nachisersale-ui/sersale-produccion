@@ -113,21 +113,10 @@ const sinConexion = () => typeof navigator !== "undefined" && navigator.onLine =
 // se avisa (js/shell.js muestra una franja) hasta que las escuchas vuelven a
 // estar al día con el servidor.
 let atrasado = false;
-let relojAtraso = null;
 function marcarAtrasado() {
   if (atrasado) return;
   atrasado = true;
   avisar();
-  // Mientras dure, se insiste en reconectar (Firestore solo puede tardar hasta un minuto
-  // entre intentos): apenas el servidor contesta, las escuchas se ponen al día y el aviso se va.
-  if (!relojAtraso) {
-    relojAtraso = setInterval(() => {
-      if (!atrasado) {
-        clearInterval(relojAtraso);
-        relojAtraso = null;
-      } else if (!sinConexion()) reconectar();
-    }, 8000);
-  }
 }
 
 function avisar() {
@@ -139,19 +128,28 @@ function avisar() {
 
 // Firestore, cuando falla la conexión, espera cada vez más (hasta un minuto)
 // antes de volver a intentar. Si se sabe que hay señal (acaba de confirmarse
-// una transacción), se le pide que reconecte ya. Como mucho una vez cada 15 s.
+// una transacción), se le pide que reconecte ya. Como mucho una vez cada 15 s,
+// y nunca con un reloj que insista solo: reconectar corta lo que esté a medio
+// bajar, y con señal lenta una bajada larga no terminaría nunca.
 let ultimaReconexion = 0;
 async function reconectar() {
   if (Date.now() - ultimaReconexion < 15000) return false;
   ultimaReconexion = Date.now();
+  let hecho = true;
   try {
     await fs.disableNetwork(db);
-    await fs.enableNetwork(db);
-    return true;
   } catch (e) {
+    hecho = false;
     console.warn("No se pudo reiniciar la conexión:", e);
-    return false;
   }
+  // Pase lo que pase, la conexión se vuelve a habilitar.
+  try {
+    await fs.enableNetwork(db);
+  } catch (e) {
+    hecho = false;
+    console.warn("No se pudo volver a habilitar la conexión:", e);
+  }
+  return hecho;
 }
 
 function vigilar(nombre) {
@@ -339,7 +337,10 @@ export async function runTransaction(base, fn, opciones) {
   const refs = [...escritos.values()];
   const releer = () => Promise.all(refs.map((ref) => fs.getDocFromServer(ref))).then(() => true, () => false);
   let alDia = await releer();
-  if (!alDia && (await reconectar())) alDia = await Promise.race([releer(), espera(4000).then(() => false)]);
+  // Si falló es que Firestore dice que no tiene conexión (no hay nada bajándose que
+  // se pueda cortar): se reconecta y se reintenta, con tope, porque la transacción
+  // ya está guardada y la pantalla no puede quedar esperando.
+  if (!alDia) alDia = await Promise.race([reconectar().then((hecho) => hecho && releer()), espera(6000).then(() => false)]);
   if (!alDia && !sinConexion() && refs.some((ref) => escuchas.has(ref.path.split("/")[0]))) marcarAtrasado();
   return resultado;
 }
