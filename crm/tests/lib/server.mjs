@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const CRM_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 export function defaultRoot() {
-  return path.resolve(CRM_DIR, process.env.CRM_ROOT || "src");
+  return path.resolve(CRM_DIR, process.env.CRM_ROOT || "dist");
 }
 
 export const CONTENT_TYPES = {

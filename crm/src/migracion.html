@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+<script src="js/sesion.js"></script>
 <script>
   (function(){
     var role = sessionStorage.getItem("sersale_role");
@@ -11,11 +12,19 @@
   })();
 </script>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/shell.js"></script>
 <title>Migración de clientes — Frigorífico Sersale</title>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
   --carbon:#12161A; --pizarra:#1B2228;
@@ -175,20 +184,9 @@ label.chk input{margin-top:2px;flex-shrink:0}
 </div>
 
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
-import { getFirestore, collection, getDocs, doc, updateDoc, writeBatch }
-  from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
+import { db, collection, getDocs, doc, updateDoc, writeBatch } from "./js/fb.js";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyDyijnox-MMjZTefC3LpT-KApfcU6uev8g",
-  authDomain: "sersale-produccion.firebaseapp.com",
-  projectId: "sersale-produccion",
-  storageBucket: "sersale-produccion.firebasestorage.app",
-  messagingSenderId: "925974326060",
-  appId: "1:925974326060:web:12143f2ebb812d19dfda89"
-};
-const app = initializeApp(firebaseConfig);
-window.__db = getFirestore(app);
+window.__db = db;
 window.__fb = { collection, getDocs, doc, updateDoc, writeBatch };
 document.getElementById("estadoFb").textContent = "Conectado a sersale-produccion";
 </script>

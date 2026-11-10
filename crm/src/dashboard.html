@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+<script src="js/sesion.js"></script>
 <script>
   (function(){
     var role = sessionStorage.getItem("sersale_role");
@@ -11,15 +12,21 @@
   })();
 </script>
 
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/shell.js"></script>
 <title>Dashboard — Frigorífico Sersale</title>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="vendor/chart.umd.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:'IBM Plex Sans','Inter',sans-serif}
 :root{--rojo:#A4232A;--rojo-osc:#7E1A20;--verde:#24523D;--azul:#1E4257;--fondo:#EDEEF0;--card:#fff;--borde:#D8DCE0}
@@ -110,7 +117,6 @@ canvas{max-height:220px !important}
     .crm-page { min-height:100vh; background:#F2F3F5; max-width:var(--app-max-w); margin:0 auto; }
 </style>
 
-<style>body,html{padding-bottom:64px !important;}</style>
 <style>
 /* ── Capa visual compartida — Sersale ─────────────────────── */
 :root{
@@ -251,15 +257,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 </div>
 
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getFirestore, collection, getDocs, query, where } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { db, collection, getDocs, query, where } from "./js/fb.js";
 
-const app = initializeApp({
-  apiKey:"AIzaSyDyijnox-MMjZTefC3LpT-KApfcU6uev8g",
-  authDomain:"sersale-produccion.firebaseapp.com",
-  projectId:"sersale-produccion"
-});
-const db = getFirestore(app);
 
 // Costos desde planilla
 const COSTO_PROD = {"Jamón Cocido Natural Sublime": 6057.07, "Jamón Cocido Especial Bajo Sodio": 5242.1, "Jamón Cocido de Pata": 4974.15, "Fiambre Cocido de Paleta de Cerdo": 4180.49, "Fiambre de Cerdo p/ Emparedados": 3563.7, "Panceta Ahumada": 30.88, "Panceta Salada": 1748.17, "Lomo Ahumado": 28638.22, "Lomo Tipo Suizo": 8714.45, "Salchichas de Viena": 1139.6, "Salchichas de Copetin": 1139.62, "Pechito Ahumado": 30.88, "Salamín Picado Fino": 2083.54, "Salamín Picado Grueso": 2368.45, "Sopresatta de Cerdo": 2083.54, "Chorizo Tipo Candelario": 2083.54, "Chorizo Tipo Cantimpalo": 2083.54, "Longaniza Tipo Española": 2083.54, "Longaniza Tipo Calabresa": 2083.54, "Longaniza T/ Calabresa Bastón": 2083.54, "Salame Tipo Milán": 1397.4, "Salame Tipo Español": 1397.4, "Salame Chacarero de Campo": 1397.4, "Chorizo Puro Cerdo": 722.88, "Chorizo Especial Vacuno/Cerdo": 722.14, "Chorizo Bombón": 722.14, "Chorizo Bombón Puro Cerdo": 722.88, "Morcilla Criolla": 996.95, "Morcilla Criolla Rosca": 996.95, "Morcilla Criolla Bombón": 996.95, "Morcilla Vasca": 1932.19, "Salchicha Fresca Parrillera": 841.43, "Mortadela Bocha": 10362.39, "Mortadela Bologna": 1038.24, "Mortadela Familiar": 1039.09, "Salchichón c/ Jamón": 1030.77, "Salchichón Primavera": 5499.06, "Salchichón c/ Jamón Familiar": 1031.63, "Salchichón Primavera Familiar": 5500.35};
@@ -785,7 +784,7 @@ cargarTodo();
 </script>
 
 <!-- jsPDF for PDF reports -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
 
 <!-- Report Modal -->
 <div id="reportModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;overflow-y:auto">
@@ -1117,13 +1116,6 @@ function generarExcel() {
   cerrarReporte();
 }
 </script>
-
-
-
-
-
-
-<div id="sersale_nav" style="position:fixed;bottom:0;left:0;right:0;background:#12161A;border-top:1px solid rgba(239,234,225,0.12);display:flex;justify-content:space-around;align-items:center;padding:9px 0 max(9px,env(safe-area-inset-bottom));z-index:9998;box-shadow:0 -4px 18px rgba(0,0,0,0.22)"><a href='/' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.4 12 3.2l9 7.2"/><path d="M5.6 9.4V20.8h12.8V9.4"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Inicio</span></a><a href='/dashboard' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#D8474F;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16"/><path d="M6.5 20v-6M11 20V8m4.5 12v-9M20 20V5"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase">Panel</span></a><a href='/pedidos' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.6 12 3l9 4.6v8.8L12 21l-9-4.6z"/><path d="m3 7.6 9 4.6 9-4.6M12 12.2V21"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Pedidos</span></a><a href='/produccion' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18"/><path d="M4.5 21V11l5 3V11l5 3V7.5l5 3V21"/><path d="M8 17.5h.01M13 17.5h.01M18 17.5h.01"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Producción</span></a><a href='/ventas' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.8" y="6.2" width="18.4" height="11.6" rx="2"/><circle cx="12" cy="12" r="2.4"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Ventas</span></a><a href='/presupuestos' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M10 12.5h5M10 16h3.5"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Presup.</span></a></div>
 
 </body>
 </html>

@@ -1,17 +1,21 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
+<script src="js/sesion.js"></script>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="theme-color" content="#12161A" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-title" content="Sersale CRM" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/shell.js"></script>
   <title>CRM — Frigorífico Sersale</title>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ── Sistema visual Sersale ────────────────────────────
        carbón (cámara de frío) · lacre (sello) · hueso (rótulo) */
@@ -119,19 +123,7 @@
   </style>
 
   <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
-    import { getFirestore, collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot }
-      from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
-    const firebaseConfig = {
-      apiKey: "AIzaSyDyijnox-MMjZTefC3LpT-KApfcU6uev8g",
-      authDomain: "sersale-produccion.firebaseapp.com",
-      projectId: "sersale-produccion",
-      storageBucket: "sersale-produccion.firebasestorage.app",
-      messagingSenderId: "925974326060",
-      appId: "1:925974326060:web:12143f2ebb812d19dfda89"
-    };
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+    import { db, collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot } from "./js/fb.js";
     window.__db = db;
     window.__fb = { collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot };
     window.__fbReady = true;
@@ -197,10 +189,9 @@
     // La barra inferior solo existe una vez iniciada la sesión como Director.
     // Se llama también en DOMContentLoaded porque el nodo se declara después de este script.
     function aplicarNav() {
-      var nav = document.getElementById("sersale_nav") || document.getElementById("__crm_nav");
       var visible = (sesionRole === "director");
-      if (nav) nav.style.display = visible ? "flex" : "none";
-      document.body.style.paddingBottom = visible ? "76px" : "0";
+      if (window.SersaleUI) SersaleUI.nav(visible);
+      document.body.style.paddingBottom = visible ? "" : "0";
     }
     document.addEventListener("DOMContentLoaded", aplicarNav);
 
@@ -257,11 +248,15 @@
             '<h2 class="display" style="font-size:27px;color:var(--tinta)">Director</h2>' +
             '<p style="font-size:12.5px;color:var(--acero);margin-top:4px">Usuario y contrase\u00f1a del sistema</p>' +
           '</div>' +
-          '<form id="__login_form" autocomplete="off">' +
-            '<input type="text" id="__login_user" class="input-field" placeholder="Usuario" autocomplete="off" autocapitalize="none" autofocus />' +
-            '<input type="password" id="__login_pwd" class="input-field" placeholder="Contraseña" autocomplete="off" />' +
+          '<form id="__login_form">' +
+            '<input type="text" id="__login_user" name="username" class="input-field" placeholder="Usuario" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next" autofocus />' +
+            '<input type="password" id="__login_pwd" name="password" class="input-field" placeholder="Contraseña" autocomplete="current-password" enterkeyhint="go" />' +
+            '<label style="display:flex;align-items:center;gap:10px;margin:2px 2px 4px;font-size:13.5px;color:var(--tinta);cursor:pointer;min-height:40px">' +
+              '<input type="checkbox" id="__login_recordar" checked style="width:20px;height:20px;accent-color:#A4232A;flex-shrink:0" />' +
+              '<span>Recordarme en este dispositivo</span>' +
+            '</label>' +
             '<div id="__login_msg" class="err-msg"></div>' +
-            '<button type="submit" class="btn-primary" id="__login_btn">Entrar</button>' +
+            '<button type="submit" class="btn-primary" id="__login_btn">Ingresar</button>' +
             '<button type="button" class="btn-secondary" onclick="cerrarLoginModal()">Cancelar</button>' +
           '</form>' +
         '</div>';
@@ -364,6 +359,9 @@
       sesionRole = "director";
       sesionUsuario = usuario;
       sesionNombre = nombre;
+      // Recordar la sesión en este teléfono (30 días) si quedó tildado
+      var rec = document.getElementById("__login_recordar");
+      if (window.SersaleSesion) { if (!rec || rec.checked) SersaleSesion.recordar(); else SersaleSesion.olvidar(); }
       cerrarLoginModal();
       render();
     }
@@ -374,6 +372,7 @@
       sessionStorage.removeItem("sersale_usuario");
       sessionStorage.removeItem("sersale_nombre");
       sessionStorage.removeItem("sersale_auth");
+      if (window.SersaleSesion) SersaleSesion.olvidar();
       sesionRole = null; sesionUsuario = ""; sesionNombre = "";
       render();
     };
@@ -585,8 +584,6 @@
   </script>
 
   
-
-<div id="sersale_nav" style="position:fixed;bottom:0;left:0;right:0;background:#12161A;border-top:1px solid rgba(239,234,225,0.12);display:flex;justify-content:space-around;align-items:center;padding:9px 0 max(9px,env(safe-area-inset-bottom));z-index:9998;box-shadow:0 -4px 18px rgba(0,0,0,0.22)"><a href='/' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#D8474F;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.4 12 3.2l9 7.2"/><path d="M5.6 9.4V20.8h12.8V9.4"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase">Inicio</span></a><a href='/dashboard' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16"/><path d="M6.5 20v-6M11 20V8m4.5 12v-9M20 20V5"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Panel</span></a><a href='/pedidos' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.6 12 3l9 4.6v8.8L12 21l-9-4.6z"/><path d="m3 7.6 9 4.6 9-4.6M12 12.2V21"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Pedidos</span></a><a href='/produccion' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18"/><path d="M4.5 21V11l5 3V11l5 3V7.5l5 3V21"/><path d="M8 17.5h.01M13 17.5h.01M18 17.5h.01"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Producción</span></a><a href='/ventas' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.8" y="6.2" width="18.4" height="11.6" rx="2"/><circle cx="12" cy="12" r="2.4"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Ventas</span></a><a href='/presupuestos' style='text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;color:#79828B;min-width:46px;padding:2px 4px'><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M10 12.5h5M10 16h3.5"/></svg><span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Presup.</span></a></div>
 
 </body>
 </html>
