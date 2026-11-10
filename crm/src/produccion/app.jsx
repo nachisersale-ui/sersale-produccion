@@ -32,9 +32,12 @@
     function getFirebase() { return { db: window.__db, ...window.__firebase }; }
 
     /* ── Stock: funciones compartidas por las dos vistas ── */
-    async function leerStock() {
-      const { db, collection, getDocs, query, orderBy } = getFirebase();
-      const snap = await getDocs(query(collection(db,"stock_produccion"), orderBy("nombre")));
+    // delServidor: no alcanza con la copia guardada en el teléfono (puede estar vacía o vieja con la
+    // señal entrecortada); si el servidor no contesta, falla en vez de devolver una lista incompleta.
+    async function leerStock(delServidor) {
+      const { db, collection, getDocs, getDocsFromServer, query, orderBy } = getFirebase();
+      if (delServidor && sinSenal()) throw new Error("sin conexión");
+      const snap = await (delServidor ? getDocsFromServer : getDocs)(query(collection(db,"stock_produccion"), orderBy("nombre")));
       return snap.docs.map(d=>({id:d.id,...d.data()}));
     }
     // Ítem de stock por nombre: primero idéntico; si no, sin mirar mayúsculas, acentos ni espacios de más.
@@ -56,14 +59,27 @@
        servidor en ese momento, le suma su diferencia (sin bajar de 0) y, en la
        misma operación, deja que `escribir(tx, res)` agregue lo demás (reporte,
        movimientos). O se guarda todo o no se guarda nada.
-       deltas: { idStock: diferencia }. Devuelve { idStock: { antes, despues, datos } | null si ya no existe }. */
-    async function moverStock(deltas, escribir) {
+       deltas: { idStock: diferencia }. Devuelve { idStock: { antes, despues, datos } | null si ya no existe }.
+
+       Si la señal se corta justo al guardar, el servidor guarda pero la respuesta no llega al
+       teléfono, y Firestore vuelve a ejecutar la operación entera: sin control, se sumaba (o
+       descontaba) dos veces. Por eso cada operación se reconoce a sí misma:
+       - `marca` (opcional): un documento que esta operación crea (el reporte, el primer movimiento
+         de una salida). Si ya existe, un intento anterior quedó guardado: no se aplica de nuevo y
+         se devuelve lo de ese intento (null si fue en una llamada anterior).
+       - sin marca (botones + y −): el ítem queda con el `updatedAt` de esta operación; si al
+         reintentar ya lo tiene, quedó guardado. */
+    async function moverStock(deltas, escribir, marca) {
       const { db, doc, runTransaction } = getFirebase();
       if (sinSenal()) throw new Error("sin conexión");
       const ids = Object.keys(deltas);
+      const sello = new Date().toISOString(); // el mismo en todos los intentos de esta operación
+      let hecho = null;                        // resultado del último intento que llegó a enviarse
       return runTransaction(db, async tx => {
+        if (marca && (await tx.get(marca)).exists()) return hecho;
         const snaps = [];
         for (const id of ids) snaps.push(await tx.get(doc(db,"stock_produccion",id)));
+        if (!marca && hecho && snaps.some(s=>s.exists() && s.data().updatedAt===sello)) return hecho;
         const res = {};
         snaps.forEach((s,i)=>{
           const id = ids[i];
@@ -74,8 +90,9 @@
         });
         if (escribir) escribir(tx, res); // puede cortar todo con un throw antes de que se escriba nada
         ids.forEach(id=>{
-          if (res[id] && deltas[id]) tx.update(doc(db,"stock_produccion",id), { cantidad: res[id].despues, updatedAt: new Date().toISOString() });
+          if (res[id] && deltas[id]) tx.update(doc(db,"stock_produccion",id), { cantidad: res[id].despues, updatedAt: sello });
         });
+        hecho = res;
         return res;
       });
     }
@@ -111,6 +128,7 @@
       const [obs, setObs] = useState("");
       const [enviado, setEnviado] = useState(false);
       const [enviadoData, setEnviadoData] = useState(null);
+      const envio = React.useRef(null); // { firma, ref }: id del reporte que se está intentando enviar
 
       const addItem = () => setItems([...items,{producto:"",cantidad:"",unidad:"kg",obs:""}]);
       const updItem = (i,f,v) => { const c=[...items]; c[i][f]=v; setItems(c); };
@@ -125,13 +143,20 @@
         try {
           const { db, collection, doc, Timestamp } = getFirebase();
           const rep = { area, encargado: encargado.trim(), fecha: Timestamp.now(), fechaISO: new Date().toISOString(), items: val, obs: obs.trim() };
-          const repRef = doc(collection(db,"reportes"));
+          // Reintentar el mismo reporte (mismo contenido) usa el mismo id: si el intento anterior quedó
+          // guardado aunque acá se vio un error (se cortó la señal antes de la respuesta), no se duplica.
+          const firma = JSON.stringify([rep.area, rep.encargado, rep.items, rep.obs]);
+          if (!envio.current || envio.current.firma !== firma) envio.current = { firma, ref: doc(collection(db,"reportes")) };
+          const repRef = envio.current.ref;
 
           // Suman al stock las filas cargadas en "piezas" (regla de siempre). El reporte, el
           // stock y los movimientos se guardan juntos: si algo falla no queda nada a medias
           // y se puede volver a enviar sin duplicar.
           const piezasItems = val.filter(it=>it.unidad==="piezas"&&it.producto!=="Otro"&&numCant(it.cantidad)>0);
-          const stock = piezasItems.length ? await leerStock() : [];
+          let stock = piezasItems.length ? await leerStock() : [];
+          // Antes de dar un producto por "no figura en Stock" y guardar el reporte sin sumarlo, se
+          // confirma con el servidor: la copia de este teléfono puede estar vacía o vieja.
+          if (piezasItems.some(it=>!buscarStock(stock, it.producto))) stock = await leerStock(true);
           const filas = [], deltas = {}, sinMatch = [];
           for (const it of piezasItems) {
             const s = buscarStock(stock, it.producto);
@@ -153,8 +178,9 @@
                 createdAt: ahora
               });
             });
-          });
-          const sinStock = sinMatch.concat(filas.filter(f=>!res[f.s.id]).map(f=>f.s.nombre));
+          }, repRef);
+          envio.current = null;
+          const sinStock = sinMatch.concat(res ? filas.filter(f=>!res[f.s.id]).map(f=>f.s.nombre) : []);
           setEnviadoData(rep); setEnviado(true);
           if (sinStock.length) SersaleUI.aviso("El reporte se guardó, pero NO se pudo impactar el stock de:\n\n• "+sinStock.join("\n• ")+"\n\nEsos productos no figuran en Stock de Producción. Cargalos o corregí el nombre y ajustá el stock a mano.", { titulo:"Stock sin actualizar" });
         } catch(e) { avisoError(sinSenal() ? "Sin conexión: el reporte no se envió. Probá de nuevo cuando vuelva la señal." : "No se pudo enviar el reporte. Probá de nuevo.", e); }
@@ -365,6 +391,7 @@
       const [editando, setEditando] = useState(null); // reporte en edición
       const pedidoReportes = React.useRef(0);              // para descartar respuestas viejas de cargar()
       const colaAjustes = React.useRef(Promise.resolve()); // los toques de +/− se aplican de a uno, en orden
+      const salidaEnCurso = React.useRef(null);            // { firma, refs }: ids de los movimientos de la salida que se está intentando guardar
 
       // Stock state
       const [stockItems, setStockItems] = useState(null);
@@ -485,11 +512,14 @@
       /* Guarda el cambio de un reporte (o lo elimina si `nuevo` es null) junto con su efecto
          en el stock y en sus movimientos, todo en una sola transacción. */
       async function aplicarCambioDeReporte(id, nuevo) {
-        const { db, collection, doc, getDocs, query, where, runTransaction } = getFirebase();
+        const { db, collection, doc, getDocsFromServer, query, where, runTransaction } = getFirebase();
         if (sinSenal()) throw new Error("sin conexión");
-        const movSnap = await getDocs(query(collection(db,"stock_movimientos"), where("ref","==",id)));
+        // Los movimientos del reporte dicen cuánto sumó al stock: se piden al servidor. Con la copia del
+        // teléfono vacía o vieja (señal entrecortada) el reporte se corregía o eliminaba sin tocar el
+        // stock y sin avisar. Si el servidor no contesta, falla y no se cambia nada.
+        const movSnap = await getDocsFromServer(query(collection(db,"stock_movimientos"), where("ref","==",id)));
         const idsMov = movSnap.docs.filter(d=>d.data().tipo==="entrada").map(d=>d.id);
-        const stock = await leerStock();
+        const stock = await leerStock(true);
         const repRef = doc(db,"reportes",id);
         return runTransaction(db, async tx => {
           const repSnap = await tx.get(repRef);
@@ -648,11 +678,16 @@
             if(!ok) return;
           }
           // 3. Stock y movimientos se guardan juntos, leyendo la cantidad del servidor en ese momento.
+          //    Reintentar la misma salida usa los mismos ids de movimiento: si el intento anterior quedó
+          //    guardado aunque acá se vio un error (se cortó la señal antes de la respuesta), no se descuenta dos veces.
+          const firma = JSON.stringify([salidaForm.tipo, salidaForm.destino, salidaForm.fecha, salidaForm.obs.trim(), filas.map(f=>[f.s.id, f.unidad, f.cant])]);
+          if(!salidaEnCurso.current || salidaEnCurso.current.firma !== firma) salidaEnCurso.current = { firma, refs: filas.map(()=>doc(collection(db,"stock_movimientos"))) };
+          const refsMov = salidaEnCurso.current.refs;
           const ahora = new Date().toISOString();
           const res = await moverStock(deltas, (tx, res) => {
             const borrado = filas.find(f=>!res[f.s.id]);
             if(borrado) { const e = new Error("ítem de stock eliminado"); e.itemBorrado = borrado.s.nombre; throw e; }
-            filas.forEach(f=>tx.set(doc(collection(db,"stock_movimientos")), {
+            filas.forEach((f,i)=>tx.set(refsMov[i], {
               stockId: f.s.id,
               nombre: f.s.nombre, tipo:"salida",
               subtipo: salidaForm.tipo,
@@ -661,11 +696,12 @@
               fecha: salidaForm.fecha, obs: salidaForm.obs.trim(),
               createdAt: ahora
             }));
-          });
+          }, refsMov[0]);
+          salidaEnCurso.current = null;
           setModalSalida(false);
           SersaleUI.toast("Salida registrada", { tipo:"ok" });
           // Aviso por WhatsApp solo de lo que esta salida dejó en el mínimo o por debajo.
-          const bajos = cruzaronMinimo(res);
+          const bajos = res ? cruzaronMinimo(res) : [];
           if(bajos.length) sendStockAlert(bajos);
           await cargarStock();
           if(stockSubTab==="movimientos") await cargarMovimientos();
