@@ -1,0 +1,473 @@
+{
+ "summary": "Section /home/user/sersale-produccion/crm/src/pedidos.html lines 2034-2767 is the order-fulfilment and document-reprint layer of the CRM. ActivosFiltrados / HistorialFiltrado are the Comercial lists (active orders grouped by status then delivery day; history filtered by client and delivery-date range). VistaDeposito + DetallePreparacion are the warehouse screen (the ONLY screen an \"operario\" can see): it loads every order, shows the non-dispatched ones by status/day, lets staff move pendiente -> preparando -> listo, enter real kg, and tick items one by one. generarPDFRemito / window.compartirOdescargarPDF build a jsPDF delivery note (remito) and share it through the iOS share sheet or download it. RemitosCliente / VerRemitoGuardado / HistorialCliente are the Director's per-client history (orders + saved remitos, with reprint). TabDia is the Director's \"Por Dia\" agenda with the entry point to the route sheet. All 14 findings below were traced by reading the code only; nothing was executed, and the iOS-specific effects are reasoned from the code path. The most serious one is that the warehouse screen works on a one-shot snapshot of the whole pedidos collection and writes estado/historial/items back from that stale copy with no transaction, so it can silently delete items the manager added or resurrect a cancelled/dispatched order. Other real defects: no error handling or pending feedback on status changes, the NUEVO ribbon is always on for operarios and never on for the director on entry, reprinted remitos always say \"Retiro por local\" with no delivery date, cancelling the share sheet triggers a download, and the remitos lookup is an exact name match fed with a case-normalised name. No file was created, edited or deleted.",
+ "components": [
+  {
+   "name": "ActivosFiltrados",
+   "lines": "2035-2146",
+   "purpose": "Comercial 'Activos' tab. Props {activos, cambiarEstado, lastSeen, onEditar, onRemito}. Single-select chip filter (todos / pendiente / preparando / listo / envio / retiro) with counts, then renders status sections (pendiente, preparando, listo), each grouped by fechaEntrega with a coloured day header (overdue red, today green, tomorrow amber, later blue) and TarjetaPedido cards with actions. Lines 2051-2056 (porDia/diasOrdenados) and the 'otros' branch are dead code."
+  },
+  {
+   "name": "HistorialFiltrado",
+   "lines": "2149-2207",
+   "purpose": "Comercial 'Historial' tab (estado despachado or cancelado). Local filters: client (native select built from the distinct pedido.cliente values) and fechaEntrega from/to (type=date, inclusive string comparison). Renders every matching order as a read-only TarjetaPedido (showActions=false). The cambiarEstado prop is received but never usable."
+  },
+  {
+   "name": "DetallePreparacion",
+   "lines": "2211-2289",
+   "purpose": "Warehouse per-order picking checklist. Local, non-persisted state itemsDone {index: bool}; progress bar; each item is a full-width toggle button showing producto, cantidad+unidad, kgReal and obs. When every item is ticked it shows 'Marcar como Listo' which calls onCambiarEstado(pedido.id,'listo',null)."
+  },
+  {
+   "name": "VistaDeposito",
+   "lines": "2291-2419",
+   "purpose": "Warehouse screen (director, or locked-in operario when modoOperario). cargar() (2307-2311) reads the whole pedidos collection ordered by fechaEntrega and keeps the non despachado/cancelado ones; cambiarEstado() (2313-2323) writes estado + historial (+ items with kgReal) with updateDoc and reloads; cerrarSesionOperario() (2297-2305) confirm()s, clears the sersale_* sessionStorage keys and navigates to index.html. Status chips, status sections -> day groups -> TarjetaPedido; 'Items' on a preparando card opens DetallePreparacion."
+  },
+  {
+   "name": "window.compartirOdescargarPDF",
+   "lines": "2430-2446",
+   "purpose": "Global helper (doc, fileName): on mobile user agents with navigator.share + canShare it shares the jsPDF blob as a File, otherwise doc.save(). Any share rejection, including the user cancelling, falls back to doc.save(). Also used by code outside the section (1954, 3150)."
+  },
+  {
+   "name": "generarPDFRemito (also window.generarPDFRemito)",
+   "lines": "2448-2545",
+   "purpose": "Builds an A4 jsPDF remito from {nroRemito, cliente, fechaISO, fechaEntrega, tipo, items:[{producto,kg,precio,total}], total}: logo, company header, number, client/date/delivery date/type grid, table PRODUCTO | KG | PRECIO/KG | TOTAL, grand total. modoCompartir=true -> compartirOdescargarPDF, false -> doc.save. Single page only, no text wrapping. It duplicates RemitoPedido.imprimir (1862-1955), which does not call it."
+  },
+  {
+   "name": "RemitosCliente",
+   "lines": "2548-2588",
+   "purpose": "Loads the remitos of one client (where cliente == name), sorts by createdAt desc client-side, lists number/date/item count/total; tapping one swaps the list for VerRemitoGuardado. A query error is shown as the empty state."
+  },
+  {
+   "name": "VerRemitoGuardado",
+   "lines": "2591-2655",
+   "purpose": "Read-only view of a saved remito (client, date, items with kg / $ per kg / subtotal, total) with two buttons that regenerate the PDF from the stored document: share (generarPDFRemito(data,true)) and download (false). It is a full .crm-page with its own sticky header, rendered nested inside HistorialCliente."
+  },
+  {
+   "name": "HistorialCliente",
+   "lines": "2658-2705",
+   "purpose": "Director -> Clientes -> one client. Tabs Pedidos / Remitos. The Pedidos tab filters the in-memory pedidos by exact cliente name, sorts by fechaPedidoISO desc, shows Total / Activos / Despachados tiles and read-only cards; the Remitos tab mounts RemitosCliente."
+  },
+  {
+   "name": "TabDia",
+   "lines": "2708-2766",
+   "purpose": "Director 'Por Dia' tab: groups active orders by fechaEntrega (local-date arithmetic for HOY / MANANA / AYER / 'Hace Nd' / 'En Nd'), day header with envio/retiro counts and a 'Ruta' pill that calls setHojaRutaFecha(fecha) when the day has envios; read-only cards."
+  }
+ ],
+ "firestore": [
+  {
+   "collection": "pedidos",
+   "docId": "Firestore auto-id (addDoc at 1157 and 2816, outside the section). The Director's in-memory list also contains synthetic, never-persisted entries with id \"cc_\"+<cc_movimientos doc id> (built at 4819-4826); these reach HistorialCliente.",
+   "ops": "In section: getDocs(query(collection(db,\"pedidos\"), orderBy(\"fechaEntrega\",\"asc\"))) in VistaDeposito.cargar (2309) - the whole collection, filtered client-side to estado not in [despachado, cancelado]; orderBy silently excludes documents without a fechaEntrega field. updateDoc(doc(db,\"pedidos\",id), {estado, historial, items?}) in VistaDeposito.cambiarEstado (2321) - read-modify-write from local state, no transaction. No onSnapshot, addDoc or deleteDoc in the section. The other components get pedidos through props (VistaComercial: getDocs orderBy(\"fechaPedido\",\"desc\") at 1426; VistaDirector: getDocs(collection) at 4762 plus the synthetic entries).",
+   "fields": "cliente: string, display name; the only join key (exact string match) to remitos.cliente, clientes.nombre and cuentas_corrientes.nombre. tipo: string \"envio\" | \"retiro\". estado: string enum \"pendiente\" | \"preparando\" | \"listo\" | \"despachado\" | \"cancelado\" [WRITTEN]. fechaEntrega: string \"YYYY-MM-DD\" (from input type=date, local calendar day; venta rapida writes the UTC day via toISOString); falsy is grouped as \"Sin fecha\". fechaPedidoISO: string ISO-8601 UTC with milliseconds and Z, e.g. \"2026-11-10T14:03:22.123Z\"; compared lexicographically with localStorage sersale_last_seen and sorted with localeCompare at 2660. fechaPedido: Firestore Timestamp (not read in the section; required by the Comercial and App orderBy). items: array of maps {categoria?: string, producto: string, cantidad: numeric STRING from input type=number such as \"5\" or \"2.5\" (a number only in venta rapida), unidad: string, one of \"kg\",\"piezas\",\"ganchos\",\"bolsas\",\"unidades\", obs?: string, kgReal?: number or null, precio?: number (venta rapida only)} [the WHOLE array is rewritten when kg are entered]. obs: string, may be \"\". cuentaCorriente: boolean. historial: array of maps {estado: string, fecha: string ISO UTC, nota?: string} [the WHOLE array is rewritten as previous + {estado, fecha}; no page ever reads it]. origen?: \"venta_rapida\". editadoEn?: string ISO.",
+   "lines": "2307-2323 (read and write); read through props at 2037-2052, 2119, 2154-2159, 2213-2268, 2390, 2660-2663, 2713, 2742-2760",
+   "notes": "No Firebase Auth and no author on writes (historial entries carry no user). dashboard.html (313-322) counts every pedido whose estado is not \"cancelado\" by fechaEntrega, so an estado regression written from a stale warehouse screen changes billing KPIs. A seed-data caveat: items[].cantidad must be a string for normal orders and a number for venta rapida to mirror production."
+  },
+  {
+   "collection": "remitos",
+   "docId": "Firestore auto-id (addDoc at 1709, outside the section).",
+   "ops": "In section: getDocs(query(collection(db,\"remitos\"), where(\"cliente\",\"==\",cliente))) in RemitosCliente (2555), then a client-side sort on createdAt desc (2559). Read-only here; a single equality filter, so no composite index is needed.",
+   "fields": "nro: number (integer, sequential from config/contador_remitos.ultimo; shown as String(nro).padStart(4,\"0\")). cliente: string, copied verbatim from pedido.cliente at save time. fecha: string \"YYYY-MM-DD\" - the UTC day at save (new Date().toISOString().split(\"T\")[0], line 1713), shown as DD/MM/YYYY and reused as the PDF date. items: array of maps {producto: string, kg: number OR numeric string (it.kgReal||it.cantidad||0), unidad: string (stored but ignored by every reader in the section), precio: number ARS per unit (0 when not priced), total: number float kg*precio, unrounded}. total: number float ARS, unrounded. createdAt: string ISO UTC. pedidoId: string (not read here; dashboard.html uses it). Read at 2600-2601 but written by no page: fechaEntrega (expected \"YYYY-MM-DD\") and tipo (expected \"envio\" | \"retiro\") - always undefined on real documents.",
+   "lines": "2551-2564, 2577-2582, 2593-2604, 2616-2638",
+   "notes": "Cross-check hints for other agents; these are writer-side issues outside this section that surface in this reader: (1) fecha is UTC-derived, so a remito saved after 21:00 local is dated the next day and its reprint shows a different date than the original PDF, which used the local date. (2) The stored kg and total use it.kgReal||cantidad (1716-1725) while the on-screen and original PDF use kgReal!=null?kgReal:cantidad (1855, 1929), so a line weighed as 0 kg is stored and charged with the ordered quantity. (3) The original PDF can be shared before saving, with a hand-typed number, while the stored nro always comes from the counter. backup.html reads r.nro||r.nroRemito, hinting at legacy documents with nroRemito, which this section would display as 0000."
+  }
+ ],
+ "clientState": [
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_role",
+   "usage": "Removed by cerrarSesionOperario. Set by index.html to \"director\" or \"operario\"; App (5503) derives modoOperario from it and the head guard (6-10) redirects to index.html without it.",
+   "lines": "2299"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_usuario",
+   "usage": "Removed on operario logout. Set by index.html for directors; never attached to any write in this section.",
+   "lines": "2300"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_nombre",
+   "usage": "Removed on operario logout.",
+   "lines": "2301"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_auth",
+   "usage": "Removed on operario logout. Legacy \"ok\" flag accepted by every page guard.",
+   "lines": "2302"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_vista",
+   "usage": "Removed on operario logout. App persists the current top-level view here (home / comercial / deposito / director / clientes / productos).",
+   "lines": "2303"
+  },
+  {
+   "kind": "localStorage",
+   "key": "sersale_last_seen",
+   "usage": "Read through getLastSeen() on every VistaDeposito render (default \"2000-01-01T00:00:00.000Z\"); an ISO UTC string compared with pedido.fechaPedidoISO to show the NUEVO ribbon. Written only by App.seleccionar (5555) when a tile is tapped on Home, which an operario never reaches.",
+   "lines": "2295, 2390 (also via the lastSeen prop at 2119 and 2760)"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.compartirOdescargarPDF",
+   "usage": "Defined here as (jsPDFdoc, fileName) -> share or save. Also called from RemitoPedido.imprimir (1954) and another PDF generator (3150).",
+   "lines": "2430-2446"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.generarPDFRemito",
+   "usage": "Exported as (data, modoCompartir) with data = {nroRemito: string, cliente, fechaISO: \"YYYY-MM-DD\", fechaEntrega: \"YYYY-MM-DD\" or \"\", tipo: \"envio\" or other, items: [{producto, kg, precio, total}], total}. No caller outside VerRemitoGuardado was found in crm/src.",
+   "lines": "2448-2545"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.jspdf",
+   "usage": "jsPDF UMD global; const { jsPDF } = window.jspdf throws if the CDN script did not load.",
+   "lines": "2449"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__sersaleLogo",
+   "usage": "PNG data URL from assets/logo-data.js, embedded with doc.addImage inside a try/catch.",
+   "lines": "2458"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__fbReady / window.__db / window.__fb, plus the document event \"fbReady\"",
+   "usage": "Firestore bootstrap contract read through fb(); VistaDeposito loads immediately when __fbReady is set, otherwise on the fbReady event (the listener is never removed).",
+   "lines": "2308, 2314, 2326, 2554"
+  },
+  {
+   "kind": "navigation",
+   "key": "window.location.href = \"index.html\"",
+   "usage": "Full page navigation after operario logout.",
+   "lines": "2304"
+  },
+  {
+   "kind": "cssVariable",
+   "key": "--borde, --sombra, --fondo",
+   "usage": "Used in inline styles (border: 1px solid var(--borde), boxShadow: var(--sombra)) and by .crm-page (background: var(--fondo)), but defined nowhere in pedidos.html; only index.html, migracion.html and dashboard.html define some of them.",
+   "lines": "2168, 2240, 2575, 2614, 2625"
+  },
+  {
+   "kind": "componentContract",
+   "key": "TarjetaPedido props",
+   "usage": "{pedido, onCambiarEstado(id, estado, itemsConKg?), showActions, isNew, onEditar?, onRemito?, onDetallePrep?, modoOperario?}. It builds itemsConKg from the pedido prop it was given, so what gets written is whatever snapshot the parent holds.",
+   "lines": "2119, 2203, 2390, 2697, 2760"
+  }
+ ],
+ "external": [
+  {
+   "service": "Cloud Firestore web SDK 10.7.0 (gstatic CDN), project sersale-produccion",
+   "usage": "getDocs and updateDoc on pedidos; getDocs on remitos. Default in-memory cache (getFirestore(app) at line 46, no offline persistence), no Firebase Auth.",
+   "lines": "2308-2309, 2314-2321, 2554-2556"
+  },
+  {
+   "service": "jsPDF 2.5.1 (cdnjs)",
+   "usage": "Client-side generation of the remito PDF (A4, standard Helvetica); doc.output('blob') and doc.save().",
+   "lines": "2449-2543"
+  },
+  {
+   "service": "Web Share API (navigator.share / navigator.canShare with files)",
+   "usage": "Shares the generated PDF through the iOS/Android share sheet (WhatsApp, Mail...). The button is labelled 'Compartir por WhatsApp' but it is the generic sheet; there is no wa.me deep link in this section.",
+   "lines": "2434-2441, 2643-2646"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "Warehouse screen overwrites items / estado / historial from a stale snapshot (no listener, no transaction)",
+   "lines": "pedidos.html:2307-2327",
+   "severity": "critical",
+   "category": "persistence-integrity",
+   "evidence": "cargar() is a one-shot getDocs run on mount, on the refresh button and after the screen's own writes; there is no onSnapshot. cambiarEstado does `const pedido = pedidos.find(p=>p.id===id); const upd = { estado: nuevoEstado, historial:[...(pedido.historial||[]),{...}] }; if(itemsConKg) upd.items = itemsConKg; await updateDoc(doc(db,\"pedidos\",id), upd);`. itemsConKg is built by TarjetaPedido from the same stale prop (`pedido.items.map((it,i)=>({...it, kgReal: ...}))`, 1367-1370 and 1397-1399). Nothing re-reads the document or checks the current estado before writing.",
+   "failureScenario": "09:00 the operario opens Deposito and leaves it open; order X shows 'Jamon 5 kg', pendiente. 09:30 the manager edits X in Comercial and adds 'Salame 3 kg' (EditarPedido writes items). 09:40 the operario, without tapping refresh, taps 'En preparacion', types 5.2 kg and confirms: updateDoc writes items=[Jamon] and the Salame line is deleted from Firestore with no trace, so it is never prepared and never appears on the remito. Same mechanism: the manager cancels or dispatches X at 09:30, the stale screen still shows it, the operario taps 'En preparacion' or saves kg and estado goes back to preparando/listo - a cancelled order is resurrected and re-enters the dashboard billing figures (dashboard.html:322 only excludes 'cancelado').",
+   "suggestedFix": "Subscribe with onSnapshot(query(collection(db,'pedidos'), where('estado','in',['pendiente','preparando','listo']))) and unsubscribe on unmount. Do every status/kg change inside runTransaction (already exposed in window.__fb): read the fresh document, abort with a message if estado is already despachado/cancelado or no longer the expected one, merge kgReal into the FRESH items (matched by index and producto) instead of replacing the array, and append to historial from the fresh array (or arrayUnion). Apply the same to VistaComercial.cambiarEstado (1431-1441).",
+   "confidence": "high"
+  },
+  {
+   "title": "Status changes have no error handling or pending state; the checklist closes before the write is confirmed and a queued write is lost if the app is closed",
+   "lines": "pedidos.html:2307-2323, 2331",
+   "severity": "medium",
+   "category": "async-errors",
+   "evidence": "`async function cargar()` and `async function cambiarEstado()` have no try/catch, and nothing awaits or catches them: `onCambiarEstado={(id,est,items)=>{ cambiarEstado(id,est,items); setPrepDetalle(null); }}`. The list is only refreshed by `cargar()` after `await updateDoc(...)` resolves. Firestore is initialised with the default memory cache (`getFirestore(app)`, line 46), so a write queued while offline lives only in the page's memory.",
+   "failureScenario": "The operario is in the cold room with no signal, ticks all items and taps 'Marcar como Listo'. The detail screen closes immediately, the ticks are discarded, and the list still shows the order under 'En preparacion' with no spinner, toast or error (updateDoc stays pending, cargar never runs). If the operario reloads, or iOS kills the home-screen app before the connection returns, the queued write is lost and the order was never marked listo. A rejected write (rules, quota) is an unhandled rejection with the same silent result. If the first getDocs fails, the screen stays on 'Cargando...' forever.",
+   "suggestedFix": "Wrap both functions in try/catch. Keep a per-order 'saving' flag that disables the buttons and shows progress, update the row optimistically and roll back with a visible message on error. Only close DetallePreparacion after the write succeeds, or keep the ticks. Show an offline banner (navigator.onLine / snapshot metadata) and consider persistentLocalCache so queued writes survive a reload.",
+   "confidence": "high"
+  },
+  {
+   "title": "NUEVO ribbon is always on for operarios and never on for the director when entering from Home",
+   "lines": "pedidos.html:2295, 2390 (same prop at 2119 and 2760)",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "`const lastSeen = getLastSeen();` then `isNew={p.fechaPedidoISO>lastSeen}`. getLastSeen() returns localStorage sersale_last_seen or \"2000-01-01T00:00:00.000Z\". The only writer is App.seleccionar (`setLastSeen(); setVista(key);`, 5554-5558), which runs when a Home tile is tapped. An operario starts directly in 'deposito' (5504-5506) and never sees Home.",
+   "failureScenario": "On the warehouse phone (operario login) sersale_last_seen is never written, so every active order carries the red NUEVO ribbon permanently and it conveys nothing. For the director, tapping 'Deposito' or 'Comercial' on Home stamps lastSeen=now just before the view reads it, so none of the orders that the Home badge announced ('3' new) is marked NUEVO inside the view.",
+   "suggestedFix": "Capture the previous value once on mount (useRef(getLastSeen())) and only then write the new stamp, e.g. on unmount or after the list has been shown. Do it inside VistaDeposito and VistaComercial so the operario path is covered too; ideally keep a per-role or per-user key.",
+   "confidence": "high"
+  },
+  {
+   "title": "Reprinted remito PDF always says 'Retiro por local' and '-' as delivery date",
+   "lines": "pedidos.html:2595-2605, 2493-2495",
+   "severity": "medium",
+   "category": "data-contract",
+   "evidence": "armarData() passes `fechaEntrega: remito.fechaEntrega || \"\"` and `tipo: remito.tipo || \"\"`, and generarPDFRemito prints `data.fechaEntrega ? ... : '-'` and `data.tipo==='envio' ? 'Envio / Reparto' : 'Retiro por local'`. The only writer of remitos (addDoc at 1709-1727) stores nro, pedidoId, cliente, fecha, items, total and createdAt - never tipo or fechaEntrega.",
+   "failureScenario": "An 'envio' order delivered on 12/11 gets its original remito PDF (built from the pedido) showing 'Envio / Reparto' and '12/11/2026'. A week later the customer asks for a copy; Director -> Clientes -> client -> Remitos -> share produces a PDF with the same number that says 'Retiro por local' and FECHA DE ENTREGA '-'. Every reprint of every delivered order states the wrong type.",
+   "suggestedFix": "Store tipo and fechaEntrega (and ideally a client id) in the remito at save time. In VerRemitoGuardado fall back to the linked pedido through remito.pedidoId for existing documents, and leave the row out of the PDF when the value is unknown instead of defaulting to 'Retiro por local'.",
+   "confidence": "high"
+  },
+  {
+   "title": "Remitos tab uses an exact-match query with an in-memory normalised client name, so existing remitos can show as 'Sin remitos emitidos'",
+   "lines": "pedidos.html:2555, 2701",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "`query(collection(db,\"remitos\"), where(\"cliente\",\"==\",cliente))`. The cliente prop comes from VistaDirector's clientesMap keys, and calcularAlertas mutates the loaded pedidos with `p.cliente = normCliente(p.cliente)` (4866) where the canonical spelling is the first variant seen, starting with cc_movimientos (4791). Remitos are stored with the raw `cliente: pedido.cliente` (1712). The code base itself expects case/whitespace variants (case-insensitive fallbacks at 1646-1658 and 1742-1755).",
+   "failureScenario": "A client has a CC movement saved as \"CARNES DEL SUR\" (or with a trailing space) while its orders and remitos say \"Carnes del Sur\". In the Director view the canonical name becomes \"CARNES DEL SUR\"; opening the client's Remitos tab queries that exact string, finds nothing and shows 'Sin remitos emitidos' although remitos exist. The director may conclude that no remito was issued.",
+   "suggestedFix": "Do not mutate pedido.cliente for display; keep the raw names per client and query remitos for every raw variant (where('cliente','in',[...])) or compare case-insensitively client-side. Longer term, key remitos, pedidos and CC by a client id (migracion.html already introduces one).",
+   "confidence": "medium"
+  },
+  {
+   "title": "HistorialCliente throws during render when a pedido has no string fechaPedidoISO, blanking the whole app",
+   "lines": "pedidos.html:2660",
+   "severity": "medium",
+   "category": "react-correctness",
+   "evidence": "`pedidos.filter(p=>p.cliente===cliente).sort((a,b)=>b.fechaPedidoISO.localeCompare(a.fechaPedidoISO))` has no guard and there is no error boundary anywhere in the file. The Director's list includes synthetic entries with `fechaPedidoISO: m.createdAt || fechaCorta+\"T12:00:00.000Z\"` (4822), and the same function explicitly handles m.createdAt being a Firestore Timestamp (4803-4806). backup.html:90 and 4875-4889 also treat fechaPedidoISO as optional on real pedidos.",
+   "failureScenario": "A client has two or more orders and one of them is a legacy pedido without fechaPedidoISO, or a CC movement whose createdAt is a Timestamp. Tapping that client in Director -> Clientes throws a TypeError (localeCompare on undefined, or not a function) during render; React unmounts the root and only the bottom navigation remains until the page is reloaded.",
+   "suggestedFix": "Sort with String(b.fechaPedidoISO||b.fechaEntrega||\"\").localeCompare(String(a.fechaPedidoISO||a.fechaEntrega||\"\")), normalise Timestamps to ISO strings where the synthetic entries are built, and add a top-level error boundary with a reload button.",
+   "confidence": "low"
+  },
+  {
+   "title": "A failed remitos query is shown as 'Sin remitos emitidos'",
+   "lines": "pedidos.html:2561, 2568",
+   "severity": "medium",
+   "category": "async-errors",
+   "evidence": "`catch(e){ console.error(\"Error cargando remitos:\",e); setRemitos([]); }` followed by `if (remitos.length===0) return ... Sin remitos emitidos`. The error state and the empty state are indistinguishable and there is no retry.",
+   "failureScenario": "The director opens a client's Remitos tab with a bad connection or a rules error: the screen states that no remito was issued. Believing that, the remito is generated again from Comercial, and guardarRemito (1792-1806) adds a second CC movement for the same delivery.",
+   "suggestedFix": "Keep a separate error state with a 'No se pudieron cargar los remitos - Reintentar' message, and never render the empty state after an exception.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Dispatched and cancelled are terminal states: the history list offers no way to reopen an order",
+   "lines": "pedidos.html:2149, 2203",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "HistorialFiltrado receives cambiarEstado but renders `<TarjetaPedido ... onCambiarEstado={cambiarEstado} showActions={false} isNew={false} />`, and TarjetaPedido also hides every action when estado is despachado or cancelado (1333). The cancel and 'Despachado' buttons fire immediately with no confirmation (1338, 1342).",
+   "failureScenario": "The manager means to tap the edit pencil on an active order and hits the adjacent cancel button (or taps 'Despachado' on the wrong card). The order leaves Activos and Deposito at once; in Historial the card is read-only, so the only recovery is retyping the whole order, losing kgReal and history and, for a CC client, creating another CC placeholder movement.",
+   "suggestedFix": "Add a 'Reabrir' action on history cards (despachado -> listo, cancelado -> pendiente) wired to cambiarEstado, plus an undo toast or confirmation sheet for cancel and dispatch.",
+   "confidence": "high"
+  },
+  {
+   "title": "Cancelling the share sheet (or any share rejection) triggers a file download",
+   "lines": "pedidos.html:2439-2440",
+   "severity": "low",
+   "category": "ios-safari",
+   "evidence": "`navigator.share({ files:[file], title:fileName }).catch(function(){ doc.save(fileName); });` - the catch does not look at the error, and navigator.share rejects with AbortError when the user dismisses the sheet. The fallback also runs outside the user gesture.",
+   "failureScenario": "The manager taps 'Compartir por WhatsApp', changes his mind and closes the share sheet: jsPDF's save runs anyway and iOS shows a download prompt or preview for a file nobody asked for. A second quick tap on the button (InvalidStateError) takes the same path.",
+   "suggestedFix": "In the catch, return when e.name === 'AbortError'; fall back to a download only for NotAllowedError or unsupported cases, ideally by showing a button the user taps.",
+   "confidence": "high"
+  },
+  {
+   "title": "Saved remito view and PDF label every quantity as KG and every price as per kg, ignoring items[].unidad",
+   "lines": "pedidos.html:2504-2506, 2514-2523, 2628-2630",
+   "severity": "low",
+   "category": "quantities",
+   "evidence": "The PDF header is fixed ('KG', 'PRECIO / KG') and the row prints `String(parseFloat(it.kg)||0)`; VerRemitoGuardado labels 'Kg' and '$ / kg'. The stored item carries `unidad: it.unidad` (1717) and `kg: it.kgReal||it.cantidad||0`, and orders can be in piezas, ganchos, bolsas or unidades (UNIDADES, line 772).",
+   "failureScenario": "An order line '3 piezas' of Lomo Ahumado with no kgReal is stored as kg:\"3\". The reprint shows 3 under KG at the price under PRECIO / KG, a document that reads as 3 kg when 3 pieces were delivered.",
+   "suggestedFix": "Print the unit next to the quantity (for example '3 pz'), rename the headers to 'CANT.' and 'PRECIO UNIT.' when a line is not in kg, and keep ordered quantity and real kg as separate stored fields.",
+   "confidence": "high"
+  },
+  {
+   "title": "Remito PDF has no pagination or text wrapping: long remitos lose the TOTAL, long names overlap the KG column",
+   "lines": "pedidos.html:2513-2536",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "Rows are drawn with `y += 8` starting at about y=70 mm on a 297 mm page; there is no doc.addPage() and no splitTextToSize: `doc.text(it.producto||'', colX[0]+2, y+4)`. The TOTAL is drawn at y+5 after the last row.",
+   "failureScenario": "A remito with 28 or more lines puts the TOTAL below the page edge (77+8n > 297 mm), and from about 29 lines rows are cut as well, so the customer receives a PDF without the amount due. A client or product name longer than roughly 45 characters runs over the next column.",
+   "suggestedFix": "Before each row, call doc.addPage() and redraw the table header when y exceeds about 270; wrap producto with doc.splitTextToSize(text, colW2[0]-4) and advance y by the number of lines.",
+   "confidence": "high"
+  },
+  {
+   "title": "Client history counters do not match their rows or the client list",
+   "lines": "pedidos.html:2661-2663, 2676, 2688",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`total = pedidosCliente.length` includes cancelled orders, while `activos` and `despachados` exclude them. The client list that leads here counts with `.filter(p=>p.estado!==\"cancelado\")` (5035-5037).",
+   "failureScenario": "A client with 3 dispatched, 1 active and 2 cancelled orders is listed as 'Total: 4'; after tapping it the header says '6 pedidos en total' and the tiles read 6 / 1 / 3.",
+   "suggestedFix": "Either add a 'Cancelados' tile or exclude cancelled orders from total, and use the same rule in both places.",
+   "confidence": "high"
+  },
+  {
+   "title": "Cards reference CSS variables that are not defined in pedidos.html, so they render without border or shadow",
+   "lines": "pedidos.html:2168, 2240, 2575, 2614, 2625",
+   "severity": "low",
+   "category": "cosmetic",
+   "evidence": "Inline styles use `border:\"1px solid var(--borde)\"` and `boxShadow:\"var(--sombra)\"`, and .crm-page uses `background: var(--fondo)` (line 77). The :root blocks of this file (68-74, 86-89) define --carbon, --lacre, --lacre-cl, --hueso, --tinta, --acero, --linea and --app-max-w only; --borde, --sombra and --fondo are defined in other pages, not here.",
+   "failureScenario": "The history filter panel, the picking info box, the remito list cards and the remito detail cards render as flat white blocks with no border and no shadow, unlike TarjetaPedido which hard-codes its colours.",
+   "suggestedFix": "Define --fondo, --borde and --sombra in this file's :root (for example --fondo:#EDEEF0; --borde:#D8DCE0; --sombra:0 2px 10px rgba(0,0,0,.06)) or reuse --linea.",
+   "confidence": "high"
+  },
+  {
+   "title": "VerRemitoGuardado is a full page rendered inside another page: two sticky headers, two back arrows and an extra screen of blank scroll",
+   "lines": "pedidos.html:2566, 2607-2611",
+   "severity": "low",
+   "category": "layout",
+   "evidence": "RemitosCliente returns `<VerRemitoGuardado .../>`, whose root is `<div className=\"crm-page\">` (min-height:100vh) with its own header `position:\"sticky\",top:0,zIndex:10`, while it is mounted inside HistorialCliente's `<div style={{padding:16}}>` below that page's own sticky header and tabs (2671-2683), which has the same top and z-index.",
+   "failureScenario": "Opening a saved remito shows the client header and the Pedidos/Remitos tabs and, 16 px inset below them, a second dark header 'Remito N 0001' with its own back arrow. When scrolling, the inner header sticks on top of the outer one, and the nested min-height adds a screen of empty space. The upper arrow leaves the whole client instead of the remito.",
+   "suggestedFix": "Lift the verRemito state to HistorialCliente and render VerRemitoGuardado in place of the whole page, or make it a bottom sheet without .crm-page and without its own sticky header.",
+   "confidence": "high"
+  }
+ ],
+ "security": [
+  {
+   "title": "Role restrictions exist only in the browser; there is no Firebase Auth behind the writes",
+   "detail": "VistaDeposito's modoOperario only hides buttons (cancel, dispatch, remito, edit) and App only locks the view. The role is the sessionStorage value sersale_role, and the page exposes window.__db and window.__fb (updateDoc, deleteDoc, setDoc...) globally. The file imports no Firebase Auth, so Firestore rules cannot tell an operario from a director. Anyone with the page open can set sessionStorage.sersale_role='director' or call window.__fb.updateDoc on any collection (prices, cuentas_corrientes, remitos) from the console.",
+   "lines": "2291-2305, 2313-2322 (bootstrap at 6-10, 47-48, 5503-5507)"
+  },
+  {
+   "title": "No audit trail on status changes",
+   "detail": "cambiarEstado appends {estado, fecha} to historial with no user, role or device, although sersale_usuario and sersale_nombre are available in sessionStorage. There is no record of who cancelled, dispatched or changed kg, and the array is rewritten wholesale, so earlier entries can be dropped by a stale client.",
+   "lines": "2316-2319"
+  },
+  {
+   "title": "State transitions are not validated",
+   "detail": "cambiarEstado accepts any id, estado and items and writes them as given: there is no allowed-transition check (a despachado or cancelado order can be moved back to preparando) and no shape or numeric validation of items, on the client or by any rule visible in the repository.",
+   "lines": "2313-2322"
+  },
+  {
+   "title": "Remitos with prices and totals are readable by any session",
+   "detail": "RemitosCliente queries the remitos collection directly from the browser. The operario UI never mounts it, but nothing other than the hidden UI prevents the same query from an operario session, since access is not tied to an authenticated identity.",
+   "lines": "2554-2556"
+  },
+  {
+   "title": "No markup or URL injection sink in this section",
+   "detail": "Client and product names are rendered through React text nodes and jsPDF doc.text; there is no innerHTML, document.write or URL building here. The only unsanitised use is the PDF file name ('Remito '+nro+' - '+cliente+' - '+fecha+'.pdf'): a client name containing / or : yields an odd file name in the share sheet or download, which is cosmetic.",
+   "lines": "2484, 2519, 2538"
+  },
+  {
+   "title": "Logout only clears sessionStorage",
+   "detail": "cerrarSesionOperario removes the five sersale_* keys and navigates to index.html. There is no server-side session to revoke and the localStorage key sersale_last_seen is left behind, which is harmless.",
+   "lines": "2297-2305"
+  }
+ ],
+ "ux": [
+  {
+   "title": "Warehouse list is not live: new and edited orders only appear after tapping a small refresh button",
+   "problem": "VistaDeposito loads once and has no listener. The app-level banner 'Nuevo pedido cargado' can appear while the list underneath still does not contain that order. In a home-screen web app there is no pull-to-refresh, so the 30 px refresh button is the only way to update.",
+   "suggestion": "Use onSnapshot on the active orders so the list updates by itself; highlight or animate rows that arrive or change, and keep the refresh button only as a fallback.",
+   "impact": "high",
+   "lines": "2307-2311, 2325-2327, 2338"
+  },
+  {
+   "title": "No optimistic update or progress after a status tap; the card then jumps and collapses",
+   "problem": "After tapping En preparacion / Listo / Despachado nothing changes until updateDoc plus a full collection reload finish (seconds on mobile data). Buttons stay enabled, which invites double taps. Then the card moves to another status section, remounts collapsed, and the user has to find and reopen it to continue (for example to open the item checklist).",
+   "suggestion": "Update the row immediately in local state with a saving indicator, disable its buttons while in flight, keep it expanded (or scroll to it) after the move, and confirm with a short toast offering undo.",
+   "impact": "high",
+   "lines": "2313-2323, 2401-2412"
+  },
+  {
+   "title": "Filter, scroll position and expanded cards are lost after every edit or remito",
+   "problem": "ActivosFiltrados keeps subtipo in local state and VistaComercial swaps the whole screen for EditarPedido / RemitoPedido / NuevoPedido through early returns. Coming back remounts the list on 'Todos', scrolled to the top, with every card collapsed. Issuing several remitos in a row from the 'Listos' filter means re-filtering and re-finding the next order each time. The same happens to VistaDeposito's scroll and expansion when returning from the checklist, and to HistorialFiltrado's filters when switching tabs.",
+   "suggestion": "Keep the list mounted and show sub-screens as overlays or sheets, or lift filter / expanded id / scrollY to the parent (or sessionStorage) and restore them on return.",
+   "impact": "high",
+   "lines": "2036, 2150-2152, 2331"
+  },
+  {
+   "title": "Picking checklist forgets its ticks and cannot record weights",
+   "problem": "itemsDone lives only in component state: going back, a reload, or iOS evicting the web app mid-order loses the progress, and a colleague on another phone cannot see it. Real kg cannot be typed in the checklist, which is where items are weighed; the app asks for kg before preparation starts (on 'En preparacion') or only after the order is 'Listo' (the kg button). There is no 'mark all' for long orders and no confirmation toast when the order is marked ready.",
+   "suggestion": "Persist the per-item 'preparado' flag and kgReal on the order (or at least in localStorage keyed by pedido id), add an inline kg input with inputMode=\"decimal\" on each row, and write both together when marking Listo.",
+   "impact": "high",
+   "lines": "2212-2218, 2248-2272, 2280-2283"
+  },
+  {
+   "title": "Tap targets well under 44 px on the most used controls",
+   "problem": "The back arrow is a bare glyph with padding 0 (about 20x24 px) on four screens; the refresh button and 'Salir' are about 30 px high; the 'Ruta' pill is font 11 with padding 2px 8px (about 18 px high) although it opens the daily route sheet; 'Limpiar filtros' is a text link with padding 0; the filter chips are about 32 px high.",
+   "suggestion": "Give every control a minimum 44x44 hit area (padding or min-height/min-width) and turn 'Ruta' into a proper button on the day header.",
+   "impact": "high",
+   "lines": "2227, 2336, 2338-2339, 2609, 2673, 2191-2194, 2081-2086, 2343-2346, 2753-2756"
+  },
+  {
+   "title": "History has no search, no status filter, no presets and renders everything",
+   "problem": "The client filter is a native select holding every client that ever ordered, with no type-ahead and sorted by code unit (lowercase and accented names after Z). Dispatched and cancelled orders cannot be separated. Dates are two native pickers with no 'Hoy / Esta semana / Este mes' shortcuts. The whole history is rendered as one endless list.",
+   "suggestion": "Use a search box that filters by client or product as you type, chips for Despachados / Cancelados and quick date ranges, sort with localeCompare('es', {sensitivity:'base'}), and paginate (the last 30 days by default plus 'ver mas').",
+   "impact": "medium",
+   "lines": "2154, 2172-2176, 2178-2189, 2203"
+  },
+  {
+   "title": "Saved remitos are buried and the share/view buttons do not do what their labels say",
+   "problem": "A stored remito is only reachable through Director -> Clientes -> search -> client -> Remitos -> remito (five or more taps). There is no global list or search by number or date, and Comercial history cards do not link to their remito. 'Compartir por WhatsApp' opens the generic share sheet rather than a chat with the client. 'Ver / Descargar PDF' does not show anything in the app; it calls doc.save, which in an iOS home-screen web app is an awkward download or preview flow.",
+   "suggestion": "Add a 'Remitos' entry with search by number, client and date, link each dispatched order to its remito, show an in-app preview (blob URL in a full-screen sheet) with one Share button, and optionally a WhatsApp deep link using the client's stored phone.",
+   "impact": "medium",
+   "lines": "2573-2585, 2642-2650"
+  },
+  {
+   "title": "Loading, error and empty states are bare or misleading",
+   "problem": "Loading is a plain 'Cargando...' line that never ends if the read fails. A failed remitos query shows 'Sin remitos emitidos'. An empty history with no filter applied still says 'Sin resultados para este filtro'. Nothing indicates that the phone is offline.",
+   "suggestion": "Use skeleton rows, an explicit error state with a retry button, distinct empty copy ('Todavia no hay pedidos despachados'), and an offline banner.",
+   "impact": "medium",
+   "lines": "2350, 2201-2202, 2561, 2567-2568"
+  },
+  {
+   "title": "Warehouse staff must open every card to see what to prepare",
+   "problem": "Cards show only the client and 'N productos'; the consolidated 'Preparar hoy' list exists only in the Director's Resumen tab. The Deposito chips have no counters, unlike Comercial's.",
+   "suggestion": "Show the first items, or all of them for short orders, on the collapsed card; add a 'Hoy' consolidated picking view for the operario and counters on the chips.",
+   "impact": "medium",
+   "lines": "2341-2348, 2390"
+  },
+  {
+   "title": "Director's day agenda and client history are read-only",
+   "problem": "TabDia and HistorialCliente render cards with showActions=false and a no-op onCambiarEstado, so the director sees an overdue order but has to leave for Comercial and find it again to act on it.",
+   "suggestion": "Pass the real cambiarEstado / onEditar / onRemito handlers, or at least an 'Abrir en Comercial' shortcut, to those cards.",
+   "impact": "medium",
+   "lines": "2697, 2760"
+  },
+  {
+   "title": "Inputs below 16 px in the history filter",
+   "problem": "The select is 14 px and the two date inputs are 13 px. iOS zoom-on-focus is currently avoided only because the viewport sets maximum-scale=1.0. In a 1fr/1fr grid, iOS date inputs can also overflow their cell because of their intrinsic minimum width.",
+   "suggestion": "Use font-size 16 px on all form controls, add min-width:0 and -webkit-appearance:none to the date inputs, and then drop maximum-scale.",
+   "impact": "low",
+   "lines": "2172, 2181, 2186"
+  },
+  {
+   "title": "Native confirm() for logout, and the operario is logged out whenever iOS discards the app",
+   "problem": "cerrarSesionOperario uses a blocking browser confirm. Because the session lives in sessionStorage, a home-screen web app that iOS evicts in the background comes back at the login screen, losing whatever screen and checklist the operario was on.",
+   "suggestion": "Use an in-app confirmation sheet; keep the operario session in localStorage with an expiry (or real auth) and restore the last view.",
+   "impact": "low",
+   "lines": "2297-2305"
+  }
+ ],
+ "perf": [
+  {
+   "title": "Deposito reads the entire pedidos collection on mount, on every refresh and after every status change",
+   "problem": "cargar() runs getDocs(query(collection(db,'pedidos'), orderBy('fechaEntrega','asc'))) and discards despachado/cancelado client-side. Each tap on a status button therefore costs one write plus N document reads, where N is the whole order history (venta rapida entries included), and it grows without bound, both in latency on mobile data and in billed reads.",
+   "suggestion": "Query only active orders (where('estado','in',['pendiente','preparando','listo'])) through a single onSnapshot, sort client-side, and stop refetching after writes because the listener delivers the change.",
+   "impact": "high",
+   "lines": "2307-2311, 2322"
+  },
+  {
+   "title": "HistorialFiltrado mounts one TarjetaPedido per historical order with no pagination or virtualisation",
+   "problem": "filtrados.map(...) renders the full history; each card holds five state hooks and inline style objects. With a few thousand orders, opening the tab and every filter change re-render thousands of nodes on an iPhone.",
+   "suggestion": "Limit to a recent window or page (for example 50 at a time with 'ver mas' or an IntersectionObserver), and fetch history with a date-bounded query instead of loading it all in VistaComercial.",
+   "impact": "high",
+   "lines": "2156-2161, 2203"
+  },
+  {
+   "title": "Remitos are refetched every time the Remitos tab is opened",
+   "problem": "RemitosCliente is conditionally mounted (tab===\"remitos\"), so switching Pedidos -> Remitos -> Pedidos -> Remitos repeats the query. Results are not cached per client.",
+   "suggestion": "Keep the result in HistorialCliente state or a small per-client cache, or keep the tab mounted and hidden.",
+   "impact": "low",
+   "lines": "2551-2564, 2701"
+  },
+  {
+   "title": "Derived lists are recomputed on every render with no memoisation, including dead work",
+   "problem": "ActivosFiltrados runs about ten filter passes per render and builds porDia / diasOrdenados (2051-2056) that are never used. HistorialFiltrado rebuilds the Set and sorted client list on each render. HistorialCliente filters and sorts the whole pedidos array on each render. TabDia regroups on each render. Each is cheap alone, but it adds up with large histories.",
+   "suggestion": "Remove the dead block, compute counts in a single pass, and wrap groupings in useMemo keyed on the input array and filter.",
+   "impact": "low",
+   "lines": "2037-2056, 2069-2071, 2154, 2660, 2712-2714"
+  },
+  {
+   "title": "Each remito PDF embeds a PNG logo of about 60 KB and is built synchronously",
+   "problem": "doc.addImage(window.__sersaleLogo,'PNG',...) adds the full PNG to every generated file, larger to send over WhatsApp, and generation blocks the main thread briefly with no busy indicator. A lighter JPEG logo already exists in assets/logo-pdf-jpeg.js but this page does not load it.",
+   "suggestion": "Use the JPEG logo (or a downscaled PNG with compression 'FAST'), and show a brief 'Generando PDF...' state on the button.",
+   "impact": "low",
+   "lines": "2458"
+  }
+ ]
+}

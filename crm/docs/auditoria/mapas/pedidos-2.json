@@ -1,0 +1,560 @@
+{
+ "summary": "Section /home/user/sersale-produccion/crm/src/pedidos.html lines 609-1293 holds the client master, the product catalog and the order-entry form, i.e. the start of every sale. All of it is director-only: the operario role is locked to the Depósito view in App.\n\n- **GestionClientes**: add, edit and delete clients (name, phone, delivery address, \"has current account\" flag), with a cascade delete of the client's prices and current-account data.\n- **Catalog and helpers**: the hardcoded PRODUCTOS catalog with its Firestore override accessor, date helpers, the `fb()` accessor, and the last-seen helpers.\n- **Re-contact alerts**: the once-a-day EmailJS alert email and `marcarContacto`, which stamps a client as recently contacted.\n- **Home**: the \"¿Quién sos?\" launcher with five tiles.\n- **NuevoPedido**: the order form, built on a searchable client dropdown and an accent-tolerant product search. It writes the `pedidos` document and, for current-account clients, a $0 placeholder movement in `cc_movimientos`.\n\nThe main structural weakness is that the client NAME is the only foreign key across `pedidos`, `cc_movimientos`, `cuentas_corrientes`, `precios_cliente` and the route sheet. Renames, duplicates and deletes in this section therefore silently detach or destroy financial data. Separately, the order form silently drops incomplete lines, and nothing here is atomic.\n\nNot verified by running the app: everything is traced from the code. The iOS date-picker `min` behaviour and the \"CLIENTES_DEFAULT are fictitious\" claim are the two points I could not confirm from source.",
+ "components": [
+  {
+   "name": "GestionClientes",
+   "lines": "609-753",
+   "purpose": "Client CRUD screen (reached from Home tile 'Clientes' and from VistaComercial). State: clientes list, form fields (nombre, telefono, direccion, cuentaCorriente), guardando, editando (doc id), clientePrecios (opens HistorialPrecios for that name). cargar() reads all clientes ordered by nombre; guardar() addDoc/updateDoc; eliminar() deletes the client doc and then cascades by case-insensitive name over precios_cliente, cc_movimientos and cuentas_corrientes."
+  },
+  {
+   "name": "PRODUCTOS / getProductos",
+   "lines": "755-770",
+   "purpose": "Hardcoded catalog {categoria: [producto,...]} (10 categories; 'Artículos Varios' is empty and treated as free text). Line 768 tries to replace it once with window.__productosOverride; getProductos() returns the override if present, else the hardcoded object."
+  },
+  {
+   "name": "UNIDADES, fmt, fmtH, today",
+   "lines": "772-775",
+   "purpose": "UNIDADES = [kg, piezas, ganchos, bolsas, unidades]. fmt(iso) gives dd/mm/yyyy via new Date(iso); fmtH(iso) gives HH:MM; today() gives the UTC date string YYYY-MM-DD (toISOString().slice(0,10)), used only as min of the delivery date input."
+  },
+  {
+   "name": "EmailJS constants + enviarEmailAlertas",
+   "lines": "776-803",
+   "purpose": "Builds a plain-text body listing clients in alert (days without ordering, limit, last order date, products, amount) and sends it with emailjs.send(service_u0mi57u, template_efcs57a, {message}). Returns true or false."
+  },
+  {
+   "name": "verificarYEnviarAlertas",
+   "lines": "805-817",
+   "purpose": "Once-per-day guard for the alert email: reads config/ultima_alerta_email, skips if fecha equals today's UTC date, otherwise sends and overwrites the doc. Called from VistaDirector.calcularAlertas (line 5004) on every director dashboard load."
+  },
+  {
+   "name": "fb",
+   "lines": "819",
+   "purpose": "Accessor returning {db: window.__db, ...window.__fb} (Firestore functions exported by the module script in <head>). Used by every component in the file."
+  },
+  {
+   "name": "marcarContacto",
+   "lines": "822-854",
+   "purpose": "Marks a client as recently contacted: reads the whole clientes collection, matches the name case-insensitively and updates ultimoContacto and ultimoPedidoRegistrado; if not found, creates a new clientes doc. Called fire-and-forget from NuevoPedido.guardar (1194) and VentaRapida (2858), awaited from the alerts tab (5011)."
+  },
+  {
+   "name": "getLastSeen / setLastSeen",
+   "lines": "856-857",
+   "purpose": "localStorage 'sersale_last_seen' ISO timestamp used for the 'new orders since last visit' badge and highlights."
+  },
+  {
+   "name": "Home",
+   "lines": "860-899",
+   "purpose": "Launcher screen with logo and five tiles (comercial, deposito, director, clientes, productos) calling onSelect(key). Shows the nuevosPedidos badge on Depósito and Director and a banner with the count."
+  },
+  {
+   "name": "SelectorClienteBuscable",
+   "lines": "902-969",
+   "purpose": "Custom dropdown for choosing a client: button plus absolute panel with a search input and a list sorted with localeCompare; 'Otro' is always last. Closes on document mousedown outside. Props: valor, onChange, clientes (string[]), placeholder."
+  },
+  {
+   "name": "BuscadorProductos",
+   "lines": "975-1086",
+   "purpose": "Quick product search across the whole catalog: accent-insensitive, multi-word, ranked, max 8 results, keyboard navigation. Calls onElegir(categoria, producto) and marks products already in the order as 'ya está'. Also used by EditarPedido."
+  },
+  {
+   "name": "NuevoPedido",
+   "lines": "1088-1292",
+   "purpose": "Order entry form: client (selector or free text via 'Otro'), CC checkbox auto-set from the client doc with a debt banner read from cuentas_corrientes.saldo, tipo envio/retiro, delivery date, item rows (categoria, producto, cantidad, unidad, obs), general notes. guardar() writes pedidos, optionally a cc_movimientos placeholder, calls marcarContacto and then onSaved()."
+  }
+ ],
+ "firestore": [
+  {
+   "collection": "clientes",
+   "docId": "Auto-id (addDoc). The client is referenced everywhere else by its nombre string, not by this id.",
+   "ops": "getDocs(query(collection, orderBy('nombre','asc'))) at 623 and 1103; getDocs(collection) full read at 828; addDoc at 635 and 842; updateDoc at 633 and 835; deleteDoc at 648.",
+   "fields": "nombre: string (trimmed at 633/635; as passed at 843). telefono: string, free text, may be ''. direccion: string, free text, may be ''. cuentaCorriente: boolean. creadoEn: Firestore Timestamp when created in GestionClientes (635) but ISO-8601 UTC string when auto-created by marcarContacto (849). ultimoContacto: ISO-8601 UTC datetime string (836/847). ultimoPedidoRegistrado: string YYYY-MM-DD taken from the UTC date (837/848). Not touched here but present on the same docs: diasAlerta (number), freqCalculada (number), freqActualizado (ISO string).",
+   "lines": "621-625, 627-641, 643-648, 822-854, 1100-1107, 1113-1116",
+   "notes": "orderBy('nombre') excludes docs without nombre and sorts by code point (lowercase and accented initials come after Z). Edit updates only nombre, telefono, direccion and cuentaCorriente. No uniqueness check on nombre. migracion.html writes clienteId on referencing collections, but nothing in this section writes clienteId on new documents."
+  },
+  {
+   "collection": "pedidos",
+   "docId": "Auto-id (addDoc); the returned ref/id is discarded.",
+   "ops": "addDoc at 1157-1165. Read indirectly in enviarEmailAlertas through alert objects built in VistaDirector.",
+   "fields": "cliente: string. cuentaCorriente: boolean. tipo: 'envio' | 'retiro'. fechaPedido: Firestore Timestamp (Timestamp.now()). fechaPedidoISO: ISO-8601 UTC string. fechaEntrega: string YYYY-MM-DD (local date from input type=date). items: array of {categoria: string, producto: string, cantidad: STRING (numeric string from input type=number, e.g. '12.5'), unidad: 'kg'|'piezas'|'ganchos'|'bolsas'|'unidades', obs: string}; no precio and no kgReal at creation. obs: string (trimmed). estado: 'pendiente'. historial: [{estado:'pendiente', fecha: ISO string, nota:'Pedido creado'}]. Read in enviarEmailAlertas: items[].producto, items[].kgReal (number), items[].cantidad, items[].precio, fechaPedido.",
+   "lines": "1147-1165, 788-795",
+   "notes": "cantidad is a string here but a number in orders created by VentaRapida (2823); consumers must parseFloat. fechaPedido is a Timestamp, yet enviarEmailAlertas treats it as a YYYY-MM-DD string."
+  },
+  {
+   "collection": "cc_movimientos",
+   "docId": "Auto-id (addDoc). No pedidoId link to the order.",
+   "ops": "addDoc at 1182; getDocs(query(where('cliente','==',nombre))) at 1185 (unreachable in practice); getDocs(collection) full read at 660 plus deleteDoc per match at 663.",
+   "fields": "Written at 1175-1181: cliente: string (exact order client name). tipo: 'pedido'. monto: number, integer via Math.round, always 0 in practice because items have no precio at creation. movimiento: number, same as monto. fecha: string YYYY-MM-DD (= fechaEntrega). detalle: string, product names joined with ', '. obs: 'Pendiente de facturar' when total <= 0, else ''. origen: 'pedido_app'. createdAt: ISO-8601 UTC string. Read: cliente, tipo, monto.",
+   "lines": "659-665, 1167-1191",
+   "notes": "This placeholder is later matched in guardarRemito (1771-1778) by lowercase cliente + origen 'pedido_app' + fecha === pedido.fechaEntrega + monto === 0. Balance convention: saldo = sum(tipo === 'pedido' ? monto : -monto)."
+  },
+  {
+   "collection": "cuentas_corrientes",
+   "docId": "Auto-id; one doc per client, matched by nombre.",
+   "ops": "getDocs(query(where('nombre','==',val))) at 1119 and 1188; updateDoc at 1189 (unreachable in practice); getDocs(collection) full read at 668 plus deleteDoc per match at 671.",
+   "fields": "Read: nombre: string; saldo: number (ARS, rounded integer, positive means the client owes). Written at 1189: saldo: number (Math.round), ultimoMovimiento: string YYYY-MM-DD.",
+   "lines": "667-673, 1116-1122, 1188-1189",
+   "notes": "Never created in this section: ticking 'Tiene cuenta corriente' does not create the account (the only addDoc is at 3553 in the CC tab). Lookup is exact-match here but case-insensitive in guardarRemito."
+  },
+  {
+   "collection": "precios_cliente",
+   "docId": "Auto-id.",
+   "ops": "getDocs(collection) full read at 652 plus deleteDoc per match at 655.",
+   "fields": "Read: cliente: string (compared lowercased and trimmed). Other fields written elsewhere: producto: string, precio: number, fecha: ISO string.",
+   "lines": "650-657",
+   "notes": "Touched only by the cascade delete in GestionClientes.eliminar."
+  },
+  {
+   "collection": "config/ultima_alerta_email",
+   "docId": "Fixed doc id 'ultima_alerta_email' in collection config.",
+   "ops": "getDoc at 811; setDoc (full overwrite, no merge) at 815.",
+   "fields": "fecha: string YYYY-MM-DD taken from the UTC date. cantidad: number (alerts sent). updatedAt: ISO-8601 UTC string.",
+   "lines": "805-817",
+   "notes": "Read-then-write without a transaction. Also read by TabAlertas (4281)."
+  },
+  {
+   "collection": "config/productos",
+   "docId": "Fixed doc id 'productos' in collection config.",
+   "ops": "Not read directly in this section. The module script (line 52) does getDoc and stores data().categorias in window.__productosOverride, which getProductos() (770) and line 768 consume.",
+   "fields": "categorias: map {categoria: string -> array of product-name strings}. updatedAt: ISO string (written by GestionProductos).",
+   "lines": "767-770, 988, 1255, 1264",
+   "notes": "Line 1264 calls .sort() in place on the category array held in this global object."
+  }
+ ],
+ "clientState": [
+  {
+   "kind": "localStorage",
+   "key": "sersale_last_seen",
+   "usage": "ISO-8601 UTC string. getLastSeen() returns it or '2000-01-01T00:00:00.000Z'; setLastSeen() writes now. Outside this section, App.seleccionar (5555) calls setLastSeen() before navigating from any Home tile, and the views call getLastSeen() at render (1422, 2295, 4758), so the per-order 'new' highlight compares against 'now'. Operario sessions never call setLastSeen. Worth checking by whoever owns App.",
+   "lines": "856-857"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_vista",
+   "usage": "Written by App.setVista (5507, outside the section) when a Home tile is tapped; restores the top-level view on reload. Sub-screens such as NuevoPedido and its draft are not persisted. In an iOS home-screen web app this is wiped when the app is closed.",
+   "lines": "5504-5507"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_role / sersale_auth",
+   "usage": "Client-side gate in <head> (4-12) and App (5503). Role 'operario' is locked to the Depósito view, so Home, GestionClientes and NuevoPedido are only reachable with the director role. Not read inside the section.",
+   "lines": "4-12, 5503"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__db / window.__fb / window.__fbReady",
+   "usage": "Firestore instance and SDK functions exported by the module script; fb() spreads them. __fbReady is set to true synchronously, before config/productos is fetched, so the 'else addEventListener(\"fbReady\")' branches at 692 and 1106 are effectively dead.",
+   "lines": "47-49, 819"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__productosOverride",
+   "usage": "Catalog map loaded asynchronously from config/productos (54) and replaced by GestionProductos.guardar (437). Read through getProductos() (770) and once at 768.",
+   "lines": "767-770"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "emailjs",
+   "usage": "Global from the @emailjs/browser@4 CDN script (line 27); guarded with typeof emailjs === 'undefined'.",
+   "lines": "782-783, 800"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "document event 'fbReady'",
+   "usage": "Dispatched once by the module script after the config/productos fetch (57). Components here subscribe only when __fbReady is false and never remove the listener.",
+   "lines": "692, 1106"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "script-scope globals defined here",
+   "usage": "PRODUCTOS, getProductos, UNIDADES, fmt, fmtH, today, EMAILJS_SVC/TPL/KEY, enviarEmailAlertas, verificarYEnviarAlertas, fb, marcarContacto, getLastSeen, setLastSeen, plus the components. All are consumed by other sections of the same text/babel script. PRODUCTOS is read directly at 427, 429, 3229, 3380, 3389 and 3444.",
+   "lines": "755-857"
+  }
+ ],
+ "external": [
+  {
+   "service": "EmailJS (@emailjs/browser v4, CDN cdn.jsdelivr.net)",
+   "usage": "emailjs.init({publicKey:'AGBFe1nQznm3aOdrm'}) then emailjs.send('service_u0mi57u','template_efcs57a',{message}) to send the daily re-contact alert email. The recipient is defined in the EmailJS template. The body contains client names, days without ordering, products and amounts.",
+   "lines": "776-803"
+  },
+  {
+   "service": "Firebase Firestore Web SDK 10.7.0 (www.gstatic.com), project sersale-produccion",
+   "usage": "All persistence in the section, called from the browser through fb(). No Firebase Auth and no offline persistence (getFirestore(app) with the default memory cache).",
+   "lines": "621-681, 805-854, 1100-1198"
+  },
+  {
+   "service": "Static asset assets/logo.png (185x198 PNG, 60 KB)",
+   "usage": "Home header logo.",
+   "lines": "864"
+  },
+  {
+   "service": "React 18 UMD + @babel/standalone 7.26.4 (unpkg)",
+   "usage": "Runtime for every component in the section; loaded in <head>, outside the section.",
+   "lines": "30-32"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "Renaming a client detaches its current account, CC movements, price list and route address",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:632-633",
+   "severity": "high",
+   "category": "persistence-integrity",
+   "evidence": "Edit does only `updateDoc(doc(db,\"clientes\",editando), { nombre:nombre.trim(), telefono..., direccion..., cuentaCorriente })`. Every other collection joins by name string: `where(\"nombre\",\"==\",val)` on cuentas_corrientes (1119, 2853, 3534), `where(\"cliente\",\"==\",...)` on cc_movimientos (1185, 3970) and precios_cliente (229, 3246), and `clientesDB[p.cliente]` for the route-sheet address (4412-4418). Nothing propagates the new name. migracion.html exists to patch this by adding clienteId.",
+   "failureScenario": "The director fixes a typo: 'Carniceria Lopez' becomes 'Carnicería López'. The client has a $350.000 balance and a pending order. Afterwards the pending order has no address in the route sheet, the price list for the client is empty, and NuevoPedido shows no debt banner. New CC movements are written under the new name while the account stays under the old one; guardarRemito's lowercase match also fails because the accent differs, so the saldo is never updated and new debt is invisible.",
+   "suggestedFix": "On rename, propagate the new name in a writeBatch to pedidos.cliente, cc_movimientos.cliente, cuentas_corrientes.nombre, precios_cliente.cliente, remitos.cliente and devoluciones.cliente (query by old name or by clienteId). Longer term, write and join by clienteId. Until then, warn before renaming a client that has related documents.",
+   "confidence": "high"
+  },
+  {
+   "title": "Order lines with a product but no quantity (or the reverse) are silently dropped on save",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:1152-1153 (rows created empty at 1129-1135)",
+   "severity": "high",
+   "category": "logic-validation",
+   "evidence": "`const val = items.filter(it=>it.producto&&it.cantidad); if (!val.length) return alert(...)` and then `items: val` is saved. agregarDesdeBuscador always adds rows with `cantidad:\"\"`. There is no warning when a row is discarded. Any truthy string passes, so '0' and '-3' are saved as quantities.",
+   "failureScenario": "The manager adds 6 products with the search box, types kg for 5 and misses one, then taps Guardar. The order is saved with 5 items and no message; the warehouse prepares an incomplete order. The same happens when a category and quantity are entered but the product select is left on '— Producto —'.",
+   "suggestedFix": "Before saving, find rows that are partially filled (producto XOR cantidad) and block with an inline error on that row, scrolling to it. Ignore only fully empty rows. Validate parseFloat(cantidad) > 0 and store cantidad as a number.",
+   "confidence": "high"
+  },
+  {
+   "title": "The 'cuenta corriente' flag never creates the account, so CC debt is written to movements nobody sees",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:633-635, 1167-1182, 1226-1229",
+   "severity": "high",
+   "category": "persistence-integrity",
+   "evidence": "GestionClientes.guardar stores `cuentaCorriente` only on the clientes doc. NuevoPedido writes `aC2(collection(db,\"cc_movimientos\"), ccMovData)` whenever the checkbox is true, including for 'Otro' and for clients with no account. The only `addDoc(collection(db,\"cuentas_corrientes\")` in the app is the manual '+ Nuevo' in the CC tab (3553). When the remito is saved, guardarRemito writes the real amount and then logs `console.warn(\"[Remito] CC account not found for:\")` (1840). The CC tab lists only cuentas_corrientes docs (3497).",
+   "failureScenario": "The director ticks 'Tiene cuenta corriente' on a new client and loads an order; the remito is issued for $480.000. The movement exists in cc_movimientos but the client is not in the CC tab, and 'Total deuda' omits it. If the account is created later it starts with saldo 0 in the list while the detail view (which sums movements) shows $480.000.",
+   "suggestedFix": "When cuentaCorriente becomes true in GestionClientes.guardar, or when an order is saved with the flag for a client without an account, create the cuentas_corrientes doc (saldo 0) in the same batch. On account creation compute saldo from existing movements.",
+   "confidence": "high"
+  },
+  {
+   "title": "Deleting one of two same-named client entries wipes the surviving client's account, movements and prices",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:643-673 (no uniqueness check at 627-636)",
+   "severity": "high",
+   "category": "data-loss",
+   "evidence": "The cascade matches by name, not by id: `const lower = nombre.toLowerCase().trim()` and then for every doc in precios_cliente, cc_movimientos and cuentas_corrientes `if(d.data().cliente.toLowerCase().trim() === lower) await deleteDoc(...)`. guardar() never checks whether a client with that name already exists, so duplicates are reachable. migracion.html contains a duplicate-merge step ('fusiones'), which indicates duplicates have occurred.",
+   "failureScenario": "'Carnicería López' appears twice in the list (added again by mistake, or differing only in case). The director deletes the duplicate. All cc_movimientos, the cuentas_corrientes doc and the agreed prices of the real client are deleted, and the outstanding balance is lost for good.",
+   "suggestedFix": "Block or warn on duplicate names in guardar (normalized comparison). In eliminar, if another clientes doc shares the normalized name, delete only the clientes doc. Prefer soft delete (activo:false) and never delete cc_movimientos when saldo is not 0. Show saldo and pending-order count in the confirmation.",
+   "confidence": "medium"
+  },
+  {
+   "title": "The client form does not clear 'Dirección' after saving, so the next client inherits the previous address",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:637",
+   "severity": "medium",
+   "category": "react-state",
+   "evidence": "The success path runs `setNombre(\"\"); setTelefono(\"\"); setCuentaCorriente(false); setEditando(null);` with no `setDireccion(\"\")`. cancelarEdicion (689) does reset it. The next addDoc sends `direccion:direccion.trim()` with the leftover value.",
+   "failureScenario": "Save client A with 'Av. Rivadavia 1234'. The form shows empty name and phone but the address stays. Typing only the name for client B and saving stores A's address on B. The route sheet (4412-4418) then sends B's deliveries to A's address.",
+   "suggestedFix": "Add setDireccion(\"\") to the success path, or call one resetForm() from both guardar and cancelarEdicion.",
+   "confidence": "high"
+  },
+  {
+   "title": "Duplicate or variant client names can be created, splitting a client's history",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:627-636, 1148, 1209-1212, 828-852",
+   "severity": "medium",
+   "category": "persistence-integrity",
+   "evidence": "guardar() does addDoc with no existence check. NuevoPedido accepts any free text for 'Otro' (`clienteCustom.trim()`) without comparing against clientesDB. marcarContacto matches case-insensitively so it creates no doc, but the order keeps the variant spelling, while price, CC and address lookups are exact-match.",
+   "failureScenario": "'Carnicería López' exists. The manager searches 'lopez', gets no result (the search is accent-sensitive), picks 'Otro' and types 'Carniceria Lopez'. The order is saved under the variant: no address in the route sheet, no agreed prices pre-filled in the remito, and CC movements under a name with no account.",
+   "suggestedFix": "Normalize (lowercase, strip accents, collapse spaces) and compare against existing clients in both guardar and the 'Otro' path; offer 'did you mean …'. Make the selector search accent-insensitive.",
+   "confidence": "high"
+  },
+  {
+   "title": "The cascade delete is non-atomic and removes the client doc first, leaving orphans with no way to retry",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:646-680",
+   "severity": "medium",
+   "category": "persistence-integrity",
+   "evidence": "`await deleteDoc(doc(db,\"clientes\",id))` runs first, followed by three full-collection getDocs and one awaited deleteDoc per match in loops, with no writeBatch. The catch only shows `alert(\"Error al eliminar el cliente\")`, and `cargar()` then removes the row from the UI.",
+   "failureScenario": "The iPhone loses signal after the first delete, or the app is closed mid-loop. The client is gone from the list, but its cuentas_corrientes doc and some cc_movimientos remain. The CC tab keeps showing the account with a saldo that no longer matches its movements, and there is no row left to retry the delete from.",
+   "suggestedFix": "Collect all refs with where('cliente','==',nombre) queries and delete them together with the client doc in one writeBatch (chunks of 500), deleting the client doc last.",
+   "confidence": "high"
+  },
+  {
+   "title": "The CC placeholder movement is not linked to the order and is orphaned when the order changes",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:1157, 1175-1182",
+   "severity": "medium",
+   "category": "persistence-integrity",
+   "evidence": "The addDoc result for the order is discarded, and ccMovData has no pedidoId: `{cliente, tipo:\"pedido\", monto:0, fecha:entrega, origen:\"pedido_app\", obs:\"Pendiente de facturar\"}`. guardarRemito finds it only by `m.fecha === pedido.fechaEntrega && m.monto === 0` (1773-1776). EditarPedido.guardar (1538-1542) updates only the pedidos doc. DetalleCuentaCorriente lists every movement without filtering (3973).",
+   "failureScenario": "A CC order is created for the 12th and later moved to the 14th (or cancelled, or reassigned to another client). The remito finds no placeholder and creates a new movement; the original '$0 — Pendiente de facturar' row stays in the client's statement indefinitely.",
+   "suggestedFix": "Capture the new pedido id and store pedidoId on the movement, or skip the placeholder and create the movement at remito time. Match by pedidoId in guardarRemito, and update or delete the placeholder when the order is edited or cancelled.",
+   "confidence": "high"
+  },
+  {
+   "title": "PRODUCTOS is never replaced by the Firestore catalog, so screens that read it show the hardcoded list",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:767-770",
+   "severity": "medium",
+   "category": "async-race",
+   "evidence": "`if(window.__productosOverride) PRODUCTOS = window.__productosOverride;` runs once, when Babel executes the script synchronously on DOMContentLoaded. The override is set only after an awaited getDoc started by the module script moments earlier (50-57), so it is still undefined at that point. GestionProductos.guardar (437) updates only window.__productosOverride. The price-list tab reads PRODUCTOS directly (3229, 3380, 3389, 3444) instead of getProductos().",
+   "failureScenario": "The director adds 'Bondiola Ahumada' in Productos. It appears in the order form, which uses getProductos(), but not in the Director 'Precios' tab: neither in the product list nor in the product select, so no agreed price can be set there. The 'X de N productos' counter is also wrong.",
+   "suggestedFix": "Remove line 768 and make every reader call getProductos(); or keep the catalog in React state/context updated on the fbReady event and after GestionProductos.guardar.",
+   "confidence": "high"
+  },
+  {
+   "title": "The delivery date minimum uses the UTC date, so after 21:00 today cannot be selected",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:775, 1243",
+   "severity": "medium",
+   "category": "dates-timezone",
+   "evidence": "`const today = () => new Date().toISOString().slice(0,10);` is passed as `min={today()}` on the date input. In UTC-3 this returns tomorrow's date from 21:00 to 23:59.",
+   "failureScenario": "At 21:30 on Tuesday the manager loads an order that was picked up that evening. The date picker has Tuesday disabled, so the order has to be dated Wednesday. This would require the browser's date picker to enforce min; if it does not, the attribute is simply ignored and there is no effect.",
+   "suggestedFix": "Build the local date from getFullYear(), getMonth()+1 and getDate() with zero padding. Use the same helper wherever a 'today' string is needed.",
+   "confidence": "medium"
+  },
+  {
+   "title": "The alert email always prints 'Ultimo pedido: Invalid Date' (or '-')",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:784, 794",
+   "severity": "low",
+   "category": "dates-timezone",
+   "evidence": "`fF = f => f ? new Date(f+\"T00:00:00\").toLocaleDateString(...) : \"-\"` is called with `up.fechaPedido`, which is a Firestore Timestamp for app-created orders (1159, 2818). Concatenating it yields 'Timestamp(seconds=…)T00:00:00', an invalid date. Virtual CC orders and the stub `{items:[], _fechaDisplay}` have no fechaPedido, so they print '-'. The normalized date is in `up._fechaDisplay` (4906, 4994).",
+   "failureScenario": "Each daily email lists every client as 'Ultimo pedido: Invalid Date - Jamón Cocido…'. The same expression is duplicated in the WhatsApp message at 4293.",
+   "suggestedFix": "Use fF(up._fechaDisplay || up.fechaEntrega).",
+   "confidence": "high"
+  },
+  {
+   "title": "The daily email guard and contact dates use the UTC day, and the guard is not atomic",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:809-815, 837, 848",
+   "severity": "low",
+   "category": "dates-timezone",
+   "evidence": "`const hoy = new Date().toISOString().split(\"T\")[0]` is compared with `snap.data().fecha`, and setDoc runs only after emailjs.send resolves. marcarContacto writes `ultimoPedidoRegistrado: new Date().toISOString().split(\"T\")[0]`, which calcularAlertas then parses as a local date (4985).",
+   "failureScenario": "The director opens the panel at 10:00 (email sent, fecha = D) and again at 21:30 (UTC date is D+1, so a second email goes out the same day). The next morning the guard matches D+1 and no email is sent. Two phones opening the panel at the same time both send. A contact marked after 21:00 is stored as tomorrow, shifting 'días sin pedir' by one day.",
+   "suggestedFix": "Use a local-date helper for both. Claim the day inside runTransaction (write fecha first, then send), or accept at-most-once semantics.",
+   "confidence": "high"
+  },
+  {
+   "title": "A stale debt banner can appear when the client is changed quickly",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:1110-1124",
+   "severity": "low",
+   "category": "async-race",
+   "evidence": "onSelectCliente awaits the cuentas_corrientes query and then calls `setSaldoCC(snap.docs[0].data().saldo||0)` without checking that the selected client is still `val`. Errors are swallowed by `catch(e){}`.",
+   "failureScenario": "On a slow connection the manager picks client A (CC, owes $900.000), immediately corrects to client B (no CC). A's query resolves after B was selected, and the form shows 'Saldo pendiente: $900.000 — deuda elevada' under B.",
+   "suggestedFix": "Keep a request counter or ref with the latest selection and ignore responses that do not match; or derive saldo from a client-keyed cache loaded once.",
+   "confidence": "medium"
+  },
+  {
+   "title": "The client search in the selector is accent-sensitive",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:927-928",
+   "severity": "low",
+   "category": "logic-filter",
+   "evidence": "`const q = busqueda.toLowerCase().trim(); filtrados = ordenados.filter(c=>c.toLowerCase().includes(q))`. The sort on line 924 uses sensitivity 'base' and BuscadorProductos has a `normalizar` that strips accents, but this filter does not.",
+   "failureScenario": "Typing 'carniceria' or 'lopez' on the iPhone keyboard returns 'Sin resultados' for 'Carnicería López'. The user scrolls the whole list or creates a duplicate through 'Otro'.",
+   "suggestedFix": "Reuse the NFD-normalizing helper for both haystack and query; match all words.",
+   "confidence": "high"
+  },
+  {
+   "title": "Nine placeholder clients (CLIENTES_DEFAULT) are offered in the production selector and become real client docs when used",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:1141-1145, 840-852",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`todosClientes = [...clientesDB.map(c=>c.nombre), ...CLIENTES_DEFAULT.filter(...), \"Otro\"]`, where CLIENTES_DEFAULT (133-137) is a hardcoded list ('Supermercado Don Juan', 'Carnicería El Gaucho', …). marcarContacto then does `addDoc(collection(db,\"clientes\"), {nombre: nombreCliente, ...})` for any name not found.",
+   "failureScenario": "Assuming these names are not real Sersale customers: they appear mixed alphabetically with real clients, and they are the only options shown while clientesDB is loading or failed to load. Picking one creates an order for a non-existent client and a clientes doc for it.",
+   "suggestedFix": "Remove CLIENTES_DEFAULT from the selector here and in EditarPedido (1518); show a loading state until clientesDB arrives.",
+   "confidence": "medium"
+  },
+  {
+   "title": "The product search catalog is memoized once per mount and can miss the Firestore catalog",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:986-992",
+   "severity": "low",
+   "category": "react-stale",
+   "evidence": "`const catalogo = React.useMemo(()=>{ ... Object.entries(getProductos()) ... },[]);` has an empty dependency list, and window.__productosOverride is a plain global that arrives asynchronously after __fbReady is already true (49-57). Nothing triggers a recompute.",
+   "failureScenario": "The app reloads straight into Comercial (sersale_vista) on a slow connection and the manager taps '+ Nuevo' before config/productos resolves. For that whole order the search uses the hardcoded list: products added by the director are not found, while the category selects (which call getProductos() each render) do show them.",
+   "suggestedFix": "Hold the catalog in state updated on the fbReady event and after GestionProductos saves, and pass it as a prop or use it as the memo dependency.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Load failures are unhandled: the client list stays on 'Cargando...' and the order form shows only placeholder clients",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:621-625, 692, 1100-1107",
+   "severity": "low",
+   "category": "async-errors",
+   "evidence": "cargar() and cargarClientes() await getDocs with no try/catch; the callers do not catch either, and there is no error state. `clientes` stays null and `clientesDB` stays [].",
+   "failureScenario": "getDocs rejects (permission-denied, or resource-exhausted when the daily read quota is hit, which the many full-collection reads make more likely). GestionClientes shows 'Cargando...' indefinitely, and NuevoPedido's selector lists only the 9 CLIENTES_DEFAULT names plus 'Otro', with no error message.",
+   "suggestedFix": "Wrap in try/catch, show an error state with a retry button, and do not render the selector options until the load succeeds.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Deleting the client currently being edited leaves the form in edit mode on a deleted doc",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:643-681",
+   "severity": "low",
+   "category": "react-state",
+   "evidence": "eliminar() never resets `editando` or the form fields. A later guardar() runs `updateDoc(doc(db,\"clientes\",editando), ...)` on a missing doc, which throws, and the catch shows `alert(\"Error al guardar\")`.",
+   "failureScenario": "Tap ✏️ on a client, then 🗑️ on the same row and confirm. The form still says 'Editar cliente' with its data; tapping 'Actualizar' shows 'Error al guardar'.",
+   "suggestedFix": "In eliminar, call cancelarEdicion() when id === editando.",
+   "confidence": "high"
+  }
+ ],
+ "security": [
+  {
+   "title": "No real authentication: access control is a sessionStorage flag, and the browser talks to Firestore directly",
+   "detail": "pedidos.html imports only firebase-app and firebase-firestore (no Firebase Auth, no App Check). The gate is `sessionStorage.sersale_role` / `sersale_auth === \"ok\"` checked in <head>, and the operario lock is React state in App. Firestore rules therefore cannot identify a user. Unless the rules are restricted some other way, anyone with the public config embedded in the page can read or write clientes (names, phones, addresses), cc_movimientos and cuentas_corrientes, including the cascade deletes this section performs. Setting sessionStorage by hand in the console is enough to reach Home, GestionClientes and NuevoPedido.",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:4-12, 34-49, 5503-5508"
+  },
+  {
+   "title": "EmailJS service id, template id and public key are in client source",
+   "detail": "EMAILJS_SVC, EMAILJS_TPL and EMAILJS_KEY let anyone call emailjs.send with an arbitrary `message` to the template's recipient, which allows inbox spam and exhausting the monthly quota so real alerts stop. EmailJS public keys are meant to be public, but only when combined with allowed-origin restrictions or rate limits in the EmailJS dashboard; that configuration is not visible from the code.",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:776-803"
+  },
+  {
+   "title": "Customer commercial data is sent to a third party in the alert email",
+   "detail": "The email body includes client names, last-order products and amounts, sent through EmailJS servers. If the EmailJS template renders {{{message}}} unescaped, client or product names containing HTML would be injected into the email; the template is not visible here.",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:786-800"
+  },
+  {
+   "title": "Irreversible deletion of financial records behind a single confirm(), with no audit trail",
+   "detail": "GestionClientes.eliminar hard-deletes cc_movimientos and cuentas_corrientes (balances and payment history) plus prices from the client. It is reachable by any session that passes the sessionStorage gate. No soft delete, no log of who deleted what, and no check that saldo is 0.",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:643-681"
+  },
+  {
+   "title": "The alert-email guard document is writable by any client",
+   "detail": "config/ultima_alerta_email is overwritten with setDoc from the browser. Anyone with write access can set fecha to today and suppress the daily alert, or reset it to force repeated emails.",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:808-815"
+  },
+  {
+   "title": "No injection sinks in this section",
+   "detail": "All client and product names are rendered through JSX, which escapes them; there is no innerHTML, document.write or URL building here. confirm() and the email body use the names as plain text. Free-text fields (client name, 'Otro', 'Artículos Varios' description, obs) have no length or character limits and are stored as typed.",
+   "lines": "/home/user/sersale-produccion/crm/src/pedidos.html:609-1293"
+  }
+ ],
+ "ux": [
+  {
+   "title": "An order draft is lost on any interruption",
+   "problem": "All NuevoPedido state lives in React memory. The header '←' (1203) discards it without asking. The fixed bottom nav consists of plain <a href> links that do a full page load. If iOS reloads the home-screen app after switching to WhatsApp to read the customer's order, the page returns to the Comercial list with the draft gone; only sersale_vista is restored.",
+   "suggestion": "Persist the draft (client, tipo, fecha, items, obs) to localStorage on every change and restore it when NuevoPedido mounts, with a 'Descartar borrador' action. Confirm before leaving with unsaved rows.",
+   "impact": "high",
+   "lines": "1088-1099, 1203"
+  },
+  {
+   "title": "Saving has no offline or timeout handling",
+   "problem": "guardar() awaits addDoc, which does not resolve while the phone has no connection (Firestore memory cache, no persistence). The button stays on 'Guardando...' with no message. If the user leaves, the queued write may still land later or be lost when the app closes, so orders get duplicated or lost. In GestionClientes the catch shows a generic 'Error al guardar'.",
+   "suggestion": "Enable Firestore persistent local cache; navigate optimistically and show a 'pendiente de sincronizar' badge; add a timeout with a clear message and retry; show an online/offline indicator.",
+   "impact": "high",
+   "lines": "1154-1198, 627-641"
+  },
+  {
+   "title": "The client selector is awkward for the most frequent action",
+   "problem": "The search is accent-sensitive. When a new name is typed the panel shows only 'Sin resultados', because 'Otro' is filtered out too; the user must clear the text, scroll past every client to '➕ Otro' and retype the name in a second input. The panel is absolutely positioned with maxHeight 320 right under a field that autofocuses, so the iOS keyboard covers most of it. Rows are about 38px high.",
+   "suggestion": "Use a full-screen bottom sheet with the search pinned on top, accent-insensitive matching, recent or frequent clients first, and a permanent '➕ Crear «texto»' row that prefills the new-client name. Rows at least 44px.",
+   "impact": "high",
+   "lines": "902-969, 1208-1212"
+  },
+  {
+   "title": "Adding products needs a long round trip per item",
+   "problem": "After choosing a search result, focus returns to the search box and the new row is appended at the bottom of the list with an empty quantity. The user must scroll down, tap Cantidad, type, and scroll back up for the next product. The hint 'Enter agrega · ↑↓ para moverte · Esc limpia' only makes sense on a desktop keyboard. 'ya está' still adds a duplicate row.",
+   "suggestion": "After picking a product, focus the quantity input of the new row (or ask quantity and unit inline in the result). Keep the search sticky. Put new rows on top, or use compact one-line rows. Hide keyboard hints on touch devices. On 'ya está', focus the existing row instead of duplicating.",
+   "impact": "high",
+   "lines": "1022-1027, 1080-1081, 1129-1136, 1245-1278"
+  },
+  {
+   "title": "Native alert() and confirm() are used for validation, errors and deletion",
+   "problem": "alert() at 628, 639, 678, 1149-1153 and 1196, and confirm() at 644. They block the page, show the site domain as the title, and do not point to the offending field. There is no success feedback after saving a client; the form just clears.",
+   "suggestion": "Inline field errors with scroll-to-field, a toast for success and errors, and a bottom-sheet confirmation for delete that shows the client's saldo and pending orders and offers undo.",
+   "impact": "medium",
+   "lines": "628, 639, 644, 678, 1149-1153, 1196"
+  },
+  {
+   "title": "Delivery date and order type start empty on every order",
+   "problem": "The date input starts blank; on iOS an empty date input renders as an empty box with no hint. 'Tipo de pedido' must be tapped every time. That is three extra interactions per order for values that are usually tomorrow and the client's usual type.",
+   "suggestion": "Default the date to the next delivery day and add chips 'Hoy / Mañana / Lun…'. Preselect tipo from the client's last order (or from having a delivery address). Offer 'Repetir último pedido' for the selected client.",
+   "impact": "medium",
+   "lines": "1230-1243"
+  },
+  {
+   "title": "Wrong keyboard for quantity",
+   "problem": "Cantidad is `type=\"number\"` without inputMode. On iPhone this opens the full numbers-and-symbols keyboard instead of the large decimal keypad.",
+   "suggestion": "Use type=\"text\" with inputMode=\"decimal\", normalize comma to dot, and consider − / + steppers for whole pieces.",
+   "impact": "medium",
+   "lines": "1268-1269"
+  },
+  {
+   "title": "Tap targets under 44px, with destructive actions adjacent",
+   "problem": "The header back arrow has padding 0 at fontSize 20 (about 20x24px). The client-row buttons 📈 ✏️ 🗑️ have padding 6px 10px (about 34x28px) and sit side by side, so delete is a mis-tap away from edit. The item remove '✕' has padding 2px 8px (about 24x18px). The search clear '✕' has padding 4. The checkboxes are 18px.",
+   "suggestion": "Give every control a minimum 44x44 hit area; move delete into the edit sheet or a swipe/overflow menu; enlarge the back button.",
+   "impact": "medium",
+   "lines": "699, 744-746, 1203, 1250, 1047-1049, 715, 1227"
+  },
+  {
+   "title": "The client list has no search and loses position",
+   "problem": "GestionClientes renders every client in Firestore code-point order (lowercase and accented initials after Z) with no filter. Editing calls window.scrollTo(0,0) and after saving the user is left at the top. The whole list is re-fetched and re-rendered after each save.",
+   "suggestion": "Add a sticky search box, sort with a locale collator, edit in a bottom sheet over the list (keeping scroll), and update the row locally.",
+   "impact": "medium",
+   "lines": "685, 727-749"
+  },
+  {
+   "title": "Loading and empty states mislead in the order form",
+   "problem": "While clients load, or if loading fails, the selector shows the nine placeholder names and 'Otro' with no spinner, so the client appears to be missing. GestionClientes shows only a 'Cargando...' text with no retry.",
+   "suggestion": "Skeleton or spinner until the first load, then cached data shown instantly with background refresh; explicit error state with retry.",
+   "impact": "medium",
+   "lines": "731, 1097-1107, 1141-1145"
+  },
+  {
+   "title": "The debt banner threshold is a hardcoded $50.000",
+   "problem": "'Este cliente tiene deuda elevada' triggers at saldoCC > 50000 ARS, which is a trivially small wholesale balance, so nearly every CC client with any balance gets the red warning and it stops meaning anything. The banner also shows nothing when the client has the CC flag but no account.",
+   "suggestion": "Make the threshold configurable (global or per client credit limit), or base it on days overdue; show an explicit 'sin cuenta creada' state.",
+   "impact": "medium",
+   "lines": "1213-1225"
+  },
+  {
+   "title": "Home adds a tap and offers no direct actions",
+   "problem": "Home asks '¿Quién sos?' although the director role is already known, and the most frequent action (new order) is three taps away: Comercial, then '+ Nuevo', then the client. The 'N pedidos nuevos' banner is not tappable.",
+   "suggestion": "Make Home a dashboard: a primary 'Nuevo pedido' button, today's pending and to-deliver counters that navigate on tap, and Clientes/Productos moved to a secondary menu.",
+   "impact": "medium",
+   "lines": "860-899"
+  },
+  {
+   "title": "Phone and address are free text with no guidance",
+   "problem": "Teléfono accepts any format, although it is later used for WhatsApp links (which need country code and digits only). Dirección has no hint about including the locality, although it feeds the route sheet. Inputs lack autoCapitalize, autoComplete and enterKeyHint.",
+   "suggestion": "Normalize the phone to digits with a 549 prefix on save and show a preview; add a placeholder such as 'Calle 123, Localidad'; set autoCapitalize=\"words\" on names and enterKeyHint=\"next\" or \"done\".",
+   "impact": "low",
+   "lines": "708-713"
+  },
+  {
+   "title": "The save button sits at the end of a long form",
+   "problem": "'✓ Guardar Pedido' is below all items and the notes field; with 10 or more items it takes a long scroll, and there is no running summary of items.",
+   "suggestion": "Sticky bottom bar above the nav with the item count and the Guardar button; respect env(safe-area-inset-bottom).",
+   "impact": "low",
+   "lines": "1279-1288"
+  },
+  {
+   "title": "Small text in inputs (13-14px)",
+   "problem": "All inputs use fontSize 14 (13 for item obs). iOS focus zoom is suppressed only because the viewport sets maximum-scale=1.0; the text stays small for warehouse or outdoor use.",
+   "suggestion": "Use 16px for inputs and selects.",
+   "impact": "low",
+   "lines": "708-712, 947, 1042-1044, 1210, 1242, 1252-1276, 1283"
+  }
+ ],
+ "perf": [
+  {
+   "title": "Client delete reads three whole collections and deletes one document at a time",
+   "problem": "eliminar() runs getDocs(collection(db,\"precios_cliente\")), getDocs(collection(db,\"cc_movimientos\")) and getDocs(collection(db,\"cuentas_corrientes\")) with no filter, then awaits one deleteDoc per match. Cost is O(all documents) reads per delete; cc_movimientos grows without bound.",
+   "suggestion": "Query with where('cliente','==',nombre) / where('nombre','==',nombre), or by clienteId, and delete in a writeBatch.",
+   "impact": "medium",
+   "lines": "652-673"
+  },
+  {
+   "title": "marcarContacto reads the entire clientes collection on every saved order",
+   "problem": "`getDocs(collection(db,\"clientes\"))` followed by a linear case-insensitive scan, on every NuevoPedido save, every VentaRapida and every 'contactado' tap. NuevoPedido already holds clientesDB with ids.",
+   "suggestion": "Pass the client id (or the cached list) and update the doc directly; fall back to a where('nombre','==',…) query.",
+   "impact": "medium",
+   "lines": "825-833"
+  },
+  {
+   "title": "clientes is re-fetched on every screen mount and after every save, with no shared cache",
+   "problem": "NuevoPedido fetches the full ordered collection on each mount (once per new order). GestionClientes re-fetches after each save and delete. The same query is repeated in at least eight components of the file (623, 1103, 1496, 2782, 2960, 3236, 3485, 4410).",
+   "suggestion": "One app-level clients store (context) loaded once, or an onSnapshot listener, with local updates after writes; reuse it in the selector, route sheet and alerts.",
+   "impact": "medium",
+   "lines": "621-625, 638, 680, 1100-1107"
+  },
+  {
+   "title": "Avoidable work on every keystroke in the order form",
+   "problem": "Each NuevoPedido render rebuilds todosClientes with an O(n·m) filter+find (1141-1145), re-sorts the full client list with localeCompare inside SelectorClienteBuscable even when closed (924), and for every item row sorts the category keys (1255) and sorts the product array in place (1264). Typing a quantity therefore triggers all of this once per row.",
+   "suggestion": "useMemo for todosClientes and the sorted lists, a shared Intl.Collator, a pre-sorted catalog computed once, and React.memo for item rows.",
+   "impact": "low",
+   "lines": "924-928, 1141-1145, 1255, 1264"
+  },
+  {
+   "title": "The product select sorts the shared catalog arrays in place",
+   "problem": "`(getProductos()[item.categoria]||[]).sort(...)` mutates the arrays inside window.__productosOverride / PRODUCTOS on every render. That is wasted work, and it changes the order other readers of the same object see.",
+   "suggestion": "Sort a copy once ([...arr].sort) inside a memo.",
+   "impact": "low",
+   "lines": "1264"
+  },
+  {
+   "title": "Saving a CC order waits for extra sequential round trips before returning to the list",
+   "problem": "guardar() awaits the pedido addDoc and then the cc_movimientos addDoc before calling onSaved(); the caller then re-fetches all pedidos. On mobile data this is several seconds of 'Guardando...'.",
+   "suggestion": "Write the pedido and the movement in one writeBatch, navigate optimistically, and insert the new order into local state instead of re-fetching.",
+   "impact": "low",
+   "lines": "1157-1195"
+  }
+ ]
+}

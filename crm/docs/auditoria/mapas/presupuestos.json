@@ -1,0 +1,493 @@
+{
+ "summary": "presupuestos.html (883 lines, vanilla JS, director-only) builds a customer-facing price list / quote PDF. The user types a client name, picks \"Catálogo completo\" (all 45 hardcoded products) or \"Selección de ítems\" (checkboxes), edits per-kilo prices, applies a global / per-category / per-product % increase or discount, adds free-text \"Artículos varios\", and downloads an A4 PDF via jsPDF (cover, product pages, closing page) or a CSV. The page does NOT touch Firestore and persists nothing: catalog and prices are constants in the file (CATS, lines 192-254), all state lives in the DOM and three globals, and line 813-814 says quotes are not saved. The main risks are wrong prices reaching the customer PDF: custom-item prices typed as \"8.990\" print as \"$9\"; a price the user cleared to \"Consultar\" prints the hardcoded price; hidden category/product adjustments keep applying after switching mode. On an iPhone the selection mode layout is broken (product name column 32px wide) and every input is under 16px. I verified the main findings by running the page read-only in headless Chrome at 375px with the repo's jsPDF 2.5.1; scripts and screenshots are in /tmp/claude-0/-home-user-sersale-produccion/6ddd4064-049b-57c4-83c8-0a6a9ff45000/scratchpad/ (chk4.mjs, presup_sel_375.png, presup_custom_375.png). Not verified on a real iPhone: the Safari-specific items (blob download after immediate revoke, whether a tap on a button blurs the focused input first, Excel BOM handling) are marked low confidence.",
+ "components": [
+  {
+   "name": "Auth gate (inline IIFE)",
+   "lines": "presupuestos.html:4-12",
+   "purpose": "Reads sessionStorage sersale_role / sersale_auth before render. 'director' passes; 'operario' is redirected to pedidos.html; any session with sersale_auth==='ok' passes (legacy); otherwise redirect to index.html."
+  },
+  {
+   "name": "Head: meta, fonts, jsPDF CDN, logo script, CSS",
+   "lines": "presupuestos.html:14-113",
+   "purpose": "Viewport (no maximum-scale), Google Fonts, render-blocking jsPDF 2.5.1 from cdnjs and assets/logo-pdf-jpeg.js (LOGO_B64), page styles and the shared Sersale visual layer."
+  },
+  {
+   "name": "Header + 'Exportar CSV' button",
+   "lines": "presupuestos.html:116-125",
+   "purpose": "Sticky header (97px tall at 375px) with logo, title and the CSV export button (calls exportarPresupuesto)."
+  },
+  {
+   "name": "Form markup (Cliente, Tipo, Productos, Ajuste, Artículos varios, info bar, Generar)",
+   "lines": "presupuestos.html:126-190",
+   "purpose": "Static cards: client name input #cli, mode buttons #b-comp/#b-sel, product list container #lista, global adjustment (#b-aumento/#b-bonif, #ajuste-pct, Quitar, #ajuste-preview), custom items (#custom-list), summary bar (#inf-txt/#inf-c), #btnGen and #ld loader."
+  },
+  {
+   "name": "CATS catalog constant + uid assignment",
+   "lines": "presupuestos.html:192-255",
+   "purpose": "Hardcoded catalog: 8 categories, 45 products {n, art, peso, p (ARS per kilo, number or null='Consultar')}; a sequential uid 0..44 is assigned at load."
+  },
+  {
+   "name": "esc(s)",
+   "lines": "presupuestos.html:258-262",
+   "purpose": "HTML-escapes text for innerHTML/attributes (used for custom items)."
+  },
+  {
+   "name": "Custom items: customItems, addCustomItem, removeCustomItem, updateCustomItem, renderCustomItems",
+   "lines": "presupuestos.html:265-307",
+   "purpose": "In-memory list [{id:'ci_N', desc, peso, precio:number}]. Rows are rebuilt with innerHTML on add/remove; fields are committed on 'change'; precio is parsed with parseFloat."
+  },
+  {
+   "name": "Global adjustment: setAjuste, resetAjuste, getAjusteFactor, aplicarAjuste",
+   "lines": "presupuestos.html:308-328",
+   "purpose": "tipoAjuste ('aumento'|'bonif') and #ajuste-pct produce a factor (1±pct/100); aplicarAjuste returns Math.round(precio*factor) or null."
+  },
+  {
+   "name": "setModo(m), selAll()",
+   "lines": "presupuestos.html:330-345",
+   "purpose": "Switches between 'comp' and 'sel': toggles checkboxes, the 'Seleccionar todos' button and the per-category/per-product adjustment fields; selAll toggles every checkbox."
+  },
+  {
+   "name": "Amount formatting: desfmtMiles, fmtMilesTxt, blurPrecio, document 'input' listener, fmtP",
+   "lines": "presupuestos.html:347-389",
+   "purpose": "Live thousands-separator formatting for inputs with class 'monto' (catalog prices only), caret preservation, blur normalisation to '$ 8.990' or 'Consultar'."
+  },
+  {
+   "name": "toggleAjusteFields(m), aplicarCat(ci)",
+   "lines": "presupuestos.html:392-407",
+   "purpose": "Shows/hides #cat-ajuste-{ci} and #prod-ajuste-{uid} depending on mode (visual only); aplicarCat just calls upd()."
+  },
+  {
+   "name": "getPrecioFinal(uid, precioBase), getP(uid)",
+   "lines": "presupuestos.html:410-445",
+   "purpose": "getP parses the on-screen price of a product (null if not numeric) and getPrecioFinal applies, in priority order, the product %, else the category %, else the global % (not cumulative, regardless of mode)."
+  },
+  {
+   "name": "upd()",
+   "lines": "presupuestos.html:446-476",
+   "purpose": "Recomputes the summary bar (categories/products count, client name) and the global-adjustment preview text."
+  },
+  {
+   "name": "render(), toggleSec(i)",
+   "lines": "presupuestos.html:477-542",
+   "purpose": "Builds the accordion of categories and product rows (checkbox, name, per-product adjust, price input) with innerHTML; toggleSec opens/closes a section. Called once at line 811."
+  },
+  {
+   "name": "gen() — PDF generator",
+   "lines": "presupuestos.html:547-810",
+   "purpose": "Collects items (catalog + custom), draws cover (logo, 'LISTA DE PRECIOS'/'PRESUPUESTO', client name, date, company box), paginated product table (inner helpers drawPageHdr 656-668, drawColHdr 670-680, drawSep 682-689, drawRow 691-714, drawFtr 716-723, pagination loop 725-757), closing page (759-801) and pdf.save (803-804)."
+  },
+  {
+   "name": "csvCell(v), exportarPresupuesto()",
+   "lines": "presupuestos.html:815-871",
+   "purpose": "Exports the on-screen quote as a ';' separated CSV (BOM + 'sep=;' line) through a Blob + anchor download."
+  },
+  {
+   "name": "Bottom navigation bar #sersale_nav",
+   "lines": "presupuestos.html:880",
+   "purpose": "Fixed bottom nav with full-page links to /, /dashboard, /pedidos, /produccion, /ventas, /presupuestos."
+  }
+ ],
+ "firestore": [],
+ "clientState": [
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_role",
+   "lines": "presupuestos.html:6-8",
+   "usage": "Read only. 'director' -> allowed; 'operario' -> redirect to pedidos.html. Set by index.html (entrarOperario / loginExitoso). Wiped when the iOS home-screen app is closed, forcing a new login and losing the quote in progress."
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_auth",
+   "lines": "presupuestos.html:9",
+   "usage": "Read only. Legacy flag: value 'ok' lets any non-operario session in, even with no role. Otherwise redirect to index.html."
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "LOGO_B64",
+   "lines": "presupuestos.html:23, 577",
+   "usage": "Global const from assets/logo-pdf-jpeg.js: base64 JPEG (380x380, no data: prefix) used for the PDF logo. If that script fails to load, gen() alerts a ReferenceError message."
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.jspdf",
+   "lines": "presupuestos.html:22, 570",
+   "usage": "jsPDF 2.5.1 UMD namespace from cdnjs; gen() destructures {jsPDF} from it."
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "CATS, uid, customItems, customIdCounter, modo, tipoAjuste",
+   "lines": "presupuestos.html:192-255, 265-266, 308-309",
+   "usage": "All page state, in memory only (top-level const/let, not on window). modo: 'comp'|'sel'; tipoAjuste: 'aumento'|'bonif'; customItems: [{id:'ci_N', desc:string, peso:string, precio:number}]. Nothing is persisted; reload or navigation resets everything."
+  },
+  {
+   "kind": "domId",
+   "key": "cli, b-comp, b-sel, btnAll, modo-txt, lista, b-aumento, b-bonif, ajuste-pct, ajuste-preview, ajuste-desc, custom-count, custom-list, inf-txt, inf-c, btnGen, ld, sersale_nav",
+   "lines": "presupuestos.html:126-190, 880",
+   "usage": "Static ids read/written by the script. Edited prices and adjustments live only in these DOM inputs."
+  },
+  {
+   "kind": "domId",
+   "key": "sec-{ci}, arr-{ci}, cat-ajuste-{ci}, cat-tipo-{ci}, cat-pct-{ci}, cb-{uid}, p-{uid}, prod-ajuste-{uid}, prod-tipo-{uid}, prod-pct-{uid}",
+   "lines": "presupuestos.html:483-531",
+   "usage": "Generated per category index (0..7) and per product uid (0..44). getP/getPrecioFinal read prices and percentages straight from these inputs at PDF/CSV time."
+  },
+  {
+   "kind": "urlParam",
+   "key": "(none)",
+   "lines": "presupuestos.html:1-883",
+   "usage": "The page reads no URL parameters and no localStorage. Entry points: index.html links to 'presupuestos.html' (module card and quick access). Outgoing: gate redirects to relative 'pedidos.html' / 'index.html'; bottom nav uses absolute extensionless paths ('/', '/dashboard', '/pedidos', '/produccion', '/ventas', '/presupuestos') that depend on Netlify pretty URLs and on the site being served from the domain root."
+  },
+  {
+   "kind": "download filename",
+   "key": "Presupuesto_Sersale_{cliente}_{DD-MM-YYYY}.pdf / Presupuesto_{cliente}_{YYYY-MM-DD}.csv",
+   "lines": "presupuestos.html:803-804, 866",
+   "usage": "Client name with whitespace replaced by '_' and no other sanitising. PDF date is local; CSV date is UTC (toISOString)."
+  }
+ ],
+ "external": [
+  {
+   "service": "cdnjs (Cloudflare) — jsPDF 2.5.1",
+   "usage": "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js loaded synchronously in <head> (about 364 KB), no integrity/crossorigin attribute. Used only inside gen().",
+   "lines": "presupuestos.html:22"
+  },
+  {
+   "service": "Google Fonts",
+   "usage": "preconnect to fonts.gstatic.com and stylesheet for Barlow Condensed, IBM Plex Mono and IBM Plex Sans.",
+   "lines": "presupuestos.html:20-21"
+  },
+  {
+   "service": "(none other)",
+   "usage": "No Firebase, EmailJS, WhatsApp, Maps or other API calls in this page. Phone, Instagram handle, CUIT and address are hardcoded strings in the PDF.",
+   "lines": "presupuestos.html:637-646, 721, 794-801"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "Custom item price typed with thousands dot or '$' is parsed wrong and printed in the PDF ('8.990' -> '$9', '$ 12.500' -> '$0')",
+   "lines": "presupuestos.html:283 (input at 299-300, used at 559-560 and 854-855)",
+   "severity": "critical",
+   "category": "money-parsing",
+   "evidence": "updateCustomItem does `item[field] = field === 'precio' ? (parseFloat(value) || 0) : value;`. The custom price input is `<input class=\"ci-precio\" type=\"text\" placeholder=\"Precio\" ...>` without the 'monto' class, so it gets none of the desfmtMiles/fmtMilesTxt handling the catalog prices get. gen() then prints `aplicarAjuste(precio) ?? precio` rounded. Verified in headless Chrome: typing 8.990 stores precio 8.99 and the PDF row reads '$9'; typing '$ 12.500' gives '$0'.",
+   "failureScenario": "The user adds 'Queso Tybo', '4 KG' and types the price the way every other price on this page is shown: 8.990. The PDF sent to the customer lists Queso Tybo at $9 per kilo (12.500 -> $13, 1.250,50 -> $1, '$8990' -> $0). The input keeps showing '8.990', so nothing on screen warns the user.",
+   "suggestedFix": "Give the field class 'monto' and inputmode='decimal', parse with parseFloat(desfmtMiles(value)), update state on 'input', and render the stored value with fmtMilesTxt.",
+   "confidence": "high"
+  },
+  {
+   "title": "A catalog price cleared to 'Consultar' is printed in the PDF with the hardcoded price (and without the adjustment)",
+   "lines": "presupuestos.html:553 (with 369-373, 440-445, 842-844)",
+   "severity": "high",
+   "category": "money-logic",
+   "evidence": "blurPrecio turns an empty field into 'Consultar' and getP returns null for it, but gen() builds the row with `precio:getP(p.uid)??p.p`, so null falls back to the constant in CATS. The CSV path uses getP alone and writes 'Consultar'. Verified: after clearing 'JAMÓN COCIDO DE PATA' the screen shows 'Consultar', the PDF row shows '$6.990' and the CSV row shows 'Consultar'.",
+   "failureScenario": "In 'Catálogo completo' the user cannot untick a product, so to avoid quoting an item they clear its price and see 'Consultar'. The customer's PDF still shows $6.990 for it, the base price even when a global increase was applied to everything else.",
+   "suggestedFix": "Use `precio: getP(p.uid)` (null prints 'Consultar', which is what the screen shows). Products with p:null already work that way.",
+   "confidence": "high"
+  },
+  {
+   "title": "Per-category and per-product adjustments stay active (hidden) in 'Catálogo completo' mode and 'Quitar' does not clear them",
+   "lines": "presupuestos.html:392-401, 410-434 (resetAjuste 317-319)",
+   "severity": "high",
+   "category": "money-logic",
+   "evidence": "toggleAjusteFields only sets `style.display` to 'none' in 'comp' mode; getPrecioFinal reads `prod-pct-{uid}` and `cat-pct-{ci}` with no check on `modo`. resetAjuste only resets #ajuste-pct. Verified: set PALETAS COCIDAS to 10% bonificación in selection mode, switch to 'Catálogo completo' (field display:none), generate: 'FIAMBRE COCIDO DE PALETA DE CERDO' prints $5.391 instead of $5.990, also after pressing 'Quitar'.",
+   "failureScenario": "The user prepares a quote for client A with a 10% discount on one category, then switches to 'Catálogo completo', changes the client name and generates a general price list for client B. Client B receives the list with client A's discount on that category, and nothing on screen shows it.",
+   "suggestedFix": "Apply category/product percentages only when modo==='sel' (or keep them visible in both modes), make 'Quitar' clear every percentage, and show a visible 'ajustes activos' summary. A 'Nuevo presupuesto' reset would also avoid carry-over between clients.",
+   "confidence": "high"
+  },
+  {
+   "title": "Custom item with no price prints '$0' instead of 'Consultar'",
+   "lines": "presupuestos.html:559-560 (drawRow 712, CSV 854-855)",
+   "severity": "medium",
+   "category": "money-logic",
+   "evidence": "`const precio = ci.precio || 0; items.push({... precio: aplicarAjuste(precio) ?? precio})` always yields a number, so drawRow's `prod.precio!=null ? '$'+... : 'Consultar'` prints '$0'. The CSV writes 0. Verified: a custom row with description and empty price prints '$0'.",
+   "failureScenario": "The user adds 'Pechito ahumado' without a price yet (to be confirmed by phone). The customer's PDF shows it at $0 per kilo, while catalog items without a price show 'Consultar'.",
+   "suggestedFix": "Store precio as null when empty or not numeric and pass null through so the PDF and CSV print 'Consultar'.",
+   "confidence": "high"
+  },
+  {
+   "title": "Custom item fields are committed on 'change' and the list is rebuilt with innerHTML: typed text can be lost or left out of the PDF",
+   "lines": "presupuestos.html:268-272, 274-278, 293-303",
+   "severity": "medium",
+   "category": "state-sync",
+   "evidence": "State is only updated by `onchange=\"updateCustomItem(...)\"`, and addCustomItem/removeCustomItem rebuild every row from state with `container.innerHTML = customItems.map(...)`. Verified in Chrome by calling addCustomItem() while a description was typed but not yet blurred: the row is redrawn empty, and because Chrome fires 'change' during removal the state keeps the text, so the counter says '2 agregados' and the PDF would include a row the screen no longer shows.",
+   "failureScenario": "Requires that the tapped button does not blur the focused input before its click handler runs (iOS Safari does not focus buttons on tap; I could not confirm on a device). In that case: typing a description and tapping '+ Agregar artículo' wipes it; typing a price and tapping 'Generar y descargar PDF' with the keyboard still open generates the item at $0.",
+   "suggestedFix": "Update state on 'input', append/remove single row nodes instead of rebuilding the list, and call document.activeElement.blur() at the start of gen().",
+   "confidence": "low"
+  },
+  {
+   "title": "Catalog and prices are hardcoded and already differ from the CRM catalog: 21 products are missing from 'Catálogo completo — Todos los productos'",
+   "lines": "presupuestos.html:192-254 (label at 135)",
+   "severity": "medium",
+   "category": "data-consistency",
+   "evidence": "CATS holds 45 products. pedidos.html:755-766 lists 66 defaults and replaces them with Firestore config/productos when present. Missing here: the whole 'Quesos' category (10), Costillitas de Cerdo, Matambrito de Cerdo, Cinta de Lomo, Ribs, Pollo, Churrasquitos de Cerdo, Chorizo Bombón Puro Cerdo, Pechito Ahumado, Mortadela Familiar, Salchichón c/ Jamón Familiar, Salchichón Primavera Familiar. Prices are constants (e.g. p:11590) and edits live only in the DOM.",
+   "failureScenario": "The director adds a product in Pedidos > Productos and generates a 'Catálogo completo': the new product and the 21 above are not in the PDF. After a price increase, every reload shows the old constants again, so a list generated without retyping goes out with outdated prices.",
+   "suggestedFix": "Read the catalog from config/productos (same source as pedidos.html) and keep base prices in a Firestore document editable from this page; optionally preload a client's precios_cliente.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Long client names overflow the PDF cover (30pt, centered, no wrap or shrink)",
+   "lines": "presupuestos.html:611-614",
+   "severity": "medium",
+   "category": "pdf-layout",
+   "evidence": "`pdf.setFontSize(30); ... pdf.text(cli,PW/2,PH*0.56,{align:'center'});` with no maxWidth or splitTextToSize. Measured with the repo's jsPDF: 'DISTRIBUIDORA LA NUEVA ESPERANZA SRL' (36 chars) is 657pt wide on a 595pt page; a 31-char mixed-case name (508pt) just fits the 515pt content width.",
+   "failureScenario": "Client 'DISTRIBUIDORA LA NUEVA ESPERANZA SRL': the cover of the PDF shows the name cut off on both edges.",
+   "suggestedFix": "Reduce the font size until pdf.getTextWidth(cli) <= W (down to about 16pt), then wrap with pdf.splitTextToSize(cli, W).",
+   "confidence": "high"
+  },
+  {
+   "title": "CSV export revokes the blob URL right after click (download can fail in Safari)",
+   "lines": "presupuestos.html:862-870",
+   "severity": "medium",
+   "category": "ios-download",
+   "evidence": "`a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);` run synchronously. jsPDF's own saver in the same page waits 40 s before revoking (node_modules/jspdf/dist/jspdf.umd.js:192-199) for this reason.",
+   "failureScenario": "Would require Safari to start the blob download asynchronously, as reported for WebKit: tapping 'Exportar CSV' on the iPhone then does nothing or shows a load error. Not reproducible in Chrome; not tested on a device.",
+   "suggestedFix": "Revoke in a setTimeout (for example 40 s) or use navigator.share with a File on iOS.",
+   "confidence": "low"
+  },
+  {
+   "title": "CSV filename uses the UTC date (tomorrow's date after 21:00 in Buenos Aires)",
+   "lines": "presupuestos.html:866",
+   "severity": "low",
+   "category": "dates-timezone",
+   "evidence": "`new Date().toISOString().slice(0,10)` for the filename, while the content line 825 uses local `toLocaleDateString('es-AR')`. Verified with the clock at 21:30 ART on 10/11/2026: file 'Presupuesto_Almacén_Don_Pedro_2026-11-11.csv', content 'Generado: 10/11/2026'.",
+   "failureScenario": "Exporting at 21:30 on Nov 10 produces a file dated 2026-11-11.",
+   "suggestedFix": "Build YYYY-MM-DD from getFullYear/getMonth/getDate (local).",
+   "confidence": "high"
+  },
+  {
+   "title": "Percentages are not validated: bonificación over 100% prints negative prices, a negative global value applies silently",
+   "lines": "presupuestos.html:320-328, 418-433, 463-475",
+   "severity": "low",
+   "category": "money-validation",
+   "evidence": "getAjusteFactor returns `1-v/100` for any v (min/max attributes are not enforced when typing). Verified: bonificación 150 prints '$-4.495' for a $8.990 product and the preview reads 'Se aplicará un bonificación del -150%'; '-10' with 'Aumento' prints $8.091 while the preview stays hidden because it only shows when pct>0.",
+   "failureScenario": "The user means 15% and types 150: every price in the PDF is negative. The preview text also has a grammar error ('un bonificación').",
+   "suggestedFix": "Clamp to 0-100 (below 100 for bonificación), reject negatives, block generation on invalid values, and fix the article ('una bonificación').",
+   "confidence": "high"
+  },
+  {
+   "title": "Tapping the ▼ arrow of a category does not open or close it",
+   "lines": "presupuestos.html:488-501",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "The arrow `<span class=\"sec-arrow\" id=\"arr-${ci}\">` sits inside the wrapper `<div ... onclick=\"event.stopPropagation()\">` meant to protect the category adjustment inputs, so the click never reaches `.sec-hdr`'s toggleSec. Verified: tap on #arr-1 leaves the section closed; tap on the name opens it.",
+   "failureScenario": "The user taps the arrow at the right edge of 'PALETAS COCIDAS': nothing happens; they have to tap the name.",
+   "suggestedFix": "Put stopPropagation only on the .cat-ajuste div and leave the arrow outside it.",
+   "confidence": "high"
+  },
+  {
+   "title": "An individual adjustment of 0% cannot exempt a product from its category adjustment",
+   "lines": "presupuestos.html:417-423 (title at 523)",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`if(prodPct>0){...}` treats 0 and empty the same and falls through to the category percentage, although the field's title says 'Sobreescribe el ajuste de categoría para este producto'.",
+   "failureScenario": "Category EMBUTIDOS SECOS at +10%; the user wants SALAME TIPO MILÁN unchanged and types 0 in its field: it still goes up 10%.",
+   "suggestedFix": "Distinguish empty (inherit) from 0 (explicit override): check `prodPctEl.value !== ''`.",
+   "confidence": "high"
+  },
+  {
+   "title": "Product pages are always titled 'LISTA DE PRECIOS', also when the cover says 'PRESUPUESTO'",
+   "lines": "presupuestos.html:608, 662",
+   "severity": "low",
+   "category": "pdf-consistency",
+   "evidence": "Cover: `pdf.text(modo==='comp'?'LISTA DE PRECIOS':'PRESUPUESTO',...)`; drawPageHdr: `pdf.text('LISTA DE PRECIOS',M+8,HDR_H/2+6)` unconditionally. Verified in selection mode.",
+   "failureScenario": "A selection-mode quote has cover 'PRESUPUESTO' and inner pages 'LISTA DE PRECIOS'.",
+   "suggestedFix": "Use the same mode-dependent title in drawPageHdr.",
+   "confidence": "high"
+  },
+  {
+   "title": "A '.' typed as decimal separator in a catalog price is dropped as a thousands separator",
+   "lines": "presupuestos.html:347-357, 374-387",
+   "severity": "low",
+   "category": "money-parsing",
+   "evidence": "desfmtMiles does `.replace(/\\./g,'')` before converting commas, so '8990.50' becomes '899050' and is shown as '899.050'.",
+   "failureScenario": "On a PC numeric keypad, or an iPhone whose region uses '.' as decimal key, typing 8990.50 turns the price into $ 899.050. It is visible on screen, so the user can correct it.",
+   "suggestedFix": "If the text has a single '.' followed by 1-2 digits at the end and no comma, treat it as the decimal separator.",
+   "confidence": "medium"
+  },
+  {
+   "title": "gen() hangs with the button disabled if the logo image fails to decode",
+   "lines": "presupuestos.html:577 (cleanup at 808-809)",
+   "severity": "low",
+   "category": "async-errors",
+   "evidence": "`await new Promise(r=>{const img=new Image();img.onload=()=>r(img);img.src='data:image/jpeg;base64,'+LOGO_B64;});` has no onerror, so the promise never settles and lines 808-809 never run. The current LOGO_B64 is a valid 380x380 JPEG, so this needs a corrupted or truncated asset.",
+   "failureScenario": "A truncated logo-pdf-jpeg.js that still parses as JS: 'Generando PDF...' stays forever and the button stays disabled until reload.",
+   "suggestedFix": "Add img.onerror (reject or continue without logo) and move the cleanup to a finally block. The canvas step is unnecessary: pass the data URL straight to addImage.",
+   "confidence": "medium"
+  },
+  {
+   "title": "CSV starts with BOM plus 'sep=;': Excel may show accents garbled",
+   "lines": "presupuestos.html:823",
+   "severity": "low",
+   "category": "export-format",
+   "evidence": "`let csv = '﻿' + 'sep=;\\n';`. Excel is reported to ignore the UTF-8 BOM when the first line is a sep= directive and to decode the file as ANSI.",
+   "failureScenario": "If Excel behaves that way, opening the CSV on a PC shows 'JAMÃ“N' and 'ArtÃ­culo'. Not tested with Excel.",
+   "suggestedFix": "Drop the 'sep=;' line (Argentine Excel already uses ';') or export .xlsx with the SheetJS already used by other pages.",
+   "confidence": "low"
+  },
+  {
+   "title": "Article code 'Art. 621' is used for three different products",
+   "lines": "presupuestos.html:229, 232-233",
+   "severity": "low",
+   "category": "data",
+   "evidence": "SALAME CHACARERO DE CAMPO, MORTADELA BOCHA and MORTADELA BOLOGNA all have art:'Art. 621', while the neighbouring pastas finas are 612 and 613. Other repeats (107, 602, 905) look like variants of one article.",
+   "failureScenario": "If the mortadelas have their own codes, the customer PDF prints a wrong article number for them. Needs confirmation from the business.",
+   "suggestedFix": "Confirm the real codes with the owner and correct the constants (or move the catalog to Firestore).",
+   "confidence": "low"
+  }
+ ],
+ "security": [
+  {
+   "title": "Access control is a client-side sessionStorage check only",
+   "detail": "The gate only reads sessionStorage and redirects. Anyone can fetch /presupuestos.html directly, or set sessionStorage.sersale_auth='ok' in the console, and read the full wholesale base price list and article codes from the page source. The legacy branch at line 9 also lets in any session with sersale_auth==='ok' and no role, so the page is not strictly director-only.",
+   "lines": "presupuestos.html:4-12, 192-254"
+  },
+  {
+   "title": "No secrets or database access in this page",
+   "detail": "There is no Firebase config, API key or Firestore call here, so the page cannot leak or corrupt CRM data. Company data in the PDF (CUIT, address, phone) is public information.",
+   "lines": "presupuestos.html:1-883"
+  },
+  {
+   "title": "Third-party script without Subresource Integrity",
+   "detail": "jsPDF is loaded from cdnjs with no integrity/crossorigin attribute; a compromised CDN response would run with access to the session flags of the whole CRM origin.",
+   "lines": "presupuestos.html:22"
+  },
+  {
+   "title": "innerHTML usage",
+   "detail": "User text in custom items goes through esc() and handlers only receive generated ids ('ci_N'), which is safe. Catalog names are interpolated unescaped in render() (`${c.cat}`, `${p.n}`, `${p.art}`, `${p.peso}`); safe while the catalog is a constant, but it must be escaped if the catalog is later loaded from Firestore.",
+   "lines": "presupuestos.html:293-303, 483-531"
+  },
+  {
+   "title": "CSV formula injection and unsanitised filenames (self-inflicted)",
+   "detail": "csvCell only strips ';' and newlines, so a client name or description starting with =, +, - or @ is evaluated as a formula in Excel. The client name goes raw into the download filenames (verified: 'Carnes_y/o_Fiambres_\"El_Buen_Gusto\"_S.R.L.'); browsers sanitise it, but the result differs per browser. The data is typed by the same user, so the risk is low.",
+   "lines": "presupuestos.html:815-817, 804, 866"
+  }
+ ],
+ "ux": [
+  {
+   "title": "The quote in progress is lost on any navigation or reload, and there is no history",
+   "problem": "All state is in DOM inputs and three globals. Tapping a bottom-nav link, an iOS reload after switching to WhatsApp, or the home-screen app being closed (sessionStorage wiped, login again) discards client, selection, edited prices, adjustments and custom items. Nothing is saved after generating either, so a quote sent last week cannot be reopened. There is also no 'Nuevo presupuesto' reset, so values from one client carry over to the next.",
+   "suggestion": "Autosave the draft to localStorage on every change and restore on load; save generated quotes (client, date, items, prices) to a Firestore 'presupuestos' collection with a 'Recientes' list and 'Duplicar'; add an explicit 'Nuevo' button.",
+   "impact": "high",
+   "lines": "presupuestos.html:265-266, 308-309, 813-814"
+  },
+  {
+   "title": "The PDF is only downloaded; sending it to the client takes many steps",
+   "problem": "gen() ends in pdf.save(). On the iPhone the user gets Safari's download prompt, then has to leave the app, find the file in Archivos and share it to WhatsApp. Behaviour of blob downloads inside the home-screen app was not tested. No success message is shown.",
+   "suggestion": "Build the PDF as a Blob and offer 'Compartir' with navigator.share({files:[new File([blob], name, {type:'application/pdf'})]}), called directly from a tap (generate first, then show the share button), with pdf.save as fallback; show a toast when ready.",
+   "impact": "high",
+   "lines": "presupuestos.html:803-809"
+  },
+  {
+   "title": "Selection mode layout is broken at iPhone width",
+   "problem": "Measured at 375px: with checkbox (17px), adjust controls (103px) and price (105px) fixed, the name column is 32px wide. Names wrap one word per line, overflow behind the ▲/% controls (\"NATURAL\", '\"SUBLIME\"' are hidden) and each row is about 137px tall. Screenshot: /tmp/claude-0/-home-user-sersale-produccion/6ddd4064-049b-57c4-83c8-0a6a9ff45000/scratchpad/presup_sel_375.png",
+   "suggestion": "Two-line row: name and article on top; checkbox, price and a collapsible '% ajuste' below. Show the per-product adjustment only on demand.",
+   "impact": "high",
+   "lines": "presupuestos.html:507-531"
+  },
+  {
+   "title": "Inputs under 16px make iOS zoom on every focus",
+   "problem": "Computed sizes: client name 14px, catalog price 13px, custom item fields 13px, category % 12px, product % 11px, selects 10-11px. This page's viewport has no maximum-scale (pedidos, ventas and index do), so Safari zooms in on each focus and stays zoomed.",
+   "suggestion": "Set font-size:16px on every input/select (reduce padding instead) and align the viewport meta with the other pages.",
+   "impact": "high",
+   "lines": "presupuestos.html:18, 33, 54, 64, 491, 496, 517, 522, 530"
+  },
+  {
+   "title": "Tap targets far below 44px",
+   "problem": "Measured: product checkbox 17x17 and the row itself is not tappable; product % input 46x22 and its select 43x22; 'Seleccionar todos' 97x14; custom item delete 32x32; 'Quitar' 37px high; bottom-nav links 46x38.",
+   "suggestion": "Make the whole row toggle the checkbox (label wrapping), give controls at least 44px height, enlarge 'Seleccionar todos' and the delete button.",
+   "impact": "high",
+   "lines": "presupuestos.html:49, 69, 72, 142, 170, 510, 516-522, 880"
+  },
+  {
+   "title": "Custom items row does not fit and its price field is a plain text box",
+   "problem": "At 375px the row needs 336px and has 301px: the × buttons stick out past the card border to 2px from the screen edge and placeholders are cut ('Descripción del', 'Peso/U'). The price field opens the full text keyboard (no inputmode), has no '$' or thousands formatting, and a new row is not focused. Screenshot: /tmp/claude-0/-home-user-sersale-produccion/6ddd4064-049b-57c4-83c8-0a6a9ff45000/scratchpad/presup_custom_375.png",
+   "suggestion": "Stack description on its own line with peso, price and delete below; use the same 'monto' formatting with inputmode='decimal'; focus the new description on add.",
+   "impact": "medium",
+   "lines": "presupuestos.html:62-69, 293-303"
+  },
+  {
+   "title": "Editing prices is slow and the adjusted price is never shown",
+   "problem": "Focusing a price does not select it, so changing '$ 11.590' means deleting it character by character. Percent adjustments (global, category, product) are not reflected on screen; the final price is only visible in the PDF. A 10% discount on $5.990 gives $5.391, with no rounding option.",
+   "suggestion": "Select the content on focus; show 'base -> final' next to each price when an adjustment applies; offer rounding to the nearest $10/$50/$100.",
+   "impact": "medium",
+   "lines": "presupuestos.html:325-328, 527-530"
+  },
+  {
+   "title": "alert() dialogs, no disabled state and cryptic errors",
+   "problem": "Validation and errors use alert() (lines 563, 806, 860). 'Generar' stays enabled when nothing is selected. If jsPDF or the logo script did not load (weak signal), the alert shows a raw JS error. 'Nombre del cliente *' is marked required but not checked: the PDF goes out titled 'Cliente'.",
+   "suggestion": "Inline messages or toasts; disable the button with the reason; check window.jspdf up front and offer 'Reintentar'; ask for confirmation when the client name is empty.",
+   "impact": "medium",
+   "lines": "presupuestos.html:129, 548, 563, 806, 860"
+  },
+  {
+   "title": "Client is free text, disconnected from the CRM",
+   "problem": "The name is typed by hand each time; there is no search over the CRM clients and the prices already stored per client (precios_cliente in pedidos.html) cannot be loaded, so prices are retyped.",
+   "suggestion": "Client autocomplete from Firestore (free text still allowed) and an option 'Usar precios de este cliente'.",
+   "impact": "medium",
+   "lines": "presupuestos.html:127-131"
+  },
+  {
+   "title": "Finding and selecting products takes many taps",
+   "problem": "45 products in 8 accordions (only the first open), no search box, no select-all per category; the badge shows the category total, not how many are selected; 'Seleccionar todos' never changes to 'Deseleccionar'.",
+   "suggestion": "Search field above the list, per-category checkbox, 'n/total' badges, toggle label.",
+   "impact": "medium",
+   "lines": "presupuestos.html:139-146, 342-345, 483-503"
+  },
+  {
+   "title": "Main action is at the bottom and fixed bars take a quarter of the screen",
+   "problem": "'Generar y descargar PDF' and the summary sit after five cards. The sticky header is 97px at 375px ('Exportar CSV' wraps to three lines) and the nav 57px: 23% of a 667px screen. html and body both get padding-bottom 64px on top of .con's 80px, leaving about 200px of empty scroll.",
+   "suggestion": "Sticky bottom action bar above the nav with the summary and the Generate/Share button; compact header with CSV moved to a secondary menu; keep a single bottom padding.",
+   "impact": "medium",
+   "lines": "presupuestos.html:27, 29, 80, 116-125, 187-189"
+  },
+  {
+   "title": "Percent inputs open the wrong keyboard",
+   "problem": "#ajuste-pct, cat-pct and prod-pct are type=number without inputmode, so iOS shows the full numbers/punctuation keyboard.",
+   "suggestion": "Add inputmode='decimal' and validate the 0-100 range.",
+   "impact": "low",
+   "lines": "presupuestos.html:163, 495, 521"
+  },
+  {
+   "title": "PDF finish",
+   "problem": "A category that continues on the next page has no repeated heading; drawFtr receives the page number but prints none; the PDF red is #C0392B while the app brand is #A4232A; the document has no validity date, no IVA note, no quantities or totals, so a 'presupuesto' is just a price list.",
+   "suggestion": "Repeat the category with '(cont.)', print 'Página x de y', use the brand colour, add optional 'Válido hasta' and an IVA note; consider optional kg and subtotal per item in selection mode.",
+   "impact": "low",
+   "lines": "presupuestos.html:588, 656-668, 716-723, 744-757"
+  },
+  {
+   "title": "Module switches are full page loads and this page lacks web-app meta tags",
+   "problem": "The bottom nav uses plain links, so every switch reloads a page and loses state. This page has no theme-color or apple-mobile-web-app-capable/title meta (pedidos.html has them).",
+   "suggestion": "Add the same meta tags as pedidos.html; with draft autosave the reloads stop being destructive.",
+   "impact": "low",
+   "lines": "presupuestos.html:14-19, 880"
+  }
+ ],
+ "perf": [
+  {
+   "title": "Render-blocking scripts and fonts in <head>",
+   "problem": "jsPDF (about 364 KB minified, from cdnjs) and assets/logo-pdf-jpeg.js (42 KB) load synchronously before first paint, plus a Google Fonts stylesheet with three families. They are only needed when the user taps 'Generar'. On mobile data this delays the form.",
+   "suggestion": "Load jsPDF and the logo on demand at the first tap on 'Generar' (or with defer), and preconnect to cdnjs.",
+   "impact": "medium",
+   "lines": "presupuestos.html:20-23"
+  },
+  {
+   "title": "Logo is decoded and re-encoded through a canvas on every PDF",
+   "problem": "gen() loads the JPEG into an Image, draws it on a 380x380 canvas and calls toDataURL('image/jpeg',0.95) each time, although LOGO_B64 is already a 380x380 JPEG.",
+   "suggestion": "Pass 'data:image/jpeg;base64,'+LOGO_B64 directly to pdf.addImage (or cache the data URL once).",
+   "impact": "low",
+   "lines": "presupuestos.html:577-580"
+  },
+  {
+   "title": "No caching or offline support",
+   "problem": "There is no service worker, and the meta tags ask for no-cache (browsers mostly ignore them). Every visit and every module switch reloads the page and its CDN dependencies; without signal the page cannot generate a PDF.",
+   "suggestion": "If a shared service worker is added for the CRM, precache this page, jsPDF and the logo; this page needs no network otherwise.",
+   "impact": "low",
+   "lines": "presupuestos.html:14-16, 22"
+  },
+  {
+   "title": "Per-product price lookup rescans the catalog",
+   "problem": "getPrecioFinal runs CATS.forEach + some() for every product and reads several DOM inputs each time (45 products, so the cost is negligible today).",
+   "suggestion": "Store the category index on each product when assigning uid. Only matters if the catalog grows or prices are previewed live.",
+   "impact": "low",
+   "lines": "presupuestos.html:410-438"
+  }
+ ]
+}

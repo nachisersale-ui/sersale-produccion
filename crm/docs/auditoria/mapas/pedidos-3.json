@@ -1,0 +1,613 @@
+{
+ "summary": "Section /home/user/sersale-produccion/crm/src/pedidos.html lines 1294-2033 is the daily order pipeline for the commercial manager. TarjetaPedido is the order card shared by every list (Comercial, Deposito, Director, client history): it shows client, delivery date, items and weighed kg, and holds the state-transition buttons (pendiente -> preparando -> listo -> despachado / cancelado) plus two bottom sheets for entering real kg per item. VistaComercial loads every order once (no realtime), splits them into active and history, and routes to New / Edit / Remito / Clients / Products sub-screens by early return. EditarPedido edits client, CC flag, type, delivery date, items and notes of an order. RemitoPedido prices a 'listo' order per kg (pre-filling the client's last prices), generates the remito PDF with jsPDF and the share sheet, and on save writes the remito, appends price history, takes the next remito number from a counter document and charges the client's current account (cc_movimientos + recomputed saldo). The money path has the most serious defects: the saved amount can differ from the on-screen/PDF amount, a remito can be saved twice (double CC charge), the PDF shared after saving carries the wrong number, CC errors are swallowed while the UI says saved, and stale in-memory orders overwrite other phones' changes. I only read code; nothing was executed against Firestore.",
+ "components": [
+  {
+   "name": "TarjetaPedido",
+   "lines": "1295-1410",
+   "purpose": "Order card used by all lists. Collapsed: client, state badge, delivery date, envio/retiro, CC flag, item count, time of creation. Expanded: items with cantidad/unidad and kgReal, notes, and action buttons depending on estado, showActions, modoOperario and which callbacks are passed (En preparacion, Listo, Items, Despachado, Remito, kg, edit, cancel). Contains two bottom-sheet modals: kgModal (kg per item when moving pendiente->preparando, 1348-1377) and editKgModal (edit kg on a 'listo' order, 1378-1407). Both call onCambiarEstado(id, estado, items)."
+  },
+  {
+   "name": "VistaComercial",
+   "lines": "1413-1479",
+   "purpose": "Commercial screen. cargar() (1424-1429) reads the whole pedidos collection once; cambiarEstado() (1431-1441) writes estado + historial (+ items when kg were entered) and reloads. Sub-screens NuevoPedido, GestionClientes, GestionProductos, EditarPedido, RemitoPedido are rendered by early return (1447-1451). Tabs Activos / Historial delegate to ActivosFiltrados and HistorialFiltrado (outside the section)."
+  },
+  {
+   "name": "EditarPedido",
+   "lines": "1482-1631",
+   "purpose": "Edit form for an existing order: client (native select + 'Otro' free text), CC checkbox, envio/retiro, delivery date, item rows (category select, product select or free text for 'Articulos Varios', cantidad, unidad, obs), product quick search (BuscadorProductos), general notes. guardar() (1528-1546) validates with alert() and does one updateDoc on the order. Does not touch estado, historial, CC placeholder or remitos."
+  },
+  {
+   "name": "RemitoPedido",
+   "lines": "1634-2032",
+   "purpose": "Remito screen for one order. Effect (1642-1689): cargar() pre-fills price per product from precios_cliente (latest by fecha), cargarNro() reads config/contador_remitos to show the next number. guardarRemito() (1691-1852): reserves number, addDoc remitos, addDoc precios_cliente per priced item, then creates/updates the cc_movimientos charge and recomputes cuentas_corrientes.saldo. totalRemito (1854-1858) and fmt$ (1860) for display. imprimir() (1862-1955) builds the A4 PDF with jsPDF and hands it to window.compartirOdescargarPDF. UI 1958-2031: number input, client card, per-item kg + price (InputMonto), total, 'Compartir PDF' and 'Guardar' buttons."
+  }
+ ],
+ "firestore": [
+  {
+   "collection": "pedidos",
+   "docId": "Auto-id (created by addDoc in NuevoPedido line 1157 and venta rapida line 2816, both outside the section). The section only updates by id.",
+   "ops": "getDocs(query(collection(db,'pedidos'), orderBy('fechaPedido','desc'))) at 1426 (whole collection, docs without fechaPedido are excluded by Firestore). updateDoc(doc(db,'pedidos',id), {estado, historial, items?}) at 1439. updateDoc(doc(db,'pedidos',pedido.id), {cliente, cuentaCorriente, tipo, fechaEntrega, items, obs, editadoEn}) at 1538. No transaction, no re-read before write.",
+   "fields": "cliente: string (display name, used as join key everywhere). estado: string enum 'pendiente'|'preparando'|'listo'|'despachado'|'cancelado' (unknown values fall back to the PENDIENTE look). fechaEntrega: string 'YYYY-MM-DD' local date from input type=date. fechaPedido: Firestore Timestamp (only used for orderBy here). fechaPedidoISO: string ISO-8601 UTC datetime ('2026-11-10T14:03:22.123Z'), compared as string with localStorage last-seen and shown as HH:MM. tipo: 'envio'|'retiro' (may be missing on old docs). cuentaCorriente: boolean. obs: string. items: array of {categoria: string (missing on venta-rapida docs), producto: string, cantidad: STRING numeric from input type=number such as '10' or '2.5' (NUMBER on venta-rapida docs), unidad: 'kg'|'piezas'|'ganchos'|'bolsas'|'unidades', obs: string, kgReal: number or null (absent until the first kg modal; written by parseFloat at 1368/1398), precio: number only on venta-rapida docs - the remito never writes it}. historial: array of {estado: string, fecha: ISO datetime string, nota?: string}; cambiarEstado appends {estado, fecha} built from the in-memory copy. editadoEn: ISO datetime string written by EditarPedido. origen: 'venta_rapida' optional (not read here).",
+   "lines": "1426-1427, 1431-1440, 1538-1542; reads in 1301-1342, 1483-1489, 1711-1725",
+   "notes": "dashboard.html 313-348 selects pedidos by fechaEntrega range and takes prices from items[].precio, falling back to a remito with the same pedidoId whose fecha is in the same month."
+  },
+  {
+   "collection": "clientes",
+   "docId": "Auto-id (not created in this section).",
+   "ops": "getDocs(query(collection(db,'clientes'), orderBy('nombre','asc'))) at 1496, on every mount of EditarPedido.",
+   "fields": "nombre: string (only field read here; docs without nombre are excluded by the orderBy).",
+   "lines": "1493-1500, 1516-1520",
+   "notes": "The hard-coded demo list CLIENTES_DEFAULT (line 133) is appended to the result."
+  },
+  {
+   "collection": "precios_cliente",
+   "docId": "Auto-id via addDoc. One new document per priced item per saved remito (append-only price history).",
+   "ops": "getDocs(query(collection(db,'precios_cliente'), where('cliente','==',pedido.cliente))) at 1647; if empty, getDocs(collection(db,'precios_cliente')) of the WHOLE collection at 1651 and a client-side case-insensitive filter. addDoc at 1732 inside a sequential for-await loop.",
+   "fields": "cliente: string (exact pedido.cliente). producto: string (exact product name). precio: number > 0 (float, up to 2 decimals; elsewhere written with +formPrecio). fecha: string ISO-8601 UTC datetime (sorted with localeCompare, latest wins per producto).",
+   "lines": "1642-1667, 1728-1739",
+   "notes": "Read side keeps the first price per producto after sorting by fecha desc; documents without fecha sort last."
+  },
+  {
+   "collection": "config/contador_remitos",
+   "docId": "Fixed document id 'contador_remitos' in collection 'config'.",
+   "ops": "getDoc at 1674 and 1699. setDoc (no merge) at 1682 (first-time init from the max nro in remitos) and 1704. updateDoc at 1702. Plain read-then-write: neither runTransaction nor increment is used although both are exported by fb() (increment is destructured at 1694 and unused).",
+   "fields": "ultimo: number integer, last remito number issued. updatedAt: string ISO-8601 UTC datetime.",
+   "lines": "1669-1686, 1696-1707",
+   "notes": "Displayed number is ultimo+1 padded to 4 digits ('0042')."
+  },
+  {
+   "collection": "remitos",
+   "docId": "Auto-id via addDoc. Nothing prevents several remitos for the same pedidoId.",
+   "ops": "addDoc(collection(db,'remitos'), {...}) at 1709. getDocs(collection(db,'remitos')) of the whole collection at 1679, only when the counter document does not exist yet.",
+   "fields": "nro: number integer. pedidoId: string (pedidos doc id). cliente: string. fecha: string 'YYYY-MM-DD' taken from new Date().toISOString() = UTC date of the save (next day after 21:00 local). items: array of {producto: string, kg: number when kgReal is truthy, otherwise it.cantidad as stored (string like '10', or number) or 0, unidad: string, precio: number (0 when not entered), total: number unrounded float}. total: number unrounded float. createdAt: string ISO-8601 UTC datetime. NOT written: fechaEntrega and tipo, which VerRemitoGuardado (2599-2601) reads.",
+   "lines": "1679-1681, 1709-1727",
+   "notes": "Readers: RemitosCliente (where cliente == exact name, sort by createdAt), dashboard.html 319 (where fecha in month, join by pedidoId), backup.html 92."
+  },
+  {
+   "collection": "cuentas_corrientes",
+   "docId": "Auto-id (created elsewhere at line 3553). Matched here by nombre, lower-cased and trimmed.",
+   "ops": "getDocs(collection(db,'cuentas_corrientes')) of the whole collection at 1746 (only when pedido.cuentaCorriente is false) and again at 1828 (whenever ccDocId is null, i.e. always when pedido.cuentaCorriente is true). updateDoc at 1822 / 1834.",
+   "fields": "nombre: string (read). saldo: number integer, written as Math.round(sum of monto where tipo=='pedido' minus monto of every other tipo) over all cc_movimientos of the client. ultimoMovimiento: string 'YYYY-MM-DD' UTC date.",
+   "lines": "1744-1755, 1820-1842",
+   "notes": "If no account matches the client, only a console.warn is emitted (1840)."
+  },
+  {
+   "collection": "cc_movimientos",
+   "docId": "Auto-id via addDoc. Linked to the order only by cliente + fecha (no pedidoId).",
+   "ops": "getDocs(collection(db,'cc_movimientos')) of the WHOLE collection at 1769 (find placeholder) and again at 1812 (recompute saldo). updateDoc of the placeholder at 1783. addDoc at 1794.",
+   "fields": "Read: cliente: string, origen: string ('pedido_app' placeholder created by NuevoPedido 1175-1182), fecha: string 'YYYY-MM-DD' (delivery date), monto: number (placeholder has exactly 0), tipo: 'pedido'|'pago'. Update of placeholder (1783-1790): monto: number integer (Math.round), movimiento: same integer, detalle: string of product names joined by ', ', obs: 'Remito N° 0042', remitoNro: number, updatedAt: ISO datetime string. New doc (1794-1805): cliente: string, tipo: 'pedido', monto: integer, movimiento: integer, fecha: pedido.fechaEntrega or UTC today 'YYYY-MM-DD', detalle: string, obs: 'Remito N° 0042', origen: 'remito', remitoNro: number, createdAt: ISO datetime string.",
+   "lines": "1756-1819",
+   "notes": "Placeholder match is cliente (case-insensitive, trimmed) AND origen=='pedido_app' AND fecha===pedido.fechaEntrega AND monto===0; when several match, the last one in snapshot order is used."
+  }
+ ],
+ "clientState": [
+  {
+   "kind": "localStorage",
+   "key": "sersale_last_seen",
+   "usage": "ISO-8601 datetime string read by getLastSeen() at 1422 (default '2000-01-01T00:00:00.000Z') and passed to ActivosFiltrados to compute the NUEVO badge (p.fechaPedidoISO > lastSeen). Written only by App.seleccionar() (5555) immediately before the view is shown.",
+   "lines": "1422, 1473"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_role / sersale_vista",
+   "usage": "Not read inside the section. App (5503-5508) derives modoOperario from sersale_role==='operario' and persists the top-level view ('comercial') in sersale_vista. Sub-screen state of VistaComercial (order being edited, remito in progress, typed prices) lives only in React memory and is lost on reload.",
+   "lines": "1295, 1336-1342"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__fbReady + document event 'fbReady'",
+   "usage": "Each component runs its loader immediately when window.__fbReady is true, otherwise on the one-shot 'fbReady' DOM event. Listeners are never removed.",
+   "lines": "1444, 1499, 1687-1688"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__db / window.__fb (via fb())",
+   "usage": "Firestore instance and SDK functions (collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, query, orderBy, where, increment, runTransaction...) destructured in every data function.",
+   "lines": "1425, 1432, 1495, 1537, 1645, 1671, 1694"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__productosOverride (via getProductos())",
+   "usage": "Product catalog {categoria: [producto,...]} loaded from config/productos at startup; EditarPedido reads it on every render and sorts the category arrays in place.",
+   "lines": "1594, 1603"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.jspdf",
+   "usage": "jsPDF UMD global used by imprimir().",
+   "lines": "1863-1864"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__sersaleLogo",
+   "usage": "PNG data URL from assets/logo-data.js drawn in the PDF header.",
+   "lines": "1872-1873"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.compartirOdescargarPDF",
+   "usage": "Helper defined at 2430: on mobile calls navigator.share({files:[pdf]}), otherwise doc.save(). Called synchronously from the click handler, so the user activation is preserved.",
+   "lines": "1954"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "Module-level constants ESTADOS, CLIENTES_DEFAULT, UNIDADES, fmt, fmtH",
+   "usage": "ESTADOS (125) gives label/colour per estado; CLIENTES_DEFAULT (133) is a hard-coded list of nine demo client names merged into the client select; UNIDADES (772) = kg, piezas, ganchos, bolsas, unidades; fmt/fmtH (773-774) format dates and times in es-AR.",
+   "lines": "1301, 1312, 1318, 1518, 1611"
+  }
+ ],
+ "external": [
+  {
+   "service": "Firebase Firestore web SDK 10.7.0 (gstatic CDN), project sersale-produccion",
+   "usage": "All reads and writes go straight from the browser. No Firebase Auth is imported in the page.",
+   "lines": "1425-1439, 1495-1497, 1537-1542, 1645-1651, 1671-1682, 1694-1837"
+  },
+  {
+   "service": "jsPDF 2.5.1 (cdnjs)",
+   "usage": "Builds the A4 remito PDF client-side with the built-in Helvetica font.",
+   "lines": "1862-1955"
+  },
+  {
+   "service": "Web Share API (navigator.share with files)",
+   "usage": "Reached through window.compartirOdescargarPDF to send the PDF to WhatsApp/Mail on the iPhone; falls back to doc.save().",
+   "lines": "1954"
+  },
+  {
+   "service": "assets/logo-data.js",
+   "usage": "Local script that defines window.__sersaleLogo for the PDF header.",
+   "lines": "1872-1873"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "Saved remito and CC charge use the ordered quantity when kgReal is 0, while screen and PDF use 0",
+   "lines": "pedidos.html:1714-1725, 1758-1762 (vs 1854-1858, 1929, 1984)",
+   "severity": "critical",
+   "category": "money",
+   "evidence": "Screen, total and PDF use `it.kgReal!=null ? it.kgReal : parseFloat(it.cantidad)||0`. The persisted remito uses `kg: it.kgReal||it.cantidad||0` and `(it.kgReal||parseFloat(it.cantidad)||0) * precio`, and the CC amount uses `const kg = it.kgReal||parseFloat(it.cantidad)||0`. With kgReal === 0 the `||` falls through to cantidad. The kg modal does store 0: `kgValues[i]!=null && kgValues[i]!==\"\" ? parseFloat(kgValues[i]) : null` (1368).",
+   "failureScenario": "Order with Bondiola cantidad '10'; the warehouse has none and types 0 kg. Remito screen and the PDF sent to the customer show 0 kg and exclude the item. On Guardar, remitos.items[].kg = '10', remito total and the cc_movimientos monto include 10 x price (e.g. $90.000), and cuentas_corrientes.saldo is raised by that amount.",
+   "suggestedFix": "Compute kg once with a single helper (`it.kgReal!=null && it.kgReal!=='' ? Number(it.kgReal) : parseFloat(it.cantidad)||0`) and reuse the same computed rows for screen, PDF, remito document and CC amount.",
+   "confidence": "high"
+  },
+  {
+   "title": "A remito can be saved more than once for the same order, charging the current account twice",
+   "lines": "pedidos.html:1639, 1691-1727, 1770-1807, 2023",
+   "severity": "critical",
+   "category": "persistence",
+   "evidence": "The only guard is component state `const [guardado, setGuardado] = useState(false)` (button `disabled={guardando||guardado}`); it resets when the screen is reopened. guardarRemito never looks for an existing remito with `pedidoId: pedido.id`, and the order is not marked. On a second save the placeholder test requires `m.monto === 0`, which no longer matches, so the branch `else if(montoFinal > 0) { await addDoc(collection(db,\"cc_movimientos\"), {... origen: \"remito\" ...}) }` adds a second charge. The Remito button stays visible while estado is 'listo'.",
+   "failureScenario": "Manager saves the remito, notices one wrong price, goes back, opens Remito again, fixes the price and saves. Result: two remitos with consecutive numbers, two cc_movimientos of tipo 'pedido' for the same order, and saldo recomputed as the sum of both. The same happens after an 'Error al guardar' alert raised after the remito addDoc (e.g. a price addDoc fails): the retry creates a second remito.",
+   "suggestedFix": "Make the remito idempotent per order: deterministic id (remitos/{pedidoId}) or look up by pedidoId and update; store remitoNro/remitoId on the pedido and on the cc_movimiento, and update that same movement on re-save. Do all writes in one runTransaction/writeBatch.",
+   "confidence": "high"
+  },
+  {
+   "title": "PDF shared after saving shows the next remito number, not the saved one",
+   "lines": "pedidos.html:1849 (used at 1887 and 1953)",
+   "severity": "high",
+   "category": "logic",
+   "evidence": "After a successful save: `setGuardado(true); setNroRemito(String(nroFinal+1).padStart(4,\"0\"));`. imprimir() prints `doc.text('N° ' + nroRemito, ...)` and names the file `'Remito ' + nroRemito + ...`. Saving is disabled afterwards, so the incremented number is only ever used by the PDF.",
+   "failureScenario": "Counter ultimo=41. Screen shows 0042. Tap Guardar: remito stored with nro 42, CC obs 'Remito N° 0042'. Tap Compartir PDF: the customer receives 'Remito N° 0043'. The next order's remito is also 0043, so two customers hold different documents with the same number and neither matches the records.",
+   "suggestedFix": "Keep the saved number in state after saving (remove line 1849) and make the number field read-only once saved. Preferably merge the actions into 'Guardar y compartir'.",
+   "confidence": "high"
+  },
+  {
+   "title": "Stale in-memory order overwrites items, kg and state written from another phone (lost update)",
+   "lines": "pedidos.html:1366-1371, 1396-1401, 1431-1440, 1488, 1538-1542",
+   "severity": "high",
+   "category": "concurrency",
+   "evidence": "Lists are one-shot getDocs with no listener. The kg modals build the array from the prop: `pedido.items.map((it,i)=>({...it, kgReal: ...}))` and cambiarEstado writes it blindly: `if(itemsConKg) upd.items = itemsConKg; await updateDoc(doc(db,\"pedidos\",id), upd)` together with `historial:[...(pedido.historial||[]), ...]` from the same stale copy. EditarPedido initialises `useState(pedido.items.map(it=>({...it})))` and saves `items: val`. Nothing re-reads the document or uses a transaction.",
+   "failureScenario": "(a) Customer phones to add a product; the manager edits the pending order. The warehouse phone, whose list was loaded earlier, taps En preparacion > Confirmar: items are replaced by the old list and the added product disappears. (b) Manager opens Editar on an order; the warehouse then saves weighed kg; the manager taps Guardar Cambios: every kgReal is wiped and the remito bills the ordered quantity. (c) Manager cancels an order; the stale warehouse card still offers En preparacion and one tap sets it back to 'preparando'.",
+   "suggestedFix": "Subscribe the lists with onSnapshot, and perform state changes and edits inside runTransaction (re-read the doc, check the expected estado, merge kgReal per item, use arrayUnion for historial).",
+   "confidence": "high"
+  },
+  {
+   "title": "An order marked Despachado before its remito can never get a remito",
+   "lines": "pedidos.html:1333, 1338-1339, 1451, 1473-1474",
+   "severity": "high",
+   "category": "logic",
+   "evidence": "Actions render only when `showActions && ![\"despachado\",\"cancelado\"].includes(pedido.estado)`; the Remito button requires `pedido.estado===\"listo\" && !modoOperario && onRemito`. History cards get `showActions={false}` and HistorialFiltrado receives no onRemito. RemitoPedido is rendered only from VistaComercial's remitoPedido state (1451). There is no transition out of 'despachado'.",
+   "failureScenario": "The truck leaves and the manager taps Despachado (the button sits next to Remito) before pricing. The order moves to Historial with no actions: no remito, no price history, and for CC clients the $0 'Pendiente de facturar' placeholder never receives its amount, so the debt is missing from the current account unless it is re-entered by hand as a venta rapida (which creates a duplicate order).",
+   "suggestedFix": "Allow Remito on despachado orders (and from Historial), offer 'Reabrir', and show a 'sin remito' marker on dispatched orders without one.",
+   "confidence": "high"
+  },
+  {
+   "title": "Current-account failures are swallowed and the UI still reports the remito as saved",
+   "lines": "pedidos.html:1744-1755, 1756-1845, 1847, 2028",
+   "severity": "high",
+   "category": "error-handling",
+   "evidence": "The whole CC block is wrapped in `try { ... } catch(e) { console.error(\"[Remito] Error actualizando CC:\", e); }`; the account lookup uses `catch(e){ return false; }` (so a failed read is treated as 'client has no CC'). Execution then reaches `setGuardado(true)` and the message 'Remito guardado y precios actualizados'. The steps (remito, prices, movement, saldo) are separate sequential writes, not a batch.",
+   "failureScenario": "The read of cuentas_corrientes or cc_movimientos, or the movement write, fails. The remito exists and the button turns green, but the client's account was not charged, or the movement exists and saldo was not recomputed. The button is now disabled, and reopening the screen to retry creates a duplicate remito.",
+   "suggestedFix": "Write remito, counter, movement and saldo in one transaction/batch. On failure show an error and keep the screen retryable; never set guardado when the CC part did not complete.",
+   "confidence": "medium"
+  },
+  {
+   "title": "CC flag on an order whose client has no account creates an invisible debt",
+   "lines": "pedidos.html:1565-1568, 1744, 1792-1806, 1827-1841",
+   "severity": "medium",
+   "category": "persistence",
+   "evidence": "`const clienteTieneCC = pedido.cuentaCorriente || await (...)` trusts the manual checkbox. The movement is added to cc_movimientos, then if no cuentas_corrientes doc matches the name only `console.warn(\"[Remito] CC account not found for:\", pedido.cliente)` runs.",
+   "failureScenario": "The checkbox 'Cliente con cuenta corriente' is ticked on an order for a client (or an 'Otro' free-text name) without an account. The remito saves a cc_movimientos charge that no account lists; the debt shows nowhere. If the account is created later it shows saldo 0 until some other movement triggers a recompute, when the old charge suddenly appears.",
+   "suggestedFix": "When the flag is set and no account exists, create the account in the same transaction or stop and ask. Derive the flag from the client record instead of a free checkbox.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Quantities in piezas / ganchos / bolsas / unidades are billed as kilos when no kg was weighed",
+   "lines": "pedidos.html:1716-1725, 1855, 1929-1935, 1984-1993",
+   "severity": "medium",
+   "category": "money",
+   "evidence": "kg is `it.kgReal!=null ? it.kgReal : parseFloat(it.cantidad)||0` regardless of `it.unidad`; the screen labels it `Kg reales` / `{kg} kg` and the PDF columns are 'KG' and 'PRECIO / KG'. The kg modal is optional ('Opcional - deja en blanco los que no apliquen').",
+   "failureScenario": "Order: Jamon Cocido, 2 piezas, kg left blank. The remito screen shows 'Kg reales: 2 kg' and bills 2 x price per kg instead of roughly 14 kg. It is only a defect if such items are priced per kg, which the labels and the per-client price list imply.",
+   "suggestedFix": "When unidad is not kg and kgReal is missing, block the save or require the weight (editable on the remito screen), or show the real unit and treat the price as per unit explicitly.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Remito number is reserved with read-then-write, and the editable number field is ignored on save",
+   "lines": "pedidos.html:1694-1707, 1968-1969",
+   "severity": "medium",
+   "category": "concurrency",
+   "evidence": "Commented as atomic but implemented as `const counterSnap = await getDoc(counterRef); ... nroFinal = (counterSnap.data().ultimo||0) + 1; await updateDoc(counterRef, { ultimo: nroFinal, ... })`. `increment` is destructured and unused; runTransaction is available. The input `value={nroRemito} onChange={e=>setNroRemito(e.target.value)}` only feeds the PDF: when the counter exists the typed value is discarded.",
+   "failureScenario": "Two devices (or two tabs) save at the same moment: both read 41 and both store remito 42. Or: the manager shares the PDF showing 0042, another remito is saved elsewhere, then he saves: the record gets 0043 while the customer's PDF says 0042. Or: he types 0100 by hand, the PDF says 0100 and the database stores 0042.",
+   "suggestedFix": "Reserve the number inside runTransaction (or with increment and reading the result) together with the remito write, show the number as read-only, and generate the PDF only from the saved record.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Saved remito omits fechaEntrega and tipo, so every re-print says 'Retiro por local' and delivery date '-'",
+   "lines": "pedidos.html:1709-1727",
+   "severity": "medium",
+   "category": "data-contract",
+   "evidence": "The addDoc payload has nro, pedidoId, cliente, fecha, items, total, createdAt only. VerRemitoGuardado reads `fechaEntrega: remito.fechaEntrega || \"\"` and `tipo: remito.tipo || \"\"` (2599-2601) and generarPDFRemito prints `data.tipo==='envio' ? 'Envio / Reparto' : 'Retiro por local'` (2495).",
+   "failureScenario": "A delivery order's remito is re-shared from the client's Remitos tab: the PDF shows FECHA DE ENTREGA '-' and TIPO 'Retiro por local', unlike the original PDF.",
+   "suggestedFix": "Store fechaEntrega and tipo (and unidad per item, already stored) in the remito document; backfill old remitos from their pedidoId.",
+   "confidence": "high"
+  },
+  {
+   "title": "Remito date and CC ultimoMovimiento are UTC dates: after 21:00 they are tomorrow",
+   "lines": "pedidos.html:1713, 1764, 1799, 1824, 1836",
+   "severity": "medium",
+   "category": "dates",
+   "evidence": "`fecha: new Date().toISOString().split(\"T\")[0]` and `const hoyStr = new Date().toISOString().split(\"T\")[0]`, while the PDF header prints `new Date().toLocaleDateString('es-AR')` (local).",
+   "failureScenario": "Remito saved on 30/11 at 21:30: the PDF says 30/11, the stored fecha is '2026-12-01'. The client's remito list and any re-print show 01/12, and dashboard.html (query remitos where fecha within the month) puts it in December.",
+   "suggestedFix": "Use one shared local-date helper (getFullYear / getMonth / getDate, padded) for every YYYY-MM-DD string.",
+   "confidence": "high"
+  },
+  {
+   "title": "Remito prices are never written back to the order, so dashboard billing depends on the remito's save date falling in the delivery month",
+   "lines": "pedidos.html:1709-1727",
+   "severity": "medium",
+   "category": "data-contract",
+   "evidence": "guardarRemito does not update the pedido (no items[].precio, no remitoNro). dashboard.html 313-348 loads pedidos by fechaEntrega in the month and remitos by fecha in the same month, joins with `remitoPorPedido[r.pedidoId]`, and calcFact (371-379) sums `it.precio * (it.kgReal||it.cantidad)` over pedidos only. The remito's fecha is the save date (UTC), not the delivery date.",
+   "failureScenario": "Delivered 30/10, remito saved 02/11. October: the order has no prices and no remito in range, so it adds $0 to Facturacion. November: the order is out of range, so the KPI ignores it too (only the top-clients table counts the remito). The sale is missing from the billing KPI of both months.",
+   "suggestedFix": "On save, also write precio per item and remitoNro/remitoTotal onto the pedido in the same transaction; let the dashboard read the pedido only.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Cancelling or editing an order does not touch its CC placeholder, remito or charge",
+   "lines": "pedidos.html:1342, 1431-1441, 1538-1542, 1771-1779",
+   "severity": "medium",
+   "category": "persistence",
+   "evidence": "cambiarEstado writes only `{estado, historial, items?}`; EditarPedido writes only `{cliente, cuentaCorriente, tipo, fechaEntrega, items, obs, editadoEn}`. The CC placeholder is found later only by `m.cliente ... === lower3 && m.origen === \"pedido_app\" && m.fecha === pedido.fechaEntrega && m.monto === 0`. The CC checkbox is not re-derived when the client is changed in the edit form.",
+   "failureScenario": "(a) A 'listo' order whose remito was saved is cancelled: the remito and the CC charge remain and the client still owes it. (b) A CC order is cancelled before the remito: a $0 'Pendiente de facturar' row stays in the account forever. (c) Delivery date or client is edited: the placeholder keeps the old date/client, the remito does not find it, adds a new movement and leaves the stale row (in the old client's account if the client changed).",
+   "suggestedFix": "Link the movement to the order (pedidoId), and update or delete it inside the same transaction when the order is edited or cancelled; when a remito exists, require or perform its reversal.",
+   "confidence": "high"
+  },
+  {
+   "title": "Cancel and Despachado are single-tap, unconfirmed and irreversible",
+   "lines": "pedidos.html:1338, 1341-1342",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "`<button onClick={()=>onCambiarEstado(pedido.id,\"cancelado\")} ...>❌</button>` sits next to the edit button, both icon-only with `padding:\"10px 14px\"`; Despachado is the same pattern. Once in either state the card has no actions (1333) and history cards are rendered with showActions false.",
+   "failureScenario": "A thumb slip on ❌ while aiming at ✏️ cancels the order immediately; it vanishes from Activos and from the warehouse list and cannot be restored from the app.",
+   "suggestedFix": "Ask for confirmation in an in-app sheet (with an optional reason), show an Undo toast, and add a Reabrir action on cancelled/dispatched orders.",
+   "confidence": "high"
+  },
+  {
+   "title": "State changes have no error handling or in-flight guard; the kg sheet closes before the write is confirmed",
+   "lines": "pedidos.html:1366-1372, 1396-1402, 1431-1441",
+   "severity": "medium",
+   "category": "error-handling",
+   "evidence": "The handlers call `onCambiarEstado(...)` without await and then `setKgModal(false)` / `setEditKgModal(false)`. cambiarEstado has no try/catch: `await updateDoc(doc(db,\"pedidos\",id), upd); cargar();`. Buttons have no disabled or loading state.",
+   "failureScenario": "In the cold room with poor signal, the operator types the weights and confirms. The sheet closes at once; the write stays pending (or rejects as an unhandled promise) and the card does not change. There is no message, the typed weights are no longer visible, and if the web app is closed before the connection returns the write is lost.",
+   "suggestedFix": "Await the write with try/catch, keep the sheet open with a saving state until it succeeds, show a toast on success or error, and disable the buttons while a write is in flight.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Remito is computed from the order snapshot held in memory, not the current document",
+   "lines": "pedidos.html:1421, 1451, 1473, 1714-1725, 1854-1858",
+   "severity": "medium",
+   "category": "concurrency",
+   "evidence": "`onRemito={setRemitoPedido}` stores the list object; RemitoPedido reads `pedido.items` from that prop for screen, PDF, remito and CC amount. VistaComercial reloads only on mount and after its own actions; it has no refresh button and no listener.",
+   "failureScenario": "The manager's list was loaded at 8:00. At 9:30 the warehouse corrects a weight with the kg button on its phone. The manager opens Remito from his list: the old kg (or the ordered quantity) is billed and charged to the account.",
+   "suggestedFix": "Read the order with getDoc (or subscribe) when the remito screen opens and again inside the save transaction.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Changing the product of an existing row keeps the previous product's kgReal",
+   "lines": "pedidos.html:1513, 1533, 1540",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "`const updItem = (i,f,v) => { const c=[...items]; c[i][f]=v; if(f===\"categoria\") c[i].producto=\"\"; setItems(c); }` never clears kgReal, and guardar saves `items: val` with every field of the row.",
+   "failureScenario": "A row weighed as Bondiola 12.4 kg is changed in Editar to Paleta Fresca, cantidad 8. kgReal 12.4 stays on the row, the card shows '12.4 kg real' and the remito bills 12.4 kg of Paleta.",
+   "suggestedFix": "Reset kgReal to null when producto or categoria of a row changes (and consider it when unidad changes).",
+   "confidence": "high"
+  },
+  {
+   "title": "Edit form shows almost every real client as 'Otro' with the name in a free-text field",
+   "lines": "pedidos.html:1516-1526",
+   "severity": "low",
+   "category": "react-state",
+   "evidence": "`const [clienteSelect, setClienteSelect] = useState(clienteEnLista ? cliente : \"Otro\")` is evaluated on the first render, when clientesDB is still [] and todosClientes contains only CLIENTES_DEFAULT plus 'Otro'. It is never re-evaluated after the clients load; the mount effect copies the name into clienteCustom.",
+   "failureScenario": "Editing an order of any client stored in Firestore shows the select on 'Otro' and the name in an editable text box. A stray keystroke there saves a variant of the name, which then matches neither the account, the price list nor the remito history (all joined by name).",
+   "suggestedFix": "Derive the selection after the clients load (effect on clientesDB) or always include the order's current client as an option; reuse SelectorClienteBuscable.",
+   "confidence": "high"
+  },
+  {
+   "title": "NUEVO badge never marks unseen orders in Comercial",
+   "lines": "pedidos.html:1422, 1473",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`const lastSeen = getLastSeen();` runs when the view renders, but App.seleccionar() calls `setLastSeen()` (now) immediately before switching to the view (5555-5557), and the cards use `isNew={p.fechaPedidoISO>lastSeen}`.",
+   "failureScenario": "Three orders arrived since the last visit. Tapping Comercial from Home stamps last-seen with the current time first, so none of them carries the NUEVO tag; only orders created after entering the view get it.",
+   "suggestedFix": "Read last-seen before updating it (pass the previous value down), and update it when leaving the view.",
+   "confidence": "high"
+  },
+  {
+   "title": "Order list load has no error path: a failed read leaves 'Cargando...' forever",
+   "lines": "pedidos.html:1424-1429, 1443-1445, 1471",
+   "severity": "low",
+   "category": "error-handling",
+   "evidence": "cargar() awaits getDocs with no try/catch; pedidos stays null and the render shows `pedidos===null ? <p>Cargando...</p>`. There is no retry control in this view.",
+   "failureScenario": "The read rejects (transient backend error, quota, rules): the screen stays on 'Cargando...' with no message and the only way out is to leave and re-enter.",
+   "suggestedFix": "Catch the error, show an error state with a Reintentar button, and add a refresh control.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Remito PDF has no page break and no text wrapping",
+   "lines": "pedidos.html:1928-1950",
+   "severity": "low",
+   "category": "pdf",
+   "evidence": "Rows advance with `y += 8` from about y=70mm on a 297mm page and nothing calls addPage; `doc.text(it.producto || '', colX[0] + 2, y + 4)` has no maxWidth or splitTextToSize.",
+   "failureScenario": "An order with about 27 or more items draws the last rows and the TOTAL line below the page edge, so the PDF sent to the customer has no total. A long free-text 'Articulos Varios' description runs over the KG column.",
+   "suggestedFix": "Add a page when y exceeds the printable height (repeat the header), and wrap or truncate the product text to the column width.",
+   "confidence": "high"
+  },
+  {
+   "title": "Remito total keeps decimals while the CC charge is rounded to whole pesos",
+   "lines": "pedidos.html:1719-1725, 1763",
+   "severity": "low",
+   "category": "money",
+   "evidence": "The remito stores `total: ...reduce(... s + kg*p ...)` unrounded (float), the PDF prints it with two decimals, and the account gets `const montoFinal = Math.round(montoRemito)`.",
+   "failureScenario": "12.35 kg x $8.990 = $111.026,50 on the PDF and in remitos.total; the account is charged $111.027 (or $111.026 depending on float error). Statement and remito differ by cents and item totals may persist as 111026.49999999999.",
+   "suggestedFix": "Round each line and the total once with the same rule (whole pesos, as the rest of the app shows) and use those values everywhere.",
+   "confidence": "high"
+  },
+  {
+   "title": "Editing kg appends a fake state transition and rewrites estado from the stale card",
+   "lines": "pedidos.html:1396-1401, 1434-1437",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`onCambiarEstado(pedido.id, pedido.estado, itemsActualizados)` goes through cambiarEstado, which always writes `estado: nuevoEstado` and appends `{estado:nuevoEstado, fecha:...}` to historial.",
+   "failureScenario": "Each kg correction adds another 'listo' entry to historial. If the order was dispatched from another phone meanwhile, saving kg from the stale card sets it back to 'listo'.",
+   "suggestedFix": "Use a separate update that writes only items (per-item kgReal) and, if wanted, a historial entry of a distinct type.",
+   "confidence": "high"
+  },
+  {
+   "title": "Late-arriving saved prices overwrite prices already typed",
+   "lines": "pedidos.html:1642-1667",
+   "severity": "low",
+   "category": "race",
+   "evidence": "When the async load finishes it calls `setPrecios(latest)`, replacing the whole state; the inputs are editable from the first render and there is no loading indicator. The fallback path downloads the entire precios_cliente collection, so the load can be slow.",
+   "failureScenario": "On a slow connection the manager types the first price; the load then completes and the typed value is replaced by the old saved price, or removed when that product had none.",
+   "suggestedFix": "Merge instead of replace (`setPrecios(prev => ({...latest, ...prev}))`) and show a loading state on the price fields.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Remito number falls back to 0001 when the counter cannot be read",
+   "lines": "pedidos.html:1685, 1696-1707",
+   "severity": "low",
+   "category": "error-handling",
+   "evidence": "`catch(e){ console.error(\"Error cargarNro:\", e); setNroRemito(\"0001\"); }`; at save, if the reservation try also fails, `nroFinal = parseInt(nroRemito)||0` is used as is.",
+   "failureScenario": "A transient read error on opening the screen shows N° 0001; a PDF shared at that point carries 0001, and if the counter read fails again on save the remito is stored as number 1, duplicating the real first remito.",
+   "suggestedFix": "Show an error and block share/save until the number is known; never invent a number.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Edit form hides the product of rows whose category or product is no longer in the catalog",
+   "lines": "pedidos.html:1591-1605",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "The product control renders only when `item.categoria` is set, and the select options come from `getProductos()[item.categoria]||[]`; a value that is not among the options displays as the placeholder. Products can be deleted in GestionProductos (454-458). Rows that end up without producto or cantidad are dropped silently by `items.filter(it=>it.producto&&it.cantidad)` (1533).",
+   "failureScenario": "A product is removed from the catalog while an open order contains it. In Editar the row shows 'Producto' empty although the order still has it; re-selecting the category clears it, and saving then removes the row without warning.",
+   "suggestedFix": "Always add the row's current producto/categoria as an option, show the product name as text on the row, and warn before discarding incomplete rows.",
+   "confidence": "high"
+  }
+ ],
+ "security": [
+  {
+   "title": "Role restrictions are presentation-only",
+   "detail": "modoOperario merely hides buttons in TarjetaPedido (Listo, Despachado, Remito, edit, cancel). The role comes from sessionStorage and every Firestore call is made directly from the browser with the public config; the page imports no Firebase Auth, so security rules cannot tell a director from an operario or from an outsider. I could not see the deployed rules; unless they restrict by something other than identity, anyone holding the project config can read and write pedidos, remitos, cc_movimientos and cuentas_corrientes.",
+   "lines": "1336-1342, 1425-1439, 1537-1542, 1694-1837"
+  },
+  {
+   "title": "Balances and remito numbers are computed and written by the client",
+   "detail": "cuentas_corrientes.saldo is recomputed in the browser from a full scan of cc_movimientos and written back with updateDoc; config/contador_remitos.ultimo is set by plain client writes. There is no server-side validation, so a buggy or modified client can persist any balance or number.",
+   "lines": "1696-1707, 1809-1842"
+  },
+  {
+   "title": "No authorship on sensitive actions",
+   "detail": "historial entries are {estado, fecha} and EditarPedido writes only editadoEn; remitos and cc_movimientos carry no user. With several people sharing access it is impossible to know who cancelled an order, changed kg or issued a remito.",
+   "lines": "1434-1437, 1538-1542, 1709-1727, 1794-1805"
+  },
+  {
+   "title": "Client display name is the join key across collections",
+   "detail": "precios_cliente.cliente, remitos.cliente, cc_movimientos.cliente and cuentas_corrientes.nombre are matched by name (exact in some queries, lower-case/trim in others, accents never normalised). EditarPedido lets the name be retyped freely via 'Otro', which silently detaches the order from the client's account, prices and remitos. No ids are used.",
+   "lines": "1529, 1647-1658, 1746-1751, 1768-1776"
+  },
+  {
+   "title": "No markup injection found in this section",
+   "detail": "All client and product names are rendered through React (escaped) or as jsPDF text; there is no innerHTML or URL building here. The PDF file name embeds the client name unsanitised ('/' or ':' in a name reaches the File name passed to navigator.share).",
+   "lines": "1308, 1900, 1934, 1953"
+  },
+  {
+   "title": "Business data logged to the console",
+   "detail": "console.log prints client names, price counts and CC amounts on each remito; harmless on a personal phone but visible on shared devices with remote debugging.",
+   "lines": "1665, 1791, 1806, 1826, 1838"
+  }
+ ],
+ "ux": [
+  {
+   "title": "Comercial list is a one-time snapshot with no refresh",
+   "problem": "Orders are loaded once with getDocs; there is no listener, no refresh button and no pull-to-refresh. What the warehouse does (preparando, listo, kg) is not visible until the manager leaves the view and returns, and the Remito button only appears once his copy says 'listo'.",
+   "suggestion": "Feed the view from the realtime listener App already keeps on the same query (or its own onSnapshot), and show a discreet 'actualizado hace X' indicator.",
+   "impact": "high",
+   "lines": "1424-1445"
+  },
+  {
+   "title": "No feedback while or after changing an order's state",
+   "problem": "Tapping En preparacion / Listo / Despachado shows no spinner, no disabled state and no toast. The card changes only after the write plus a full reload, then it unmounts, collapses and reappears in another status group, so the user has to find and expand it again.",
+   "suggestion": "Optimistic update with a per-card pending state, a toast with Undo, keep the card expanded or animate it to its new group.",
+   "impact": "high",
+   "lines": "1335-1342, 1431-1441"
+  },
+  {
+   "title": "Remito flow needs too many steps and allows sharing without saving",
+   "problem": "Compartir PDF and Guardar are separate, so a PDF can be sent and never saved (no record, no CC charge). Kg cannot be corrected on this screen: the user must go back, expand the card, use the kg button and reopen. Items without a price are accepted without warning. Nothing indicates that a remito already exists for the order. After saving, the order still has to be marked Despachado from the list.",
+   "suggestion": "One primary action 'Guardar y compartir' (with optional 'y despachar'), inline editable kg, a warning listing unpriced items, and a 'Remito N° X emitido' state with re-share instead of a second save.",
+   "impact": "high",
+   "lines": "1983-2028"
+  },
+  {
+   "title": "Sub-screens are not real navigation",
+   "problem": "Nuevo / Editar / Remito / Clientes / Productos replace the list by early return. They are not in browser history, so the iOS back swipe leaves pedidos.html. On return the list remounts: status filter, expanded cards and scroll position are lost. Entering a sub-screen does not scroll to top, so the form can open half-way down.",
+   "suggestion": "Push a history entry per sub-screen (popstate closes it), keep the list mounted underneath (or restore scroll and filter), and scroll to top on entry.",
+   "impact": "high",
+   "lines": "1447-1451"
+  },
+  {
+   "title": "Destructive actions are one unconfirmed tap on small icon buttons",
+   "problem": "Cancel (❌) and edit (✏️) are adjacent icon-only buttons about 40px wide; Despachado sits beside Remito. No confirmation, no undo.",
+   "suggestion": "Move cancel into a secondary menu or confirm in a bottom sheet; add Undo; give buttons text labels and at least 44px height.",
+   "impact": "high",
+   "lines": "1338-1342"
+  },
+  {
+   "title": "Kg are requested at the wrong moment",
+   "problem": "The kg sheet opens when moving to 'En preparacion', before anything has been weighed. While 'preparando' there is no way to enter kg from the card or the item checklist; the kg button exists only once the order is 'listo'.",
+   "suggestion": "Capture kg per item in the preparation checklist (tick + weight) and make the kg button available in 'preparando'.",
+   "impact": "medium",
+   "lines": "1335, 1340, 1348-1407"
+  },
+  {
+   "title": "Kg bottom sheets fight the iPhone keyboard and lose input easily",
+   "problem": "The sheet is position:fixed at the bottom, so the keyboard covers the lower inputs and the confirm button. A tap on the backdrop closes it and discards everything typed. Inputs are type=number without inputMode='decimal' (full numeric keyboard instead of the decimal pad), there is no next-field navigation, the page behind still scrolls, and the close button is 32x32.",
+   "suggestion": "Full-height sheet that follows visualViewport, sticky confirm above the keyboard, inputMode='decimal' with comma handling, confirm before discarding non-empty input, lock body scroll.",
+   "impact": "medium",
+   "lines": "1349-1376, 1379-1406"
+  },
+  {
+   "title": "Blocking alert() dialogs and generic errors",
+   "problem": "EditarPedido validates with four alert() calls and reports failures as 'Error al guardar'; RemitoPedido does the same. No inline field errors, no detail, no retry.",
+   "suggestion": "Inline validation next to the field, a non-blocking toast for errors with the cause and a retry action.",
+   "impact": "medium",
+   "lines": "1530-1534, 1544, 1850"
+  },
+  {
+   "title": "Edit form is weaker than the new-order form",
+   "problem": "Client is a native select of every client with no search (NuevoPedido has a searchable selector), it includes nine hard-coded demo clients (CLIENTES_DEFAULT), and real clients appear as 'Otro'. The back arrow discards changes without asking. Rows without product or quantity are dropped silently on save.",
+   "suggestion": "Reuse SelectorClienteBuscable, remove the demo list, warn on unsaved changes and on incomplete rows.",
+   "impact": "medium",
+   "lines": "1516-1520, 1551, 1556-1564, 1533"
+  },
+  {
+   "title": "Typed work is lost if iOS reloads the web app",
+   "problem": "Prices typed on the remito and edits in progress live only in React state. Switching to WhatsApp to check an order and coming back after iOS evicts the page restores only the top-level view from sessionStorage.",
+   "suggestion": "Persist drafts (per order id) in sessionStorage/localStorage and restore them on mount.",
+   "impact": "medium",
+   "lines": "1483-1490, 1636-1637"
+  },
+  {
+   "title": "Tap targets below 44px",
+   "problem": "Header back arrow has padding 0 and font-size 20 (about 20px wide); the row delete button is padding 2px 8px at 12px text; the CC checkbox is 18px; header buttons are about 30px high; card action buttons are 12px text with 10px padding.",
+   "suggestion": "Minimum 44x44 hit areas (padding or pseudo-element), larger labels on primary actions.",
+   "impact": "medium",
+   "lines": "1459, 1461-1463, 1551, 1566, 1589, 1335-1342, 1354"
+  },
+  {
+   "title": "Card header shows only the time the order was created",
+   "problem": "`fmtH(pedido.fechaPedidoISO)` prints HH:MM without the date, so an order entered days ago reads like today's. A missing fechaEntrega renders 'Invalid Date'.",
+   "suggestion": "Show a relative date ('ayer 14:32', 'lun 9/11') and a 'Sin fecha' fallback.",
+   "impact": "low",
+   "lines": "1312, 1318"
+  },
+  {
+   "title": "Small text and inputs under 16px",
+   "problem": "Inputs are 13-15px and secondary text 10-12px. Focus zoom is avoided only because the viewport sets maximum-scale=1.0; legibility on the phone is still poor and the zoom returns if that meta is relaxed.",
+   "suggestion": "16px for all inputs and selects, 13px minimum for secondary text.",
+   "impact": "low",
+   "lines": "1361, 1391, 1556, 1562, 1581, 1607-1615, 1998"
+  },
+  {
+   "title": "Plain 'Cargando...' and no error or offline state",
+   "problem": "Loading is a line of text; price pre-fill and remito number load silently (empty fields look like 'no saved prices').",
+   "suggestion": "Skeleton cards, explicit loading on the price fields and number, offline banner.",
+   "impact": "low",
+   "lines": "1471, 1636-1637, 1968-1969"
+  },
+  {
+   "title": "Remito formatting differs from the rest of the app",
+   "problem": "Amounts print as '$ 8.990,00' (currency style with decimals) while the app elsewhere uses '$8.990'; kg print with a dot decimal (12.35) next to comma-formatted money; the column says KG even for pieces.",
+   "suggestion": "One money formatter and one quantity formatter (es-AR, comma decimal, unit shown) shared by screen and PDF.",
+   "impact": "low",
+   "lines": "1860, 1921, 1935, 1993"
+  }
+ ],
+ "perf": [
+  {
+   "title": "Saving a remito scans whole collections and writes sequentially",
+   "problem": "guardarRemito downloads the entire cc_movimientos collection twice (1769, 1812) and the entire cuentas_corrientes collection once or twice (1746, 1828 - always at 1828 for CC orders because ccDocId is null), all clients included, then runs one awaited addDoc per priced item plus counter read/write, remito write and movement write, each a separate round trip. A 10-item CC order is roughly 17 sequential requests and 3 full collection reads; cost and wait grow with every movement ever recorded.",
+   "suggestion": "Query by where('cliente','==',name) (or better by client id), keep the account id on the order, and commit counter + remito + prices + movement + saldo in one runTransaction/writeBatch; update saldo with increment() instead of re-summing.",
+   "impact": "high",
+   "lines": "1694-1845"
+  },
+  {
+   "title": "Entire pedidos collection is loaded and reloaded on every action",
+   "problem": "cargar() reads all orders ever created (no where, no limit) to show the active ones, and runs again after each state change, edit and new order. App already holds an onSnapshot on the identical query (5529), so the same data is kept twice and the view still shows a stale copy.",
+   "suggestion": "Share one realtime store from App; query active orders (estado in pendiente/preparando/listo) separately and paginate history by date.",
+   "impact": "high",
+   "lines": "1424-1429, 1440, 1447-1450"
+  },
+  {
+   "title": "Price pre-fill falls back to downloading every price of every client",
+   "problem": "When the exact-name query is empty (every client's first remito, or any name variant) the code reads the whole precios_cliente collection to filter client-side. The collection also grows by one document per item per remito, even when the price did not change.",
+   "suggestion": "Store a normalised client key (or client id) and query on it; write a price document only when the price actually changed, or keep one doc per client+product with a history array.",
+   "impact": "medium",
+   "lines": "1647-1658, 1729-1739"
+  },
+  {
+   "title": "Client list refetched on every open of the edit form",
+   "problem": "EditarPedido reads the full clientes collection each time it mounts; NuevoPedido does the same separately. No cache.",
+   "suggestion": "Load clients once at app level (listener or cached promise) and pass them down.",
+   "impact": "medium",
+   "lines": "1493-1500"
+  },
+  {
+   "title": "Catalog sorted on every render, in place",
+   "problem": "For each item row and each keystroke the form sorts the category keys and calls .sort() directly on the shared catalog array (mutating window.__productosOverride).",
+   "suggestion": "Build the sorted catalog once with useMemo on a copy.",
+   "impact": "low",
+   "lines": "1594, 1603"
+  },
+  {
+   "title": "No memoisation in list rendering",
+   "problem": "activos/historial are re-filtered on every render and TarjetaPedido is not memoised, so any state change in VistaComercial re-renders every card (each with five state hooks and two inline modals definitions). History renders all cards at once.",
+   "suggestion": "useMemo for the splits, React.memo on the card with stable callbacks, virtualise or paginate history.",
+   "impact": "low",
+   "lines": "1295-1300, 1453-1454"
+  },
+  {
+   "title": "Counter initialisation scans all remitos",
+   "problem": "If config/contador_remitos does not exist, the whole remitos collection is read to find the maximum nro. One-time cost, but it runs from a view effect and writes the counter as a side effect of merely opening the screen.",
+   "suggestion": "Create the counter once in a migration; keep the screen read-only until save.",
+   "impact": "low",
+   "lines": "1677-1684"
+  }
+ ]
+}

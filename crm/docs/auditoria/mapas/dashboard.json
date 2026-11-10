@@ -1,0 +1,633 @@
+{
+ "summary": "/home/user/sersale-produccion/crm/src/dashboard.html is the director-only, read-only \"Dashboard Gerencial\". For a month chosen from the last six, it runs 7 Firestore reads and renders: 6 KPIs (wholesale billing, order count, active clients, total current-account balance, branch daily sales, combined billing, each with a variation vs the previous month), a weekly stacked billing chart, an orders-per-weekday chart, top 10 clients, current accounts with pending balance, a per-client profitability ranking, most-ordered products, and a static margin-per-product table. A modal exports the same data as a PDF (jsPDF) or a CSV labelled \"Excel\". The page never writes to Firestore.\n\nBecause order items carry no price (only \"venta rápida\" orders do), billing depends entirely on joining each pedido with its remito. That join is the weakest part of the page.\n\nMain findings, checked by running the page's own code (jsPDF 2.5.1 in Node, and headless Chrome at 390x844 with a stubbed Firestore; nothing in the repo was modified):\n- The PDF report never generates: the first drawing call throws and nothing tells the user.\n- The previous month's billing is never joined with remitos, so every \"vs mes ant.\" figure is wrong.\n- Orders whose remito is dated in a different month count as $0 in the KPI.\n- The report's \"Gastos\" column is always $0, so \"Neto\" equals \"Ventas\".\n- The hardcoded cost table has implausible values that drive the profitability ranking (not verifiable from code; needs the owner's cost sheet).\n- At iPhone width the page is wider than the screen and the \"Reporte\" button is pushed off-screen.\n\nThe CSV-download failure on iOS and the Excel accent problem are inferred from known Safari/Excel behaviour, not reproduced. Scratch harnesses are in /tmp/claude-0/-home-user-sersale-produccion/6ddd4064-049b-57c4-83c8-0a6a9ff45000/scratchpad/render and /tmp/claude-0/-home-user-sersale-produccion/6ddd4064-049b-57c4-83c8-0a6a9ff45000/scratchpad/jspdf-test.",
+ "components": [
+  {
+   "name": "Auth guard IIFE",
+   "lines": "4-12",
+   "purpose": "Reads sessionStorage sersale_role / sersale_auth. director -> stay; operario -> redirect to pedidos.html; legacy sersale_auth==='ok' with no role -> stay; otherwise -> index.html. Client-side only; the rest of the page still parses and runs while the redirect is in flight."
+  },
+  {
+   "name": "Head: metas, fonts, Chart.js include, CSS",
+   "lines": "14-146",
+   "purpose": "no-cache metas, Google Fonts (Barlow Condensed, IBM Plex Mono, IBM Plex Sans), synchronous Chart.js 4.4.1 in <head>, page styles (KPI grid, cards, tables, CC rows, media queries at 900px/500px, shared Sersale visual layer). .crm-page and the 900px kpi-grid rule are dead/no-op CSS."
+  },
+  {
+   "name": "Header bar markup",
+   "lines": "150-163",
+   "purpose": "Sticky header: logo, title, CUIT, month <select id=sel-mes onchange=cargarTodo()>, refresh button, Reporte button (abrirReporte())."
+  },
+  {
+   "name": "Dashboard body markup",
+   "lines": "165-251",
+   "purpose": "KPI cards (k-fact, k-pedidos, k-clientes, k-cc, k-vd, k-total and their -sub labels), chart canvases (chart-fact, chart-dias), containers tabla-clientes, lista-cc, tabla-rentabilidad, tabla-productos, tabla-margenes, each starting with a spinner."
+  },
+  {
+   "name": "Firebase init (ES module)",
+   "lines": "253-262",
+   "purpose": "Imports firebase-app and firebase-firestore 10.7.1 from gstatic, initializes project sersale-produccion with an inline apiKey, db = getFirestore(app). No Firebase Auth."
+  },
+  {
+   "name": "COSTO_PROD / COSTOS constants",
+   "lines": "264-266",
+   "purpose": "Hardcoded snapshot of the cost spreadsheet. COSTO_PROD: catalog product name -> unit cost (used by the profitability ranking). COSTOS: [{nombre, costo, precio, margen_pct}] with different short names (used by the margin table). Neither is read from Firestore."
+  },
+  {
+   "name": "DIAS, MESES_NOMBRE, chartFact/chartDias, fmt$, fmtK",
+   "lines": "268-274",
+   "purpose": "Label arrays, Chart.js instance handles, money formatters (fmt$ = es-AR rounded; fmtK = abbreviated $K/$M using toFixed, so a dot decimal)."
+  },
+  {
+   "name": "initMeses()",
+   "lines": "277-288",
+   "purpose": "Fills #sel-mes with the last 6 months (value YYYY-MM, local time); the current month is selected by default."
+  },
+  {
+   "name": "window.cargarTodo()",
+   "lines": "290-369",
+   "purpose": "Main loader. Builds string date ranges for the selected and previous month, runs 7 getDocs in parallel, filters cancelled orders, enriches the current-month pedidos in memory with remito prices/kg, stores raw report data in window._repData, then calls all actualizar* renderers in sequence. A single try/catch writes 'Error' + e.message into k-fact / k-fact-sub."
+  },
+  {
+   "name": "calcFact(pedidos)",
+   "lines": "371-379",
+   "purpose": "Sum over items of (it.precio||0) * parseFloat(it.kgReal||it.cantidad||0)."
+  },
+  {
+   "name": "actualizarKPIs(...)",
+   "lines": "381-421",
+   "purpose": "Computes billing, previous billing, variations, positive CC balance sum, distinct clients, daily-sales totals and 'días registrados', combined total; writes the 6 KPI cards and window._repData.kpis."
+  },
+  {
+   "name": "actualizarChartFact(pedidos, ventasDiarias, mes)",
+   "lines": "423-495",
+   "purpose": "Stacked bar chart (wholesale orders + daily sales) per 'Sem 1..5' (day-of-month / 7), trims trailing empty weeks, writes the total into #lbl-evol. Destroys and recreates the Chart."
+  },
+  {
+   "name": "actualizarChartDias(pedidos)",
+   "lines": "497-523",
+   "purpose": "Bar chart of order count per weekday of fechaEntrega (parsed at local noon, correct)."
+  },
+  {
+   "name": "actualizarTopClientes(pedidos, remitos)",
+   "lines": "525-574",
+   "purpose": "Aggregates billing and order count per client from pedidos, then adds remitos not already counted (anti double-count rule), top 10, renders the table via innerHTML, stores window._repData.clientes."
+  },
+  {
+   "name": "actualizarCC(ccs)",
+   "lines": "576-593",
+   "purpose": "Stores all positive-balance accounts in _repData.cc; renders only the first 12 with red/yellow/green thresholds at $500k / $200k."
+  },
+  {
+   "name": "actualizarProductos(pedidos)",
+   "lines": "595-636",
+   "purpose": "Aggregates units / kg / line count per product, top 12 by kgTotal, renders the table, stores _repData.productos."
+  },
+  {
+   "name": "actualizarRentabilidad(pedidos)",
+   "lines": "638-732",
+   "purpose": "Per client: billing, estimated profit = (price - COSTO_PROD cost) x kg for items with a cost, effective margin %, coverage % of item lines with cost; sorted by profit; renders the table with a footnote; stores _repData.rentabilidad."
+  },
+  {
+   "name": "actualizarMargenes()",
+   "lines": "734-780",
+   "purpose": "Renders the static COSTOS table with margin over price (hardcoded margen_pct) and margin over cost; stores _repData.margenes. Independent of the selected month."
+  },
+  {
+   "name": "Init",
+   "lines": "782-784",
+   "purpose": "initMeses(); cargarTodo();"
+  },
+  {
+   "name": "jsPDF include + report modal markup",
+   "lines": "787-828",
+   "purpose": "Synchronous jsPDF 2.5.1 UMD from cdnjs; modal #reportModal with 7 section checkboxes (rep-kpi, rep-clientes, rep-cc, rep-productos, rep-rentabilidad, rep-margenes, rep-ventas) and PDF / Excel buttons."
+  },
+  {
+   "name": "abrirReporte / cerrarReporte / getCheck / repNum / repDec / repMoney / repPct / csvNum",
+   "lines": "830-846",
+   "purpose": "Classic-script globals: open/close the modal (copies the selected month label into #repMes), number formatters for PDF (es-AR) and CSV (comma decimal)."
+  },
+  {
+   "name": "generarPDF()",
+   "lines": "848-1028",
+   "purpose": "Builds an A4 PDF from window._repData with inner helpers addHeader, checkPage, sectionTitle, tableRow, sinDatos; sections per checkbox; page footer; pdf.save('Sersale_Informe_<Mes>_<Año>.pdf'). Currently throws in addHeader (see bugs)."
+  },
+  {
+   "name": "generarExcel()",
+   "lines": "1030-1118",
+   "purpose": "Builds a ';'-separated CSV (BOM + 'sep=;' line) with the same sections and downloads it through a Blob + <a download>, revoking the object URL immediately."
+  },
+  {
+   "name": "Bottom nav #sersale_nav",
+   "lines": "1126",
+   "purpose": "Fixed bottom bar with full-page links to /, /dashboard, /pedidos, /produccion, /ventas, /presupuestos (pretty URLs)."
+  }
+ ],
+ "firestore": [
+  {
+   "collection": "pedidos",
+   "docId": "Firestore auto-id (addDoc in pedidos.html). The dashboard uses d.id only to match remitos.pedidoId.",
+   "ops": "READ ONLY. getDocs(query(collection(db,'pedidos'), where('fechaEntrega','>=',desde), where('fechaEntrega','<=',hasta))) twice per load: selected month and previous month. desde/hasta are strings 'YYYY-MM-01' and 'YYYY-MM-<last day>'.",
+   "fields": "fechaEntrega: string 'YYYY-MM-DD' (local date from the date input in normal orders; UTC date from toISOString in venta rápida). Used for the range filter, day-of-month via substring(8,10), weekday via new Date(f+'T12:00:00'). | estado: string, one of 'pendiente','preparando','listo','despachado','cancelado'; only 'cancelado' is excluded. | cliente: string display name, used raw as grouping key (clienteId is not used). | items: array of objects: producto: string, exact catalog name (key into COSTO_PROD and into remito items); cantidad: numeric STRING from <input type=number> in normal orders (e.g. \"10\", \"2.5\"), NUMBER in venta rápida; unidad: string 'kg'|'piezas'|'ganchos'|'bolsas'|'unidades' (default 'kg'); kgReal: number | null | absent (weighed kg; explicitly null when left blank; number in venta rápida); precio: number ARS per kg/unit, present ONLY on venta rápida orders (origen 'venta_rapida'), absent on normal orders, where the dashboard fills it in memory from the remito. | Not read: fechaPedido (Timestamp), fechaPedidoISO (ISO string), tipo, cuentaCorriente, obs, historial, origen, editadoEn, clienteId, items[].categoria, items[].obs.",
+   "lines": "313-314, 322-323, 333-348, 371-379, 429-434, 499-503, 530-537, 597-613, 641-662",
+   "notes": "Previous-month docs are mapped without id (line 323) and never enriched with remito prices. Seed data for a realistic test needs normal orders WITHOUT items[].precio plus a matching remito, and a few venta rápida orders with precio and kgReal."
+  },
+  {
+   "collection": "remitos",
+   "docId": "Firestore auto-id (addDoc in pedidos.html guardarRemito).",
+   "ops": "READ ONLY. getDocs(query(collection(db,'remitos'), where('fecha','>=',desde), where('fecha','<=',hasta))) once per load, selected month only.",
+   "fields": "pedidoId: string (pedidos doc id). | cliente: string (copied from the pedido when the remito was saved). | fecha: string 'YYYY-MM-DD', written as new Date().toISOString().split('T')[0], i.e. the UTC date the remito was created (after 21:00 in Buenos Aires it is the next day), NOT the delivery date. | items: array of {producto: string; kg: number or numeric string (pedido kgReal||cantidad at remito time); unidad: string; precio: number ARS per kg (0 when not entered); total: number}. The dashboard reads producto, precio, kg. | total: number ARS (unrounded float); used in Top clientes when > 0. | Not read: nro (number), createdAt (ISO string), clienteId.",
+   "lines": "319, 324, 331-348, 540-552",
+   "notes": "Join key is pedidoId; if several remitos share a pedidoId, the last one in the snapshot wins (line 332). There is no query for the previous month."
+  },
+  {
+   "collection": "cuentas_corrientes",
+   "docId": "Firestore auto-id (addDoc in pedidos.html).",
+   "ops": "READ ONLY. getDocs(collection(db,'cuentas_corrientes')): the whole collection on every load, refresh and month change; filtered client-side to saldo>0 and sorted descending.",
+   "fields": "nombre: string (client name; rendered raw into innerHTML and into PDF/CSV). | saldo: number ARS (integer via Math.round in pedidos.html; 2 decimals possible after migracion.html consolidation); positive = client owes. Values <= 0 are dropped; summed with s+c.saldo, so a string saldo would concatenate. | Not read: ultimoMovimiento ('YYYY-MM-DD'), creadoEn (ISO string), clienteId, mergedInto.",
+   "lines": "315, 325, 385, 408-409, 576-593, 913, 935-947, 1063-1067",
+   "notes": "The balance is the current one, not as of the selected month, although it is shown and printed under the selected month's KPIs."
+  },
+  {
+   "collection": "clientes",
+   "docId": "Firestore auto-id.",
+   "ops": "READ ONLY. getDocs(collection(db,'clientes')): the whole collection on every load, used only for snapCli.docs.length.",
+   "fields": "No field is read; only the document count ('Total registrados').",
+   "lines": "316, 326, 406, 912, 1044",
+   "notes": "The count includes docs that migracion.html marks {activo:false, mergedInto:<id>}."
+  },
+  {
+   "collection": "ventas_diarias",
+   "docId": "`${fecha}_${sucursal}`, e.g. '2026-11-02_PP' (set in ventas.html). One doc per branch per day.",
+   "ops": "READ ONLY. getDocs(query(collection(db,'ventas_diarias'), where('fecha','>=',desde), where('fecha','<=',hasta))) twice per load: selected and previous month.",
+   "fields": "fecha: string 'YYYY-MM-DD' (range filter, week bucket via substring(8,10), report column, sort key). | sucursal: string 'PP' | 'CAB' (report column). | totalVentas: number ARS (= totalZ + extraZ). | gastos: ARRAY of {desc: string, monto: number}; the dashboard wrongly reads it with Number(v.gastos) (lines 1009, 1101). | totalGasto: number ARS (sum of gastos): NOT read, but it is the field the report should use. | Not read: totalNeto, totalZ, extraZ, extras, extraDesc, cobEfec, cobTarj, cobMP, cobOtro, totalCobros, usdOficial, usdBlue, obs, ts (serverTimestamp).",
+   "lines": "317-318, 327-328, 353, 389-392, 437-442, 1001-1016, 1096-1104",
+   "notes": "ventasDiarias.length is shown as 'días registrados' although it counts docs (day x branch)."
+  }
+ ],
+ "clientState": [
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_role",
+   "usage": "Read by the guard: 'director' stays, 'operario' is redirected to pedidos.html. Written by index.html.",
+   "lines": "6-8"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_auth",
+   "usage": "Legacy fallback: if there is no role but the value is 'ok', access is granted; otherwise redirect to index.html. index.html sets it to 'ok' for both director and operario. Wiped when iOS closes or evicts the home-screen web app, which forces a new login.",
+   "lines": "9-10"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.cargarTodo",
+   "usage": "Async loader defined inside the ES module and called from inline handlers (select onchange, refresh button). Undefined until the module and its gstatic imports finish loading.",
+   "lines": "159-160, 290, 784"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window._repData",
+   "usage": "Contract between the module (writer) and the classic report script (reader): {mes:'YYYY-MM', ventas:[ventas_diarias docs sorted by fecha], kpis:{fact,factAnt,varFact,pedidos,pedidosAnt,clientesMes,totalClientes,saldoCC,ccCount,totalVD,totalVDAnt,varVD,diasConVenta,totalCombinado,totalCombinadoAnt,varTotal}, clientes:[{nombre,pedidos,fact}] (top 10), cc:[{nombre,saldo}] (all with saldo>0), productos:[{nombre,unidades,kgTotal,pedidos,unidad}] (top 12), rentabilidad:[{nombre,fact,ganancia,margenEfectivo,cobertura}], margenes:[COSTOS rows + sobre_precio, sobre_costo]}. _repData.mes is written but never compared with the month label used in the report.",
+   "lines": "351-353, 417-420, 557-558, 577-578, 617-618, 676-677, 742-743, 832, 855, 1032"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "abrirReporte, cerrarReporte, generarPDF, generarExcel, getCheck, repNum, repDec, repMoney, repPct, csvNum",
+   "usage": "Global functions from the classic script, called from inline onclick handlers.",
+   "lines": "161, 795, 824-825, 834-846, 848, 1030"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "Chart (Chart.js UMD), window.jspdf.jsPDF",
+   "usage": "Third-party globals. If either CDN script fails to load, `new Chart` (line 454) or the destructuring at line 849 throws.",
+   "lines": "22, 454, 506, 788, 849"
+  },
+  {
+   "kind": "domId",
+   "key": "sel-mes",
+   "usage": "Month selector; value 'YYYY-MM'; the option text is used as the report label.",
+   "lines": "159, 278, 291, 835-836"
+  },
+  {
+   "kind": "domId",
+   "key": "k-fact, k-fact-sub, k-pedidos, k-ped-sub, k-clientes, k-cli-sub, k-cc, k-cc-sub, k-vd, k-vd-sub, k-total, k-total-sub, lbl-evol",
+   "usage": "KPI value / badge targets. k-fact and k-fact-sub double as the only error display.",
+   "lines": "172-203, 210, 299-302, 366-367, 399-415, 494"
+  },
+  {
+   "kind": "domId",
+   "key": "chart-fact, chart-dias, tabla-clientes, lista-cc, tabla-rentabilidad, tabla-productos, tabla-margenes",
+   "usage": "Chart canvases and innerHTML targets of the renderers.",
+   "lines": "211, 215, 223, 227, 235, 243, 247, 453, 505, 573, 580, 592, 635, 680, 731, 779"
+  },
+  {
+   "kind": "domId",
+   "key": "reportModal, repMes, rep-kpi, rep-clientes, rep-cc, rep-productos, rep-rentabilidad, rep-margenes, rep-ventas, btnRepPDF, btnRepXLS",
+   "usage": "Report modal, its month label and section checkboxes (read with getCheck), export buttons.",
+   "lines": "791-828, 836-841, 854, 906-1001, 1031-1097"
+  },
+  {
+   "kind": "domId",
+   "key": "sersale_nav",
+   "usage": "Fixed bottom navigation shared across pages. Links are absolute pretty URLs (/, /dashboard, /pedidos, /produccion, /ventas, /presupuestos), while the guard redirects to pedidos.html / index.html.",
+   "lines": "8, 10, 1126"
+  },
+  {
+   "kind": "urlParam",
+   "key": "(none)",
+   "usage": "The page reads no URL parameters and no localStorage; the selected month is not persisted or deep-linkable."
+  }
+ ],
+ "external": [
+  {
+   "service": "Firebase JS SDK 10.7.1 (www.gstatic.com/firebasejs/10.7.1/firebase-app.js and firebase-firestore.js)",
+   "usage": "ES module imports; Firestore project 'sersale-produccion' accessed directly from the browser with an inline apiKey and no Firebase Auth. Only getDocs/query/where/collection are used.",
+   "lines": "254-262"
+  },
+  {
+   "service": "Chart.js 4.4.1 (cdnjs.cloudflare.com)",
+   "usage": "Synchronous script in <head>; renders the two bar charts. No SRI attribute.",
+   "lines": "22, 454, 506"
+  },
+  {
+   "service": "jsPDF 2.5.1 UMD (cdnjs.cloudflare.com)",
+   "usage": "Synchronous script loaded on every visit; used only by generarPDF. No SRI attribute.",
+   "lines": "788, 849-850"
+  },
+  {
+   "service": "Google Fonts (fonts.googleapis.com / fonts.gstatic.com)",
+   "usage": "Barlow Condensed, IBM Plex Mono, IBM Plex Sans via a render-blocking stylesheet (display=swap).",
+   "lines": "20-21"
+  },
+  {
+   "service": "Netlify static hosting (pretty URLs)",
+   "usage": "Bottom-nav links rely on /dashboard resolving to dashboard.html etc. No EmailJS, WhatsApp, Maps or exchange-rate calls on this page.",
+   "lines": "1126"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "PDF report never generates: jsPDF.rect is called with an invalid 5th argument and throws",
+   "lines": "dashboard.html:858-869 (offending call at 860, invoked at 903)",
+   "severity": "high",
+   "category": "logic / async-errors",
+   "evidence": "addHeader() runs `pdf.rect(0,0,PW,70,1,'F');`. jsPDF 2.5.1's signature is rect(x,y,w,h,style) and it validates the style: `if (isNaN(x)||...||!isValidStyle(style)) throw new Error(\"Invalid arguments passed to jsPDF.rect\")`. The value 1 is not in the valid list. generarPDF has no try/catch. Reproduced with the page's exact code in Node (jspdf@2.5.1) and in headless Chrome: clicking #btnRepPDF raises 'pageerror: Invalid arguments passed to jsPDF.rect', no file is produced and the modal stays open.",
+   "failureScenario": "The director taps Reporte, then PDF, with any data. Nothing downloads, no message appears, the modal stays open. The monthly PDF report is unavailable.",
+   "suggestedFix": "Change to `pdf.rect(0,0,PW,70,'F')`. Wrap generarPDF/generarExcel in try/catch with a visible error toast and a disabled/loading state on the button. Also reset the font style to normal inside sectionTitle(); after a bold TOTAL row the next section title currently inherits bold.",
+   "confidence": "high"
+  },
+  {
+   "title": "Previous-month billing is never joined with remito prices, so every 'vs mes ant.' variation is wrong",
+   "lines": "dashboard.html:312-323, 331-348, 383-384, 396-397, 400, 415, 916, 1050",
+   "severity": "high",
+   "category": "money / logic",
+   "evidence": "Normal orders are saved without items[].precio (pedidos.html:1157-1165); only venta rápida writes precio. The dashboard enriches only the current month: `pedidos.forEach(p => { const rem = remitoPorPedido[p.id]; ... it.precio = remPrices[it.producto] })`. The previous month is loaded as `snapAnt.docs.map(d=>d.data())` (no id), no remitos are fetched for it, and `factAnt = calcFact(pedidosAnt)` uses `it.precio||0`. So factAnt only contains venta rápida orders. Reproduced: an October order with a $1.100.000 remito gives factAnt=0, badge '▲ 0.0% vs mes ant.' and combined '▲ 152.8%'.",
+   "failureScenario": "October: $40M in wholesale orders priced through remitos plus $1M of ventas rápidas. November reaches $20M. factAnt = $1M, so the KPI shows '▲ 1900% vs mes ant.' where the real figure is -50%. The same wrong number goes into 'Facturación total combinada' and the PDF/CSV line 'Variación vs mes anterior'.",
+   "suggestedFix": "Extract one function enriquecer(pedidos, remitosPorPedidoId) and apply it to both months. Fetch remitos for the previous month as well (or one widened fecha window indexed by pedidoId) and keep the doc id on pedidosAnt.",
+   "confidence": "high"
+  },
+  {
+   "title": "Orders whose remito is dated in another month count as $0; KPI and Top clientes disagree",
+   "lines": "dashboard.html:319, 331-348, 540-552",
+   "severity": "high",
+   "category": "dates-timezone / money",
+   "evidence": "Remitos are fetched with `where('fecha','>=',desde), where('fecha','<=',hasta)` for the selected month, but remito.fecha is the UTC creation date (pedidos.html:1713, `new Date().toISOString().split(\"T\")[0]`), while pedidos are selected by fechaEntrega. A pedido in the month whose remito falls outside it gets no entry in remitoPorPedido, keeps precio undefined and contributes 0 to calcFact. In the remito's own month, actualizarTopClientes treats it as an independent sale (`por[r.cliente].fact += r.total; por[r.cliente].pedidos++`) because its pedidoId is not in factPorPedido, but the KPI (pedidos only) never includes it. Reproduced: pedido with fechaEntrega 2026-11-02 and remito dated 2026-10-31 shows 'Almacén Ñandú 1 pedido $0' in November and is missing from the KPI.",
+   "failureScenario": "Friday 30/10: the order for Monday 02/11 is prepared and its remito saved ($750.000). November's 'Facturación del mes' omits the $750.000; October's KPI omits it too (the pedido is not in October), yet October's Top 10 credits the client with it. The same happens to any remito saved after 21:00 on the last day of a month (UTC date is already the 1st).",
+   "suggestedFix": "Join remitos by pedidoId regardless of remito date (query remitos by pedidoId in chunks, or widen the fecha window by about 45 days each side and index by pedidoId). In Top clientes, count a remito as a standalone sale only when it has no pedidoId, or its pedido does not exist at all.",
+   "confidence": "high"
+  },
+  {
+   "title": "Report 'Gastos' is always $0 and 'Neto' always equals 'Ventas' (gastos is an array)",
+   "lines": "dashboard.html:1007-1013, 1100-1102",
+   "severity": "high",
+   "category": "money",
+   "evidence": "`const ven = Number(v.totalVentas)||0, gas = Number(v.gastos)||0;` In ventas_diarias, gastos is an array of {desc, monto} (ventas.html:540-548) and the numeric sum is stored in totalGasto. Number([{...}]) is NaN and Number([]) is 0, so gas is always 0. Reproduced with the page's code: rows with totalGasto 15.000 and 40.000 print 'Gastos $0 / Neto = Ventas', total row '$340.000 | $0 | $340.000'.",
+   "failureScenario": "The CSV (and the PDF once the rect bug is fixed) lists every branch day with Gastos 0 and Neto equal to gross sales. A month with $600.000 of branch expenses shows net overstated by $600.000.",
+   "suggestedFix": "Use `const gas = Number(v.totalGasto) || (Array.isArray(v.gastos) ? v.gastos.reduce((s,g)=>s+(Number(g.monto)||0),0) : 0)` in both generators.",
+   "confidence": "high"
+  },
+  {
+   "title": "Hardcoded cost table contains implausible values that drive the profitability ranking and margin table",
+   "lines": "dashboard.html:265-266, 652-656, 736-768",
+   "severity": "high",
+   "category": "money / data",
+   "evidence": "COSTO_PROD has \"Panceta Ahumada\": 30.88 and \"Pechito Ahumado\": 30.88 (vs Panceta Salada 1748.17), \"Lomo Ahumado\": 28638.22 (vs Lomo Tipo Suizo 8714.45, sale price 14990), \"Mortadela Bocha\": 10362.39 (vs Mortadela Bologna 1038.24), \"Salchichón Primavera\": 5499.06 (vs Salchichón c/ Jamón 1030.77). actualizarRentabilidad computes `(precio - costo) * kg` with these; actualizarMargenes renders 'Panceta Ahumada 99.8% / 48442.7%' and 'Lomo Ahumado -91.0%' (seen in the render). Costs and list prices are a frozen snapshot in the HTML.",
+   "failureScenario": "A client buying 100 kg of Lomo Ahumado at $14.990 shows a loss of $1.36M and sinks to the bottom of the ranking; a client buying Panceta Ahumada shows a 99.8% margin. The director would prioritise or drop clients and products on spreadsheet artefacts.",
+   "suggestedFix": "Validate these rows against the cost spreadsheet with the owner. Move costs to Firestore (e.g. config/costos keyed by catalog product name, editable by the director, with an updated-at date shown on the card), and compute the margin table from current prices instead of hardcoded precio/margen_pct.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Profitability margin and coverage are distorted by items without cost or without price",
+   "lines": "dashboard.html:644-673, 699",
+   "severity": "medium",
+   "category": "money / logic",
+   "evidence": "`clis[cli].fact += factura` for every item, but `ganancia` is added only when `costo!=null && precio>0 && kg>0`; then `margenEfectivo = d.ganancia/d.fact*100`. COSTO_PROD has no entries for the catalog categories 'Cerdo y Varios', 'Quesos' and 'Jamones Crudos y Bondiolas' (pedidos.html:758-762), for products added or renamed in config/productos, or for free-text venta rápida products. Items with no price yet (pending orders without remito) also fall into itemsSin. Rendered example: a client with one priced, costed item plus a pending order shows 'Cobertura 33%'.",
+   "failureScenario": "Client X buys $1M of Jamón Sublime (47.7% margin) and $1M of fresh pork cuts with no cost entry. The table shows margin 23.9% in red and ranks X as low-profitability. The footnote says profit is underestimated, but the percentage, colour and ranking still mislead.",
+   "suggestedFix": "Compute the margin over the billing of costed items only (and show profit as covering X% of billing). Exclude unpriced items from coverage. Measure coverage by revenue rather than line count. Load costs from Firestore keyed by the live catalog.",
+   "confidence": "high"
+  },
+  {
+   "title": "Month-to-date is compared against the full previous month",
+   "lines": "dashboard.html:305-309, 384, 391, 397, 400, 403, 412, 415",
+   "severity": "medium",
+   "category": "dates / logic",
+   "evidence": "The previous range is always the whole month (`desdeAnt ...-01` to `hastaAnt ...-${diasMesAnt}`), while the default selection is the month in progress. `varFact = (fact-factAnt)/factAnt*100`, `pedidos.length>=pedidosAnt.length ? '▲':'▼'`, and varVD/varTotal are computed the same way.",
+   "failureScenario": "On 10/11 with a normal month under way (10 days billed) vs the full 31 days of October, every badge shows roughly '▼ 65% vs mes ant.' and 'Pedidos ▼ vs 120'. The director sees a red indicator most of every month, so it carries no information.",
+   "suggestedFix": "When the selected month is the current one, compare with the same day range of the previous month (days 1..today) and label it 'vs mismo período mes ant.'; optionally add a month-end projection.",
+   "confidence": "high"
+  },
+  {
+   "title": "No request sequencing or stale-state handling: wrong month's data can be shown and exported under another month's label",
+   "lines": "dashboard.html:290-369 (catch at 364-368), 834-838, 854-855, 1031-1032",
+   "severity": "medium",
+   "category": "async / race",
+   "evidence": "cargarTodo has no token or abort; each call awaits Promise.all and then renders unconditionally. Only four KPIs are reset to '...' (299-302); tables, charts, k-vd, k-total and window._repData keep the previous content. On error only k-fact/k-fact-sub change. abrirReporte takes the label from the <select> while generarPDF/generarExcel read window._repData, and _repData.mes is never checked.",
+   "failureScenario": "(1) The director switches Octubre then Septiembre quickly on mobile data; October's larger response resolves last, so the page shows October under 'Septiembre 2026' and the export is titled Septiembre with October figures. (2) The load fails after a month change: 'Error' appears in one card, the rest still shows the previous month, and the export is labelled with the new month. (3) Tapping Reporte during the first load exports all zeros.",
+   "suggestedFix": "Keep a monotonically increasing request id and ignore stale responses. Put all sections into a loading state while fetching. On error clear or flag every section and offer retry. Take the report label from _repData.mes and disable Reporte until the data for the selected month is loaded.",
+   "confidence": "high"
+  },
+  {
+   "title": "Remito of a cancelled order is counted as a sale in Top clientes",
+   "lines": "dashboard.html:322, 540-552",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "Cancelled pedidos are removed first (`.filter(p=>p.estado!=='cancelado')`), so their ids are absent from factPorPedido. In the remito loop, `if(r.pedidoId && hasOwnProperty.call(factPorPedido, r.pedidoId)) {...return;}` does not match, and execution falls through to `por[r.cliente].fact += r.total; por[r.cliente].pedidos++`. Reproduced: 'Cliente Cancelado, 1 pedido, $18K' for a cancelled order with a remito.",
+   "failureScenario": "An order reaches 'listo', its remito is saved ($500.000), then the client cancels and the director taps ❌. The KPI excludes it, but Top 10 clientes (screen, PDF, CSV) still credits the client with $500.000 and 1 pedido.",
+   "suggestedFix": "Build the set of all pedido ids in the period including cancelled ones (or look the pedido up) and skip remitos whose pedido is cancelled; count only remitos with no pedidoId as standalone sales.",
+   "confidence": "high"
+  },
+  {
+   "title": "Client and product names are injected unescaped into innerHTML (markup breakage / stored XSS)",
+   "lines": "dashboard.html:566, 588, 626, 704",
+   "severity": "medium",
+   "category": "dom-safety",
+   "evidence": "`<div style=\"font-weight:600\">${nombre}</div>`, `${icon} ${c.nombre}`, `...color:#262C32\">${nombre}</div>`, `<div style=\"font-weight:700;font-size:13px\">${d.nombre}</div>` are assigned with innerHTML. Names come from pedidos.cliente (free text via 'Otro'), cuentas_corrientes.nombre and items[].producto (free text in venta rápida). Reproduced: a pedido whose cliente is `<img src=x onerror=\"window.__xss=1\">` executed the handler in Top clientes and Rentabilidad.",
+   "failureScenario": "A client saved as 'Fiambrería <La Esquina>' appears as 'Fiambrería ' with the rest swallowed as a tag. A crafted name written by any CRM user, or directly into Firestore, runs script in the director's session.",
+   "suggestedFix": "Add an esc() helper (as ventas.html has) and escape every interpolated name, or build rows with textContent.",
+   "confidence": "high"
+  },
+  {
+   "title": "Page is wider than the iPhone screen: header does not wrap and the 6-column ranking table forces horizontal overflow",
+   "lines": "dashboard.html:27-32, 50-56, 98-105, 150-163, 232-236, 687-695",
+   "severity": "medium",
+   "category": "layout / iOS",
+   "evidence": ".hdr is `display:flex;justify-content:space-between` with no wrap and 24px padding, holding logo + h1 + CUIT + select + two buttons; no media query touches it. .row-full uses `grid-template-columns:1fr`, so the .card grid item cannot shrink below the table's min-content. Rendered at 390x844: header 139px tall with the title on three lines, select at x=194-341, refresh at 349-386, 'Reporte' at x=395-467 (fully outside the 390px viewport; still about 46px outside with a narrower heading font). Rentabilidad table is 474px wide and documentElement.scrollWidth is 528. In Chrome's mobile emulation the report modal was laid out against that 528px width, cutting off its close and Excel buttons.",
+   "failureScenario": "On the director's iPhone the dashboard pans sideways, the sticky header takes about 16% of the screen, and the Reporte button is off-screen until the page is dragged left.",
+   "suggestedFix": "Two-row header on narrow screens (title row, then full-width month select + icon buttons). Use `minmax(0,1fr)` grid tracks and `min-width:0` on cards. Render the ranking as stacked rows on phones, or give its wrapper overflow-x:auto. Set `overflow-x:hidden` on html/body as a safety net.",
+   "confidence": "high"
+  },
+  {
+   "title": "'días registrados' counts branch documents, not days",
+   "lines": "dashboard.html:392, 412, 914, 1048",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "`const diasConVenta = ventasDiarias.length;` but ventas_diarias has one doc per day per branch (id `${fecha}_${suc}`, sucursal 'PP' or 'CAB'; ventas.html:546). Reproduced: two docs for 2026-11-02 show '2 días registrados'.",
+   "failureScenario": "With both branches loading every day for 20 days, the KPI reads '40 días registrados', and the PDF/CSV say 'Ventas diarias: $X en 40 días' and 'Días con venta registrada; 40'.",
+   "suggestedFix": "`new Set(ventasDiarias.map(v=>v.fecha)).size`.",
+   "confidence": "high"
+  },
+  {
+   "title": "CSV export revokes the object URL immediately after click; likely fails on iOS Safari",
+   "lines": "dashboard.html:1108-1117",
+   "severity": "medium",
+   "category": "iOS Safari",
+   "evidence": "`a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); cerrarReporte();` The blob URL is revoked in the same tick. Safari resolves blob downloads asynchronously (iOS first shows a download confirmation), and a revoked URL gives 'WebKitBlobResource error 1'. FileSaver delays revocation by 40s for this reason. Not reproduced here (no iOS device); desktop Chrome works.",
+   "failureScenario": "On the iPhone the director taps Excel; the modal closes but no file arrives, or Safari shows a load error. For this to be a bug, iOS Safari must read the blob after the click handler returns.",
+   "suggestedFix": "Revoke after a delay (`setTimeout(()=>URL.revokeObjectURL(url), 60000)`), or on iOS use `navigator.share({files:[new File([blob], name, {type:'text/csv'})]})` from the tap handler.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Productos más pedidos: non-kg units without kgReal are added as kg, and mixed units are summed under the first unit seen",
+   "lines": "dashboard.html:601-611, 623-624",
+   "severity": "low",
+   "category": "quantities",
+   "evidence": "`const kg = it.kgReal!=null ? parseFloat(it.kgReal)||0 : cant;` then, for unidad !== 'kg', `prods[k].kgTotal += kg`. With no weighed kg, the piece count is added as kilograms. `unidad` is fixed from the first line seen (`unidad:it.unidad||'kg'`) while `unidades += cant` runs for every line regardless of its unit. Reproduced: 'Salamín Picado Fino, 10 piezas, 10 kg' for a pending order.",
+   "failureScenario": "A pending order of 5 piezas of Jamón Cocido (about 7 kg each) adds 5 kg instead of about 35 kg, changing the ranking, which sorts by kgTotal. A product ordered as '3 piezas' in one order and '12 kg' in another shows '15 piezas'.",
+   "suggestedFix": "Add to kgTotal only when unidad is 'kg' or kgReal is present (otherwise show the kg as pending). Keep unit totals per unit, or show the unit column only when all lines share a unit.",
+   "confidence": "high"
+  },
+  {
+   "title": "One failing render step aborts all later sections, and the error is shown only in the first KPI",
+   "lines": "dashboard.html:355-368, 454, 506",
+   "severity": "low",
+   "category": "async-errors",
+   "evidence": "All actualizar* calls sit in one try block in sequence. `new Chart(...)` at line 454 throws ReferenceError if the cdnjs script did not load, and any unexpected document shape (e.g. items not an array) throws inside a renderer. The catch writes only k-fact and k-fact-sub; Top clientes, CC, Productos, Rentabilidad and Márgenes keep their spinners. If the gstatic imports fail, the module never runs and the page stays on '—' / 'Cargando...' with no message.",
+   "failureScenario": "Chart.js fails to download on a weak signal. KPIs render, the first card then flips to 'Error / Chart is not defined', and every table below spins forever although its data was fetched.",
+   "suggestedFix": "Wrap each renderer in its own try/catch with a per-card error state and retry; guard `typeof Chart`; add a visible offline/error banner with a retry button.",
+   "confidence": "medium"
+  },
+  {
+   "title": "kgReal = 0 is treated differently by the KPI and by the profitability table",
+   "lines": "dashboard.html:342-345, 375, 433, 534 vs 603, 647",
+   "severity": "low",
+   "category": "quantities",
+   "evidence": "The KPI, chart and Top clientes use `parseFloat(it.kgReal||it.cantidad||0)` (0 falls back to the ordered quantity) and the enrichment replaces a 0 kgReal with the remito kg. actualizarRentabilidad and actualizarProductos use `it.kgReal!=null ? parseFloat(it.kgReal)||0 : cantidad` (0 stays 0).",
+   "failureScenario": "An operario enters 0 kg for an item that was not delivered, on an order priced as a venta rápida or without a remito. The KPI and Top clientes bill ordered quantity x price while Rentabilidad shows $0 for it, so the client's 'Facturación' differs between two cards on the same screen.",
+   "suggestedFix": "Use one helper kgDe(it) everywhere (`it.kgReal!=null ? Number(it.kgReal)||0 : parseFloat(it.cantidad)||0`), aligned with how the remito bills.",
+   "confidence": "medium"
+  },
+  {
+   "title": "CSV fields are not quoted, and 'sep=;' after a BOM can garble accents in desktop Excel",
+   "lines": "dashboard.html:1033, 1058, 1066, 1074, 1083, 1092, 1102, 1107-1108",
+   "severity": "low",
+   "category": "dom-safety / export",
+   "evidence": "Rows are built by plain concatenation, e.g. `(i+1)+';'+c.nombre+';'+csvNum(c.pedidos)+...`, with no quoting, so a name containing ';', a quote or a line break shifts columns. A name starting with '=', '+', '-' or '@' is evaluated as a formula. The file starts with BOM + 'sep=;'; desktop Excel is reported to ignore the UTF-8 BOM when a sep= line is present (not verified here), and Numbers on iPhone would show 'sep=;' as a data row.",
+   "failureScenario": "A client named 'Carnes; Fiambres SRL' pushes its billing into the wrong column. 'Facturación' may open as 'FacturaciÃ³n' in Excel on Windows.",
+   "suggestedFix": "Quote every text field (double the quotes, prefix a single quote when it starts with = + - @). Drop the sep= line and keep the BOM (';' is already the list separator for es-AR), or generate a real .xlsx.",
+   "confidence": "medium"
+  },
+  {
+   "title": "'Total registrados' counts merged/inactive clients, and 'Saldo CC total' is today's balance shown under any selected month",
+   "lines": "dashboard.html:315-316, 325-326, 385, 406, 408, 912-913",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`const totalClientes = snapCli.docs.length;` includes docs that migracion.html marks `{mergedInto, activo:false}` (migracion.html:569-570). cuentas_corrientes is read without any date, so the KPI and the PDF section 'INDICADORES CLAVE DEL MES' for a past month print the current balances.",
+   "failureScenario": "After the client migration merges 8 duplicates, the KPI still says 'Total registrados: 68' instead of 60. A report generated for Agosto shows November's outstanding balances as if they were August's.",
+   "suggestedFix": "Filter `activo!==false && !mergedInto` (or use a count query). Label the CC KPI and report section 'Saldo actual al dd/mm' regardless of the selected month.",
+   "confidence": "medium"
+  },
+  {
+   "title": "fmtK edge cases: '$1000K' just below one million and a dot decimal in '$6.3M'",
+   "lines": "dashboard.html:274",
+   "severity": "low",
+   "category": "formatting",
+   "evidence": "`n>=1000000 ? '$'+(n/1000000).toFixed(1)+'M' : n>=1000 ? '$'+(n/1000).toFixed(0)+'K' : fmt$(n)`: 999.600 gives (999.6).toFixed(0) = '1000', so '$1000K'. toFixed uses '.', while the rest of the app uses '.' as the thousands separator.",
+   "failureScenario": "Billing of $999.700 shows as '$1000K'. '$6.3M' sits next to '$840.000', mixing two meanings of the dot.",
+   "suggestedFix": "Use `Intl.NumberFormat('es-AR',{notation:'compact',maximumFractionDigits:1})`, or show the full es-AR amount and keep the abbreviation for chart axes only.",
+   "confidence": "high"
+  }
+ ],
+ "security": [
+  {
+   "title": "Access control is a client-side sessionStorage check only",
+   "detail": "The guard reads sessionStorage and redirects; anyone can set sersale_role='director' (or the legacy sersale_auth='ok' with no role) in the console and load the page. The page itself is a public static file. Firestore is used with no Firebase Auth, so security rules cannot distinguish director from operario or from an anonymous visitor. Unless rules are restricted some other way (they are not in the repo), pedidos, remitos, cuentas_corrientes, clientes and ventas_diarias are readable by anyone with the project id and apiKey in the source. Role checks only become real with Firebase Auth (or at least App Check) plus rules.",
+   "lines": "4-12, 254-262"
+  },
+  {
+   "title": "Legacy fallback grants dashboard access without a role",
+   "detail": "`if (sessionStorage.getItem(\"sersale_auth\") === \"ok\") return;` lets any session with the compat flag and no role into the director dashboard. index.html sets that flag for operarios too, so removing or renaming sersale_role is enough.",
+   "lines": "9"
+  },
+  {
+   "title": "Product costs and margins are shipped in the public HTML",
+   "detail": "COSTO_PROD and COSTOS (unit cost, list price and margin for about 40 products) are inline constants, so fetching /dashboard.html without logging in reveals the company's cost structure. The JS guard does not protect the file contents. Move them to Firestore behind real auth.",
+   "lines": "265-266"
+  },
+  {
+   "title": "Stored XSS through client / product names",
+   "detail": "Names from Firestore are interpolated into innerHTML unescaped (verified: an <img onerror> client name executed). Any CRM user who can create an order with a free-text client ('Otro') or a venta rápida product, or anyone able to write to Firestore, can run script in the director's browser and from there read or write the whole database.",
+   "lines": "566, 588, 626, 704"
+  },
+  {
+   "title": "Third-party scripts without Subresource Integrity",
+   "detail": "Chart.js and jsPDF are loaded from cdnjs, and the Firebase SDK from gstatic, with no integrity/crossorigin attributes, on a page that has full database access.",
+   "lines": "22, 254-255, 788"
+  },
+  {
+   "title": "CSV formula injection",
+   "detail": "Client and product names are written to the CSV unquoted; a name starting with '=', '+', '-' or '@' is evaluated by Excel when the director opens the export.",
+   "lines": "1058, 1066, 1074, 1083"
+  },
+  {
+   "title": "Raw backend error text shown to the user",
+   "detail": "On failure, e.message (Firebase error strings, possibly with paths or permission details) is written into the KPI sub-label.",
+   "lines": "364-368"
+  }
+ ],
+ "ux": [
+  {
+   "title": "Page pans sideways on iPhone and the Reporte button is off-screen",
+   "problem": "Rendered at 390px, the page is 528px wide. The header is a single non-wrapping flex row (139px tall, sticky, title on three lines) and its 'Reporte' button starts at x=395. The 6-column profitability table forces its card to 514px.",
+   "suggestion": "Mobile-first header: compact title row plus a full-width control row (month picker, refresh icon, share/report icon, each at least 44px). Use `minmax(0,1fr)` tracks. Present the ranking as stacked rows (name plus two key figures, details on tap). Never allow horizontal page scroll.",
+   "impact": "high",
+   "lines": "27-32, 53, 150-163, 687-695"
+  },
+  {
+   "title": "No loading state on month change or refresh; stale numbers stay on screen",
+   "problem": "Only four KPI values turn into '...'; charts, tables, the other two KPIs and all badges keep the previous month's data until the new data arrives. The refresh button has no spinner or disabled state, and there is no 'actualizado hh:mm' indication.",
+   "suggestion": "Skeleton placeholders for every card while loading, the refresh icon spinning and disabled, a small 'Actualizado 10:42' line, and instant render from a cached month while revalidating.",
+   "impact": "high",
+   "lines": "298-302, 160"
+  },
+  {
+   "title": "Export gives no feedback and does not use the iOS share sheet",
+   "problem": "The PDF currently fails silently. The CSV closes the modal with no confirmation, and 'Excel' actually produces a .csv. Blob downloads behave unpredictably in an iOS home-screen web app, and the director most likely wants to send the report by WhatsApp or mail.",
+   "suggestion": "Generate the file, then call navigator.share({files:[File]}) from the tap (fallback: download). Show a 'Generando…' state and a success/error toast. Label the button 'CSV', or produce a real .xlsx.",
+   "impact": "high",
+   "lines": "824-825, 1026-1027, 1106-1117"
+  },
+  {
+   "title": "Errors and offline are almost invisible",
+   "problem": "A failed load shows 'Error' in one card with the raw English e.message; the other cards keep spinners or stale data. If the Firebase CDN import fails, the page stays on '—' / 'Cargando...' forever. There is no retry prompt.",
+   "suggestion": "A full-width banner 'No se pudo cargar. Reintentar', per-card error states, an offline indicator, and cached last-known data.",
+   "impact": "medium",
+   "lines": "364-368"
+  },
+  {
+   "title": "Small tap targets, and iOS zooms when the month select is focused",
+   "problem": "Measured: month select 147x30px with a 13px font (iOS auto-zooms on focus below 16px), refresh button 37x29px, modal close 18x26px, bottom-nav links 46x38px with 8.5px labels.",
+   "suggestion": "16px font on the select; minimum 44x44px hit areas for the header buttons, modal close and nav items; nav labels at 10-11px.",
+   "impact": "medium",
+   "lines": "30, 32, 795, 1126"
+  },
+  {
+   "title": "KPIs take more than a screen and hide the exact amounts",
+   "problem": "At or below 500px the six KPI cards stack in one column (about 155px each, roughly 1.000px in total) before any chart, and the whole page is about 4.400px long. Values are abbreviated ('$266K', '$6.3M') with no way to see the exact figure.",
+   "suggestion": "A 2-column compact KPI grid on phones (icon inline, smaller padding); show the full es-AR amount or reveal it on tap; put the most used block (billing and CC) first.",
+   "impact": "medium",
+   "lines": "37-47, 102-105, 274, 399-415"
+  },
+  {
+   "title": "Nested scroll boxes trap scrolling",
+   "problem": ".card-scroll has max-height:420px with overflow-y:auto. On a phone, a finger that starts on a list scrolls the inner box (the 29-row margin table, the ranking) instead of the page.",
+   "suggestion": "Remove inner scrolling on mobile: show the top N rows with a 'Ver todos' expander or a dedicated full-screen list.",
+   "impact": "medium",
+   "lines": "56-59, 223-247"
+  },
+  {
+   "title": "Lists are dead ends",
+   "problem": "The CC list is cut to 12 rows with no indication that more exist (the KPI may say '14 clientes con saldo'), and neither CC rows nor Top clientes rows are tappable. There is no jump to the client's cuenta corriente in pedidos.html and no WhatsApp reminder.",
+   "suggestion": "Add 'Ver las N cuentas', and make rows open the client's CC or history in pedidos.html (deep link by client) with quick actions (WhatsApp, registrar pago).",
+   "impact": "medium",
+   "lines": "584-592, 561-570"
+  },
+  {
+   "title": "Month navigation is limited and not remembered",
+   "problem": "Only the last 6 months are offered through a native select. There are no previous/next arrows or year comparison, and the selection is lost on every page change because navigation is a full reload.",
+   "suggestion": "Previous/next chevrons around the month label (or swipe), a longer history, and the last selection persisted in sessionStorage or a URL parameter.",
+   "impact": "medium",
+   "lines": "159, 277-288"
+  },
+  {
+   "title": "Full page reloads between modules, and re-login after iOS evicts the web app",
+   "problem": "The bottom nav is made of plain links: each tap reloads a whole HTML page (no-cache metas), re-downloads the SDKs and re-runs every query. Auth lives in sessionStorage, which iOS clears when the home-screen app is closed or evicted. This page also lacks the apple-mobile-web-app / theme-color metas that pedidos.html has.",
+   "suggestion": "Persist the session (localStorage with expiry, or Firebase Auth persistence), add a service worker / app-shell cache, keep the PWA metas consistent on every page, and prefetch or cache module data.",
+   "impact": "medium",
+   "lines": "4-16, 1126"
+  },
+  {
+   "title": "Report modal details",
+   "problem": "It cannot be dismissed by tapping the backdrop, the page behind keeps scrolling, there is no 'select all / none', and the checkbox choices are not remembered.",
+   "suggestion": "A bottom-sheet style modal with backdrop tap and swipe-down to close, body scroll lock, remembered section choices, and a single primary action 'Compartir PDF'.",
+   "impact": "low",
+   "lines": "791-828, 834-839"
+  },
+  {
+   "title": "Hover-only help",
+   "problem": "The 'ℹ' hints on the margin headers and the coverage pill explanation exist only as title= tooltips, which never appear on touch devices.",
+   "suggestion": "A tap-to-toggle popover, or keep the short legend already printed below the tables and drop the icons.",
+   "impact": "low",
+   "lines": "717-718, 751-754"
+  },
+  {
+   "title": "Spacing glitches",
+   "problem": "The profitability row has `margin-bottom:0`, so its card touches the next one. Both html and body get 64px bottom padding, on top of the container's 60px, leaving about 190px of empty space above the nav.",
+   "suggestion": "Use the standard 16-24px gap and apply the nav clearance once (on body, with safe-area inset).",
+   "impact": "low",
+   "lines": "113, 232, 34"
+  },
+  {
+   "title": "Report content is not localised",
+   "problem": "PDF/CSV rows show dates as 2026-11-02 and branches as PP / CAB. PDF numbers are left-aligned, negative money prints as '$-12.346', and percentages use a dot decimal. The logo assets (assets/logo-data.js) are not used.",
+   "suggestion": "dd/mm/yyyy dates, branch names (Parque Patricios / Caballito), right-aligned numeric columns, '-$12.346', comma decimals, logo in the header.",
+   "impact": "low",
+   "lines": "885-896, 974-975, 1011, 1102"
+  }
+ ],
+ "perf": [
+  {
+   "title": "Everything is re-fetched on every load, refresh and month change, including month-independent collections",
+   "problem": "cargarTodo always runs 7 getDocs. The whole cuentas_corrientes and clientes collections are downloaded each time (clientes only to read .length), and the previous month's full pedidos and ventas_diarias documents are downloaded just to compute two totals and a count. Switching Nov, Oct, Nov re-reads the same documents three times; nothing is memoised or persisted.",
+   "suggestion": "Cache per-month results in memory (Map keyed by YYYY-MM) and closed months in localStorage with a TTL. Load cuentas_corrientes and the client count once per session and refresh only on ↻. Use getCountFromServer for clientes and where('saldo','>',0) for CC. Derive the previous month from the cache when the user steps back.",
+   "impact": "high",
+   "lines": "312-320"
+  },
+  {
+   "title": "Heavy render-blocking third-party code on first paint",
+   "problem": "Chart.js is a synchronous script in <head>. jsPDF (about 360 KB minified) is loaded synchronously on every visit although it is only needed when exporting. Three Google font families load through a blocking stylesheet. The no-cache/no-store metas force revalidation on every navigation, which is slow on mobile data.",
+   "suggestion": "Add defer to Chart.js. Load jsPDF dynamically on the first tap of PDF. Trim fonts to the weights actually used (or self-host). Let the HTML be cached with revalidation and add a service worker.",
+   "impact": "medium",
+   "lines": "14-16, 20-22, 788"
+  },
+  {
+   "title": "Full Firestore SDK for a read-only page, with no local persistence",
+   "problem": "firebase-firestore.js (the full real-time client) is imported for seven one-shot getDocs. No persistent cache is configured, so every visit waits for the network before showing anything.",
+   "suggestion": "Use firebase-firestore-lite.js for this page (much smaller, plain REST), or enable persistentLocalCache and render from cache first, then revalidate.",
+   "impact": "medium",
+   "lines": "254-262"
+  },
+  {
+   "title": "All sections are recomputed and rebuilt on every load",
+   "problem": "The static margin table is re-rendered on each cargarTodo, both charts are destroyed and recreated, and billing per order is recomputed separately in calcFact, the weekly chart, Top clientes and the ranking. The enrichment does rem.items.find inside the item loop.",
+   "suggestion": "Render Márgenes once. Compute a per-order billing value once and reuse it. Update chart data in place (chart.data = ...; chart.update()). Index remito items by product once.",
+   "impact": "low",
+   "lines": "333-348, 355-362, 452-454, 504-506, 734-780"
+  },
+  {
+   "title": "The auth redirect does not stop the page from loading and querying",
+   "problem": "The guard sets window.location.href but parsing continues: for an operario or an unauthenticated visitor, the module may still import the SDK and start the 7 reads before the navigation completes.",
+   "suggestion": "Gate the module on the guard result (e.g. set a flag or stop early) so no data is requested when the user is being redirected.",
+   "impact": "low",
+   "lines": "4-12, 783-784"
+  }
+ ]
+}

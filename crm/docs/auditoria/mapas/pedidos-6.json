@@ -1,0 +1,449 @@
+{
+ "summary": "Section 3471-4213 of /home/user/sersale-produccion/crm/src/pedidos.html holds the director's \"CC\" (cuentas corrientes) tab and the \"Stats\" tab. TabCuentasCorrientes lists every current account with its stored balance, total debt and number of debtors, lets the director open an account, register a payment (adds a cc_movimientos doc, then recomputes and overwrites cuentas_corrientes.saldo from all of that client's movements) and create a new account for an existing client. DetalleCuentaCorriente shows one client's ledger (movements newest first, facturado / pagado / saldo computed client-side) with header buttons for PDF, Venta rapida and Pago. ModalPdfCC builds a customer-facing A4 statement with jsPDF for a date range (default last 30 days) with a running balance. TabStats is a read-only monthly ranking computed from the pedidos prop (top products by kg, most frequent clients, orders per weekday). The whole CC model joins by client NAME string (exact match), has no transactions, and keeps a denormalised saldo that several writers recompute with different rules. Most important findings: the \"Pago\" button inside the account detail does nothing (modal is never rendered there); balances lose their sign everywhere including the PDF sent to customers; saldo recompute by exact name can erase charges written under a case-variant name; dates are UTC (tomorrow after 21:00); the PDF modal sits under the bottom nav and the floating button; Stats caps \"Clientes activos\" at 8 and mixes unit counts into kg.",
+ "components": [
+  {
+   "name": "TabCuentasCorrientes({refresh})",
+   "lines": "3471-3697",
+   "purpose": "CC tab root: loads cuentas_corrientes ordered by nombre, shows total debt / debtor count, account cards with 'Ver movimientos' and 'Registrar pago', bottom-sheet modals for new account and payment. When clienteAbierto is set it early-returns DetalleCuentaCorriente only (line 3563), so its own modals are not rendered in that state."
+  },
+  {
+   "name": "TabCuentasCorrientes.cargarClientesDisponibles",
+   "lines": "3481-3492",
+   "purpose": "Reads all clientes (orderBy nombre) and all cuentas_corrientes, keeps client names that have no CC account (exact string match) for the 'Nueva cuenta' select."
+  },
+  {
+   "name": "TabCuentasCorrientes.cargar",
+   "lines": "3494-3500",
+   "purpose": "getDocs of cuentas_corrientes ordered by nombre into state; on error logs and sets [] (shows empty state)."
+  },
+  {
+   "name": "TabCuentasCorrientes.registrarPago",
+   "lines": "3513-3547",
+   "purpose": "Validates amount, addDoc payment to cc_movimientos, re-reads all movements of that client (where cliente == name), recomputes saldo (pedido adds, anything else subtracts), updateDoc saldo + ultimoMovimiento on the first cuentas_corrientes doc with that nombre, closes modal and reloads list."
+  },
+  {
+   "name": "TabCuentasCorrientes.crearCliente",
+   "lines": "3549-3559",
+   "purpose": "addDoc to cuentas_corrientes {nombre, saldo:0, creadoEn, ultimoMovimiento}. No duplicate check, no in-flight guard."
+  },
+  {
+   "name": "ModalPdfCC({cliente, movimientos, saldo, onClose})",
+   "lines": "3701-3957",
+   "purpose": "Bottom sheet with Desde/Hasta date inputs and a preview (count, facturado, pagado, saldo actual); generarPDF (3726-3890) draws header, client box, 3 summary boxes, paginated movement table with running balance, totals row and footer, then pdf.save(). drawFtrPDF (3892-3898) draws the page footer."
+  },
+  {
+   "name": "DetalleCuentaCorriente({cliente, onBack, onPago, onRefreshParent, refresh})",
+   "lines": "3959-4103",
+   "purpose": "Ledger of one client: getDocs cc_movimientos where cliente == name, sorts client-side by fecha then createdAt, computes saldo, renders summary and movement cards (newest first). Hosts ModalVentaRapida (clienteInicial) and ModalPdfCC."
+  },
+  {
+   "name": "TabStats({pedidos})",
+   "lines": "4104-4212",
+   "purpose": "Monthly stats from the pedidos prop filtered by fechaEntrega prefix YYYY-MM and estado != cancelado: tiles (distinct products, active clients), top 10 products by kg, top 8 clients by order count, orders per weekday bar chart. No Firestore access of its own."
+  }
+ ],
+ "firestore": [
+  {
+   "collection": "cuentas_corrientes",
+   "docId": "Auto-id (addDoc). One doc per client is assumed but not enforced. The business key is the field nombre.",
+   "ops": "getDocs(query(collection, orderBy('nombre','asc'))) in cargar (3497); getDocs(collection) full read in cargarClientesDisponibles (3488); getDocs(query(collection, where('nombre','==',clientName))) then updateDoc(doc(id of docs[0]), {saldo, ultimoMovimiento}) in registrarPago (3534-3535); addDoc in crearCliente (3553-3556). No transaction, no onSnapshot.",
+   "fields": "nombre: string, client display name copied verbatim from clientes.nombre (the select value); exact case-sensitive join key to cc_movimientos.cliente. saldo: number ARS; written here as integer via Math.round (0 on create); >0 customer owes, 0 al dia, <0 credit in favour; read with c.saldo>0 and summed with + so it MUST be a number (a numeric string would concatenate). creadoEn: string ISO-8601 UTC datetime from new Date().toISOString() (create only; not a Timestamp). ultimoMovimiento: string 'YYYY-MM-DD' taken from the UTC date (toISOString().split('T')[0]); displayed with split('-').reverse().join('/') so it must be a string. id: used as React key and for updateDoc.",
+   "lines": "3488-3489, 3497-3498, 3534-3535, 3553-3556, 3571-3572, 3608-3620",
+   "notes": "Other writers of saldo outside this section use different rules: NuevoPedido 1185-1189 (exact name, only monto>0), remito 1809-1838 (case-insensitive name over the whole collection), ModalVentaRapida 2850-2856 (exact), devoluciones 5253-5256 (read-modify-write saldoActual - monto, unrounded float). migracion.html may add clienteId and mergedInto and set saldo with 2 decimals; this section ignores both fields. dashboard.html 315-325 and backup.html 96 read nombre/saldo/ultimoMovimiento. Docs without nombre are excluded by the orderBy query."
+  },
+  {
+   "collection": "cc_movimientos",
+   "docId": "Auto-id (addDoc).",
+   "ops": "addDoc in registrarPago (3520-3528); getDocs(query(collection, where('cliente','==',clientName))) without orderBy in registrarPago (3530) and DetalleCuentaCorriente.cargar (3968-3971); sorted client-side by fecha then createdAt with localeCompare. Never updated or deleted in this section.",
+   "fields": "Written for a payment: cliente: string (= cuentas_corrientes.nombre); tipo: 'pago'; formaPago: 'transferencia'|'efectivo'|'cheque'|'otro'; monto: number > 0 (float, up to 2 decimals, from parseFloat of InputMonto plain string); movimiento: number = -monto; obs: string trimmed, may be ''; fecha: string 'YYYY-MM-DD' UTC date; detalle: string 'Pago — <formaPago>' (em dash); createdAt: string ISO-8601 UTC datetime. Read: id; cliente; tipo ('pedido' adds to the balance, ANY other value subtracts; only 'pedido' and 'pago' are listed in facturado/pagado totals); monto: number (undefined or string would make saldo NaN / concatenate); fecha: string, first 10 chars must be YYYY-MM-DD (longer ISO strings tolerated, other formats printed raw); createdAt: string or missing (tie-break sort); detalle: string optional ('-' treated as empty; truncated to 60 chars on screen, 36 in PDF); obs: string optional; formaPago: string optional; origen: string optional, 'importado' renders a 'hist.' badge (other values written elsewhere: 'pedido_app','remito','venta_rapida','devolucion'); saldo: number optional snapshot shown as 'Saldo: $X' (only written by devoluciones 5260 and possibly imports).",
+   "lines": "3520-3532, 3965-3981, 3717-3723, 3802-3805, 3829-3866, 4057-4077",
+   "notes": "Fields written elsewhere and not read here: items[] (venta rapida), remitoNro, updatedAt, movimiento. Placeholders with monto 0 and obs 'Pendiente de facturar' (origen 'pedido_app', fecha = delivery date) are created by NuevoPedido and appear as '+$0 PEDIDO' rows in the ledger and PDF. fecha of order movements is the DELIVERY date (may be in the future), not the creation date. Code elsewhere (4792-4807) defends against fecha/createdAt being Firestore Timestamps; this section assumes strings."
+  },
+  {
+   "collection": "clientes",
+   "docId": "Auto-id (written elsewhere).",
+   "ops": "getDocs(query(collection, orderBy('nombre','asc'))) in cargarClientesDisponibles (3485). Read-only here.",
+   "fields": "nombre: string (only field read; falsy names dropped). The clientes.cuentaCorriente boolean is NOT read or written here, so creating a CC account does not flag the client and flagging a client elsewhere does not create a cuentas_corrientes doc.",
+   "lines": "3485-3490",
+   "notes": "Names are compared by exact string with cuentas_corrientes.nombre; a renamed client shows up again as 'available' and can get a second account."
+  },
+  {
+   "collection": "pedidos (prop only, no direct read in this section)",
+   "docId": "Auto-id for real orders; synthetic entries with id 'cc_<cc_movimientos id>' are injected by VistaDirector.calcularAlertas (4814-4827).",
+   "ops": "None in this section. TabStats receives the array loaded by VistaDirector.cargar (getDocs(collection 'pedidos'), 4762) merged with synthetic entries built from cc_movimientos of tipo 'pedido' that have no order with the same cliente + fechaEntrega.",
+   "fields": "estado: string ('cancelado' excluded); fechaEntrega: string 'YYYY-MM-DD' (startsWith('YYYY-MM') filter; parsed as fechaEntrega+'T12:00:00' local for weekday); cliente: string (grouping key, case-sensitive); items[]: {producto: string (grouping key), cantidad: number or numeric string (parseFloat), unidad: string ('kg','piezas','ganchos','bolsas','unidades' from orders; 'kg','pzas','bolsas','u' from venta rapida; missing on synthetic entries), kgReal: number|null|undefined (real weighed kg; venta rapida sets kgReal = cantidad even for non-kg units)}.",
+   "lines": "4109-4133",
+   "notes": "Synthetic entries carry items [{producto: <detalle text or 'Movimiento CC'>, cantidad: 0}] and estado 'despachado'."
+  }
+ ],
+ "clientState": [
+  {
+   "kind": "windowGlobal",
+   "key": "window.__fbReady + document event 'fbReady'",
+   "usage": "Mount effects call cargar() immediately if the flag is true, else addEventListener('fbReady', cargar) which is never removed. The flag is set by the module script at line 49; if the gstatic import fails the flag never becomes true and the tab stays on 'Cargando...' forever.",
+   "lines": "3502-3504, 3985-3987"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__db / window.__fb via fb()",
+   "usage": "fb() (line 819) returns {db, collection, addDoc, getDocs, query, where, orderBy, doc, updateDoc, Timestamp, increment, runTransaction, ...}. This section uses only getDocs/addDoc/updateDoc/query/where/orderBy; increment and runTransaction are available but unused.",
+   "lines": "3483, 3496, 3518, 3552, 3967"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.jspdf",
+   "usage": "jsPDF 2.5.1 UMD global used by ModalPdfCC.generarPDF. The shared helper window.compartirOdescargarPDF(doc, fileName) (2430-2446, native share on mobile) exists but is NOT used here; pdf.save() is called directly.",
+   "lines": "3729, 3884"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "prop contract: refresh (ccRefresh counter)",
+   "usage": "VistaDirector keeps ccRefresh (4735) and increments it after a Venta rapida from the floating button (5199); TabCuentasCorrientes and DetalleCuentaCorriente reload when the number changes (ref-guarded effects).",
+   "lines": "3506-3511, 3989-3993, 5159"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "prop contract: pedidos for TabStats",
+   "usage": "Array of real pedidos plus synthetic 'cc_' entries from VistaDirector state; TabStats does not distinguish them.",
+   "lines": "4104-4133, 5157"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "component contract: InputMonto value / ModalVentaRapida props",
+   "usage": "InputMonto (170-212) emits a plain numeric string with '.' decimal (max 2 decimals), shown with es-AR thousands separators; registrarPago parses it with parseFloat. ModalVentaRapida is opened from the detail with clienteInicial=<name>, clientes=null, onGuardado reloads detail + list.",
+   "lines": "3674-3675, 3514, 4085-4092"
+  },
+  {
+   "kind": "domId",
+   "key": "#btn-venta-rapida (z-index 9990) and #sersale_nav (z-index 9998)",
+   "usage": "Floating button appended to body by VistaDirector (4741-4757, bottom 90px, right 24px, 56px) and the fixed bottom nav at the end of the file. Modals in this section use z-index 10000 except ModalPdfCC (z-index 300), which therefore renders underneath both.",
+   "lines": "3901"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_role / sersale_auth (not touched in this section)",
+   "usage": "Only access gate for the whole page (lines 6-10). Nothing in this section reads the role or the user name, so payments carry no author.",
+   "lines": "6-10"
+  }
+ ],
+ "external": [
+  {
+   "service": "Firebase Firestore Web SDK 10.7.0 (gstatic CDN), project sersale-produccion",
+   "usage": "All reads and writes of cuentas_corrientes, cc_movimientos and clientes directly from the browser, no Firebase Auth imported.",
+   "lines": "34-48, 3483-3556, 3967-3971"
+  },
+  {
+   "service": "jsPDF 2.5.1 (cdnjs)",
+   "usage": "Generates the current-account statement PDF and triggers a browser download with pdf.save().",
+   "lines": "28, 3729-3884"
+  },
+  {
+   "service": "React 18 UMD + @babel/standalone 7.26.4 (unpkg)",
+   "usage": "Runtime and in-browser JSX compilation for these components. No WhatsApp, EmailJS, Maps or other third-party calls are made inside this section.",
+   "lines": "30-32"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "'Pago' button inside the account detail does nothing; the payment modal pops up later when going back",
+   "lines": "pedidos.html:3563-3569 (early return), 3566 (onPago), 3662-3694 (modal only in list return), 3539-3544 (dead reopen hack), 4023-4025",
+   "severity": "high",
+   "category": "logic / React",
+   "evidence": "`if(clienteAbierto) return <DetalleCuentaCorriente ... onPago={()=>setModalPago(clienteAbierto)} />;` returns before the JSX that contains `{modalPago&&(...)}`. With an account open, setModalPago changes state but the modal is never rendered. The block `if(clienteAbierto===modalPago){ setClienteAbierto(null); setTimeout(()=>setClienteAbierto(cli),50) }` shows the modal was meant to work over the detail and is now unreachable.",
+   "failureScenario": "Director opens 'Ver movimientos' for a client and taps '💰 Pago' in the header: nothing happens. When he taps '←', the list renders with modalPago still set and the payment sheet for that client appears unexpectedly, with pagoForm NOT reset (if an amount was typed earlier for another client and the sheet was closed with ×, that amount is pre-filled for this client).",
+   "suggestedFix": "Render the payment modal (and the new-account modal) in both branches, e.g. build the modals once and return `<>{clienteAbierto ? <Detalle.../> : lista}{modales}</>`; reset pagoForm in onPago; after a successful payment trigger a reload of the detail through a counter prop instead of the unmount/remount timeout.",
+   "confidence": "high"
+  },
+  {
+   "title": "Balance sign is dropped everywhere (Math.abs): a credit in favour of the customer is printed as 'Saldo: $X' in red on the PDF",
+   "lines": "pedidos.html:3561, 3609-3620, 3708, 3765, 3865-3866, 3877-3878, 3943, 3995, 4042-4047",
+   "severity": "high",
+   "category": "money",
+   "evidence": "`const fmt$ = n => \"$\"+Math.round(Math.abs(n)).toLocaleString(\"es-AR\")` is used for saldo in the list, the detail, the PDF summary box, the running-balance column and the totals row. The totals row always uses red: `pdf.setTextColor(192,57,43); pdf.text('Saldo: '+fmt$(saldo), ...)`. On screen a negative saldo shows the same '✅ Al día' label and a bare amount.",
+   "failureScenario": "Client owes $30.000, a return credit of $80.000 is registered (or he pays in advance): saldo = -50.000. The list shows '$50.000' (blue, 'Al día'), the detail shows 'Saldo $50.000', and the statement sent to the customer ends with 'Saldo: $50.000' in red with a running balance column of positive figures, i.e. it reads as a debt of 50.000 when the company owes him 50.000.",
+   "suggestedFix": "Use a signed formatter for balances (e.g. '-$50.000' or '$50.000 a favor'), a distinct state label 'Saldo a favor', and colour the PDF totals row by sign. Keep the abs formatter only for movement amounts that already carry an explicit +/- prefix.",
+   "confidence": "high"
+  },
+  {
+   "title": "Saldo recompute matches the client by exact name while the remito writer matches case-insensitively: registering a payment can erase charges from the stored balance",
+   "lines": "pedidos.html:3530-3535 (registrarPago), 3968-3981 (detail), 3485-3490 (available clients); compare 1744-1755, 1794-1838",
+   "severity": "critical",
+   "category": "persistence integrity",
+   "evidence": "registrarPago: `where(\"cliente\",\"==\",modalPago)` then `updateDoc(... {saldo:Math.round(saldo)})` overwrites the stored balance with the sum of exact-name movements only. The remito flow (outside this section) finds the CC account with `n.toLowerCase().trim() === lower`, writes the movement with `cliente: pedido.cliente` (the order's spelling) and stores a balance summed case-insensitively. The detail query is also exact, so such movements are invisible there and in the PDF.",
+   "failureScenario": "CC account 'Carnicería El Gaucho'. An order is loaded through 'Otro' as 'carnicería el gaucho' (or the client was renamed in Gestion de clientes to fix capitals) and a remito for $120.000 is issued: list balance rises by 120.000 but the ledger does not show the movement. The next 'Registrar pago' of $10.000 recomputes from exact-name movements and persists a balance 120.000 lower than real; dashboard.html and the saldo shown when creating orders inherit the wrong figure. Requires a name variant differing in case/outer spaces; the remito code, the client delete code and migracion.html all exist because such variants occur.",
+   "suggestedFix": "One shared helper recalcularSaldoCC(cuenta) used by every writer, keyed by a stable id (clienteId written by migracion.html, falling back to a normalised name), ideally updating saldo with increment() inside a runTransaction/batch together with the movement. Use the same key for the detail query.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Payment is three separate writes/reads without a transaction: partial failure invites a duplicate payment, concurrent phones can persist a stale balance",
+   "lines": "pedidos.html:3517-3546",
+   "severity": "medium",
+   "category": "persistence integrity / async",
+   "evidence": "`await addDoc(cc_movimientos ...)`, then `getDocs` of all movements, then `getDocs` + `updateDoc` of cuentas_corrientes; any exception after the first await lands in `catch(e){ alert(\"Error al guardar: \"+e.message) }` with the sheet still open and the amount still typed. Only `cSnap.docs[0]` is updated and `snap.metadata.fromCache` is never checked.",
+   "failureScenario": "(a) The movement is saved, the following read or update fails or hangs on a weak signal: the user sees an error or an endless 'Guardando...', re-registers the payment and the client ends up with two payments for one transfer. (b) Phone A registers a payment while phone B issues a remito for the same client; A reads the movements before B's movement is committed and writes its balance after B's write: the stored saldo omits B's charge until the next movement for that client (the detail, which recomputes, shows a different number than the list and dashboard). (c) Low confidence: if the SDK serves the query from its memory cache after a connection drop, the balance is computed from a partial set.",
+   "suggestedFix": "Write the movement and the balance atomically: runTransaction or writeBatch with `saldo: increment(-monto)` (both already exposed by fb()). Give the movement a client-generated id (doc(collection) + setDoc) so a retry is idempotent, and on error tell the user whether the movement was saved.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Dates are taken from UTC: payments, 'Último movimiento' and the PDF 'Generado' date become tomorrow after 21:00 in Buenos Aires",
+   "lines": "pedidos.html:3525, 3535, 3555, 3702-3703, 3757",
+   "severity": "medium",
+   "category": "dates / timezone",
+   "evidence": "`fecha:new Date().toISOString().split(\"T\")[0]`, `ultimoMovimiento:new Date().toISOString().split(\"T\")[0]`, `const hoy = new Date().toISOString().split(\"T\")[0]` and `hace30` built the same way.",
+   "failureScenario": "A payment registered on 10/11 at 21:30 (UTC-3) is stored with fecha '2026-11-11'; the ledger and the customer's statement show the payment on 11/11, the card says 'Último: 11/11/2026', and a PDF generated that night prints 'Generado: 11/11/2026' with a default 'Hasta' of tomorrow. The stored date cannot be corrected from the UI.",
+   "suggestedFix": "Add one local-date helper (e.g. `const hoyLocal = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }`, or Intl with timeZone 'America/Argentina/Buenos_Aires') and use it for fecha, ultimoMovimiento, hoy and hace30. Keep createdAt as ISO.",
+   "confidence": "high"
+  },
+  {
+   "title": "PDF 'Saldo' figures are the all-time balance, not the balance of the printed period: rows do not add up to the total",
+   "lines": "pedidos.html:3717-3724, 3765, 3802-3805, 3829, 3865-3866, 3876-3878",
+   "severity": "medium",
+   "category": "logic / money",
+   "evidence": "The table shows movements with `f >= desde && f <= hasta` and a running `saldoAcum` that starts from movements before `desde`, but the summary box and the totals row print `fmt$(saldo)`, the prop computed from ALL movements (3980-3981). No opening-balance row is printed, and `saldoPeriodo` (3724) is computed and never used.",
+   "failureScenario": "Orders are remitted the afternoon before delivery, so their movement carries tomorrow's fechaEntrega. The director exports the default range (hasta = today): the last row's running balance is $300.000 but the line right under the table says 'Saldo: $450.000' and 'Facturado' omits the 150.000. Same result for any past range (e.g. October) when November has movements. The first row's balance also starts from an undeclared previous balance, so Facturado - Pagado never matches Saldo.",
+   "suggestedFix": "Print a 'Saldo anterior al <desde>' row, end the table with 'Saldo al <hasta>' = last saldoAcum, and show the current balance separately only when it differs (labelled 'Saldo actual al <hoy>').",
+   "confidence": "high"
+  },
+  {
+   "title": "Load errors are swallowed and shown as valid empty states ('Sin cuentas corrientes', 'Sin movimientos', '✅ Al día')",
+   "lines": "pedidos.html:3499, 3491, 3982, 4042-4047, 4055-4056",
+   "severity": "medium",
+   "category": "async / errors",
+   "evidence": "`catch(e){ console.error(e); setClientes([]); }` and `catch(e){ console.error(e); setMovimientos([]); }`; saldo stays 0, and the summary renders `saldo>0?...:\"✅ Al día\"` also while movimientos is still null (loading).",
+   "failureScenario": "A failed query (network, rules, or a throw inside the sort) makes a debtor's detail show '$0 Facturado / $0 Pagado / ✅ Al día / Sin movimientos', and the list shows 'Sin cuentas corrientes' with a '+ Crear primera' button. While loading, every account briefly shows '✅ Al día'. The user has no retry and no hint that it is an error.",
+   "suggestedFix": "Keep a separate error state with a 'Reintentar' button, and render the summary card only after movimientos has loaded (skeleton meanwhile).",
+   "confidence": "high"
+  },
+  {
+   "title": "'Crear cuenta' has no in-flight guard or duplicate check: a double tap creates two accounts with the same name",
+   "lines": "pedidos.html:3549-3559, 3653-3656",
+   "severity": "medium",
+   "category": "persistence integrity",
+   "evidence": "crearCliente awaits addDoc with no `guardando` flag and the button has no disabled state; the modal only closes after the await. The available list is computed once when the modal opens.",
+   "failureScenario": "Double tap on 'Crear cuenta' (or two phones creating the same account): two cuentas_corrientes docs with the same nombre. Every balance writer updates only `docs[0]` of the name query, so one card shows the balance and the other stays at $0 'Al día' forever; there is no way to delete a CC account from the UI other than deleting the client (which also deletes all its movements).",
+   "suggestedFix": "Add a guardandoNuevo flag that disables the button, re-check for an existing doc with that name before writing, or use a deterministic doc id (clienteId) with setDoc so the create is idempotent. Also reset nuevoNombre when the modal closes.",
+   "confidence": "high"
+  },
+  {
+   "title": "New-account modal: '+ Crear primera' never loads the client list, and while loading it claims every client already has an account",
+   "lines": "pedidos.html:3605, 3593, 3645-3656, 3550",
+   "severity": "low",
+   "category": "logic / UX state",
+   "evidence": "The empty-state button is `onClick={()=>setModalNuevo(true)}` without `cargarClientesDisponibles()` (the header button calls both). `clientesDisponibles` starts as [] so the modal renders 'Todos los clientes ya tienen cuenta corriente' until two full-collection reads finish (or forever if they fail, 3491), and the 'Crear cuenta' button stays visible and answers `alert(\"Ingresá el nombre\")` although there is no field.",
+   "failureScenario": "Fresh database (or seed data with no accounts): tapping '+ Crear primera' shows 'Todos los clientes ya tienen cuenta corriente' and no select, so the first account cannot be created from that button. With accounts present, every open of the modal flashes the same false message for the duration of the reads.",
+   "suggestedFix": "Call cargarClientesDisponibles from both buttons (or in an effect on modalNuevo), use null as 'loading' state with a spinner, hide/disable 'Crear cuenta' when nothing is selected, and say 'Elegí un cliente'.",
+   "confidence": "high"
+  },
+  {
+   "title": "ModalPdfCC uses z-index 300 and renders under the bottom nav (9998) and the floating Venta rapida button (9990)",
+   "lines": "pedidos.html:3901-3903, 3941-3953",
+   "severity": "medium",
+   "category": "layout / iOS",
+   "evidence": "`zIndex:300` on the PDF overlay, while every other modal in the file uses 10000, `#sersale_nav` is `position:fixed;bottom:0;z-index:9998` (about 57px tall) and `#btn-venta-rapida` is fixed at bottom 90px / right 24px with z-index 9990. The sheet is bottom-anchored with 36px bottom padding, so the 'Descargar PDF' button spans roughly 36-87px from the bottom edge.",
+   "failureScenario": "On the iPhone the nav bar covers the lower part of the '📥 Descargar PDF' button (label partly cut, only the top strip is tappable) and the round ⚡ button sits on top of the right end of the 'Saldo actual' amount in the preview; tapping there opens Venta rapida over the PDF sheet. Geometry is estimated from the inline styles; the stacking order itself is certain.",
+   "suggestedFix": "Use zIndex 10000 like the other sheets and pad the sheet with `calc(32px + env(safe-area-inset-bottom))`; ideally render all sheets through one shared BottomSheet component.",
+   "confidence": "medium"
+  },
+  {
+   "title": "PDF file name is built with slashes; the sanitised date variable is computed and never used",
+   "lines": "pedidos.html:3883-3884",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`const fechaArchivo = new Date().toLocaleDateString('es-AR').replace(/\\//g,'-');` is unused; the name is `CC_Sersale_${cliente.replace(/\\s+/g,'_')}_${fmtF(desde)}_${fmtF(hasta)}.pdf` where fmtF returns 'DD/MM/YYYY' (or '—' for an empty date). Only whitespace is replaced in the client name.",
+   "failureScenario": "The requested download name is 'CC_Sersale_El_Gaucho_11/10/2026_10/11/2026.pdf'; the browser rewrites the slashes in its own way (different per browser), and a client name containing '/', ':' or quotes goes through unsanitised. What must be true for visible damage: the browser truncating at the slash instead of replacing it.",
+   "suggestedFix": "Build the name from the ISO strings (`${desde}_a_${hasta}`) and strip everything outside [A-Za-z0-9_-] from the client name after removing accents.",
+   "confidence": "medium"
+  },
+  {
+   "title": "PDF totals row is drawn without a page-break check and is clipped by the footer when the period has exactly 22 movements",
+   "lines": "pedidos.html:3809, 3871-3881, 3892-3894",
+   "severity": "low",
+   "category": "logic / layout",
+   "evidence": "Rows break the page only inside the loop (`if(y+ROW_H > PH-FTR_H-10)`); after the loop `y += 4` and a 28pt box with text at y+18 is drawn unconditionally, then drawFtrPDF fills a rect from PH-22. First-page rows start at y=228 with 26pt each, so 22 rows end at y=800; the totals text baseline lands at 822 while the footer band starts at 819.9 (A4 = 841.89pt).",
+   "failureScenario": "A statement whose range contains exactly 22 movements: the 'N movimientos / Saldo: $X' row overlaps the grey footer band and its text is partly painted over.",
+   "suggestedFix": "Before the totals row: `if(y+4+28 > PH-FTR_H-10){ drawFtrPDF(...); pdf.addPage(); y = 60; }`.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Stats 'Clientes activos' can never exceed 8",
+   "lines": "pedidos.html:4131, 4151-4152",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "`const rankC = Object.values(clis).sort(...).slice(0,8);` and the tile renders `{rankC.length}` under the label 'Clientes activos'.",
+   "failureScenario": "A month in which 35 different clients ordered shows 'Clientes activos: 8'; the figure is 8 every month once the business has at least 8 buying clients.",
+   "suggestedFix": "Keep `const totalClientes = Object.keys(clis).length` for the tile and slice only for the ranking list.",
+   "confidence": "high"
+  },
+  {
+   "title": "Stats 'Kg total' counts unit quantities as kg and ignores the real weighed kg for items ordered in kg",
+   "lines": "pedidos.html:4115-4123, 4127, 4171-4177",
+   "severity": "medium",
+   "category": "quantities",
+   "evidence": "`const kg = it.kgReal!=null ? parseFloat(it.kgReal)||0 : cant; if(it.unidad===\"kg\"){ ...kgTotal += cant; } else { ...kgTotal += kg; }`. For kg items kgReal is never used; for non-kg items without kgReal the unit count is added to kgTotal (the UI already has a '—' branch for kgTotal 0). Venta rapida stores `kgReal: parseFloat(it.cantidad)` for every unit (2826). Products are keyed by name only and keep the unit of the first item seen.",
+   "failureScenario": "'Salame' ordered as 12 unidades with no weight entered appears as '12 unidades / 12 kg' and is ranked as 12 kg. 'Bondiola' ordered 10 kg and weighed 11,3 kg at preparation counts as 10 kg, so the ranking does not match what was billed. A product sold in kg to one client and in piezas to another sums both numbers in 'Unidades'.",
+   "suggestedFix": "kg items: `kgTotal += it.kgReal!=null ? kgReal : cant`. Non-kg items: add to unidades, and to kgTotal only when a real weight exists (and the item is not a venta rapida copy of cantidad). Key by producto+unidad or keep unidades per unit.",
+   "confidence": "high"
+  },
+  {
+   "title": "Stats counts synthetic 'cc_' orders built from CC movements (products named after the movement detail, extra orders and clients)",
+   "lines": "pedidos.html:4109-4133, 4140, 4147 (source: 4814-4827)",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "TabStats receives VistaDirector's `pedidos`, which includes entries `{id:\"cc_\"+d.id, items: m.items || [{producto: m.detalle||\"Movimiento CC\", cantidad:0}], estado:\"despachado\"}` for every tipo 'pedido' movement without an order of the same cliente + fechaEntrega; TabStats filters only by estado and fechaEntrega.",
+   "failureScenario": "An imported historical movement, or a placeholder/remito movement whose order later changed delivery date or was deleted, adds one 'pedido' to the month counter, the weekday chart and the client ranking, and a pseudo product such as 'Jamón cocido, Salame, Bondiola' with 0 kg to 'Productos distintos'.",
+   "suggestedFix": "In TabStats ignore entries whose id starts with 'cc_' (or pass the raw pedidos list to Stats), or mark synthetic entries with a flag and exclude them.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Detail and PDF assume fecha/createdAt are strings; a Timestamp in either field empties or crashes the account view",
+   "lines": "pedidos.html:3974-3978, 3718, 3804, 3996-3999, 3709-3711, 3617",
+   "severity": "medium",
+   "category": "data types",
+   "evidence": "`(a.fecha||\"\").localeCompare(b.fecha||\"\")`, `(a.createdAt||\"\").localeCompare(...)`, `(m.fecha||\"\").substring(0,10)`, `f.substring(0,10)` and `cl.ultimoMovimiento.split(\"-\")`. calcularAlertas (4792-4807) explicitly handles `m.fecha` / `m.createdAt` being Firestore Timestamps or {seconds} objects, which suggests such documents exist (imported 'hist.' movements).",
+   "failureScenario": "If one movement of a client has a Timestamp fecha, the sort throws inside the try, the catch sets movimientos to [] and the debtor is shown as 'Sin movimientos / ✅ Al día' (a single such movement instead throws in fmtF during render and blanks the whole app, there is no error boundary). Needs to be true: at least one cc_movimientos doc with a non-string fecha/createdAt, or a cuentas_corrientes doc with a non-string ultimoMovimiento.",
+   "suggestedFix": "Normalise on read with one helper (string, Timestamp.toDate, {seconds}) to a local 'YYYY-MM-DD' and use it for sorting, filtering and display.",
+   "confidence": "low"
+  },
+  {
+   "title": "Accounts merged by the migration tool are still listed, and the next payment undoes a consolidated balance",
+   "lines": "pedidos.html:3497-3498, 3530-3535, 3607-3634 (see migracion.html 603-624)",
+   "severity": "high",
+   "category": "persistence integrity / cross-page",
+   "evidence": "migracion.html can set `saldo: suma` on a principal account and `{saldo:0, mergedInto, clienteId}` on the others without renaming their cc_movimientos. This section never reads clienteId/mergedInto: cargar lists every doc and registrarPago overwrites saldo with the sum of movements whose cliente equals the principal's exact name.",
+   "failureScenario": "After consolidating 'El Gaucho' ($100.000) and 'el gaucho ' ($50.000) into $150.000, registering a $20.000 payment stores $80.000 instead of $130.000, and the merged account keeps appearing as a second card at $0. Needs to be true: the migration was run with 'consolidar saldo' for at least one duplicate group.",
+   "suggestedFix": "Query movements by clienteId when present (fallback to name), hide docs with mergedInto, and move balance maintenance to a shared helper.",
+   "confidence": "low"
+  }
+ ],
+ "security": [
+  {
+   "title": "Balances and payments are writable by anyone who can reach Firestore",
+   "detail": "The page imports only firebase-firestore (no Firebase Auth), with the public web config in the HTML. The only gate is a sessionStorage flag checked in an inline script (sersale_role / sersale_auth === 'ok'). Unless Firestore rules restrict by something other than auth, any visitor can read every client's debt and add, alter or delete cc_movimientos and cuentas_corrientes.saldo. The CC tab being 'director only' is enforced purely in the client.",
+   "lines": "pedidos.html:4-11, 34-48, 3520-3535, 3553-3556"
+  },
+  {
+   "title": "No audit trail on money movements",
+   "detail": "Payment documents do not store who registered them (sersale_usuario / sersale_nombre exist in sessionStorage but are not written), nor the device; movements cannot be voided, only added. A wrong or fraudulent payment cannot be attributed or reversed from the app.",
+   "lines": "pedidos.html:3520-3528"
+  },
+  {
+   "title": "Stored balance is trusted, client-computed and overwritable",
+   "detail": "cuentas_corrientes.saldo is recomputed in the browser and overwritten with updateDoc; nothing server-side validates it against the movements. dashboard.html and the order form read this field directly.",
+   "lines": "pedidos.html:3530-3535"
+  },
+  {
+   "title": "No markup injection in this section",
+   "detail": "All client names, details and observations are rendered through React text nodes or jsPDF text(); no innerHTML, no URL building. The only unsanitised sink is the download file name built from the client name and dates.",
+   "lines": "pedidos.html:3884"
+  }
+ ],
+ "ux": [
+  {
+   "title": "Statement PDF is downloaded instead of shared",
+   "problem": "generarPDF calls pdf.save() directly. On the iPhone that means a download prompt (or an in-app preview in the home-screen app) and then hunting the file in Files to send it by WhatsApp. The file already has window.compartirOdescargarPDF (native share sheet with download fallback) used for remitos.",
+   "suggestion": "Call window.compartirOdescargarPDF(pdf, fileName) synchronously from the tap so the share sheet opens with the PDF ready for WhatsApp; add the logo (window.__sersaleLogo) and the current brand colour (#A4232A instead of 192,57,43).",
+   "impact": "high",
+   "lines": "pedidos.html:3884"
+  },
+  {
+   "title": "A wrong payment cannot be corrected, dated or reviewed before saving",
+   "problem": "There is no edit/delete/void for movements, no date field (always 'today'), no confirmation step and the sheet does not show the client's current balance. A typo in the amount is permanent unless someone edits Firestore by hand.",
+   "suggestion": "Show the current balance and a 'Saldo total' quick-fill chip in the sheet, add an optional date (default today, local), and allow voiding a movement from the ledger (long-press or swipe) by writing a reversing movement with a reason.",
+   "impact": "high",
+   "lines": "pedidos.html:3513-3547, 3662-3694, 4057-4081"
+  },
+  {
+   "title": "No feedback after saving and no optimistic update",
+   "problem": "After 'Confirmar pago' the sheet just closes; the card keeps the old balance until the full reload finishes, with no spinner or toast. Creating an account gives no feedback either. Errors use alert(), one of them just 'Error'.",
+   "suggestion": "Update the card balance locally at once, show a short toast ('Pago de $X registrado') with 'Deshacer', and replace alert() (lines 3515, 3545, 3550, 3558, 3886) with inline messages in the sheet.",
+   "impact": "high",
+   "lines": "pedidos.html:3515, 3536-3538, 3545, 3550, 3557-3558, 3886"
+  },
+  {
+   "title": "Account detail is a page nested inside the Director page",
+   "problem": "DetalleCuentaCorriente renders its own .crm-page (min-height 100vh) and sticky header inside the Director's padded tab container: two stacked dark headers with two different '←' arrows, 32px side padding, the inner sticky header slides over the outer one on scroll, and the scroll position is not reset when entering nor restored when leaving. Switching tabs unmounts the CC tab and loses the open account.",
+   "suggestion": "Present the detail as a full-screen layer (fixed, own scroll, slide-in) or lift it to VistaDirector like HistorialCliente; remember the list scroll position; keep the open account in parent state or in the URL hash so back-swipe works.",
+   "impact": "medium",
+   "lines": "pedidos.html:3563-3569, 4009-4027"
+  },
+  {
+   "title": "Bottom sheets are not keyboard- or safe-area-aware",
+   "problem": "The payment sheet is bottom-anchored with fixed padding and no max-height/scroll; with the iOS keyboard open 'Confirmar pago' ends under the keyboard, and tapping the backdrop to dismiss the keyboard closes the sheet. No env(safe-area-inset-bottom), no body scroll lock, monto is not auto-focused.",
+   "suggestion": "Shared BottomSheet: max-height based on visualViewport, internal scroll, sticky action button above the keyboard, safe-area padding, backdrop tap ignored while there is unsaved input, autoFocus on the amount, Enter/Done submits.",
+   "impact": "medium",
+   "lines": "pedidos.html:3638-3640, 3663-3665, 3674-3675, 3901-3903"
+  },
+  {
+   "title": "Small tap targets",
+   "problem": "Back arrow is a 20px glyph with padding 0; header pills 'PDF / Venta / Pago' are about 27px tall with 6px gaps; close '×' buttons are 32x32; '+ Nueva' about 29px; card buttons about 33px.",
+   "suggestion": "Minimum 44x44 hit areas (padding or min-height), larger spacing between the three header actions, or move them to a bottom action bar in the detail.",
+   "impact": "medium",
+   "lines": "pedidos.html:3594, 3623-3630, 3643, 3668, 3910, 4011, 4017-4025"
+  },
+  {
+   "title": "Account list has no search, filter or useful order",
+   "problem": "All accounts are rendered alphabetically (Firestore byte order: capitals first, accents last) with no search box and no 'only debtors' or 'largest debt first' option; the total-debt figure is rendered at 13px while the count is 22px. The ledger also renders every movement with no filter by type or date.",
+   "suggestion": "Search field, chips 'Con deuda / Al día / A favor', sort by debt by default, locale-aware name sort, and paginate or lazy-render long ledgers.",
+   "impact": "medium",
+   "lines": "pedidos.html:3497, 3580, 3607-3634, 4057"
+  },
+  {
+   "title": "Inputs and selects under 16px",
+   "problem": "Selects, the observations input, the two date inputs and the month input use fontSize 14. Zoom-on-focus is currently masked by maximum-scale=1.0 in the viewport meta, which also blocks pinch zoom for accessibility.",
+   "suggestion": "Use 16px on all form controls so the viewport restriction can be dropped.",
+   "impact": "low",
+   "lines": "pedidos.html:3647, 3678, 3686, 3917-3923, 4138"
+  },
+  {
+   "title": "PDF and stats presentation details",
+   "problem": "The statement has no opening-balance row, return credits appear as 'PAGO', $0 'Pendiente de facturar' placeholders are printed as rows, detail is cut at 36 characters and the payment reference (obs) is never printed. 'Generando...' never shows because generation is synchronous. Stats prints '1 pedidos', decimals with a dot ('12.5 kg') and no thousands separator; clearing the month shows all-time data without saying so.",
+   "suggestion": "Add 'Saldo anterior', a 'NOTA DE CRÉDITO' chip for origen 'devolucion', hide $0 placeholders, wrap the detail with splitTextToSize and include obs; format quantities with toLocaleString('es-AR'); show 'Todo el historial' when no month is selected.",
+   "impact": "low",
+   "lines": "pedidos.html:3726-3727, 3850-3856, 4140, 4172-4176"
+  },
+  {
+   "title": "Endless 'Cargando...' when Firebase does not load",
+   "problem": "If the Firestore module fails to load, window.__fbReady never becomes true and both lists stay on 'Cargando...' with no timeout, message or retry.",
+   "suggestion": "Timeout with an offline message and a retry button; consider enabling Firestore persistent cache so the last balances are visible offline.",
+   "impact": "low",
+   "lines": "pedidos.html:3502-3504, 3600, 3985-3987, 4055"
+  }
+ ],
+ "perf": [
+  {
+   "title": "Every payment re-reads the client's whole ledger and then the whole account list",
+   "problem": "registrarPago reads all cc_movimientos of the client to recompute the balance (grows forever with history), runs a second query to find the account doc whose id is already in state, then cargar() re-reads the entire cuentas_corrientes collection.",
+   "suggestion": "Update saldo with increment(-monto) in a batch/transaction using the doc id already held in `clientes`, and patch the local state instead of reloading; keep a full recompute as an explicit 'Recalcular' maintenance action.",
+   "impact": "medium",
+   "lines": "pedidos.html:3530-3538"
+  },
+  {
+   "title": "No caching between list and detail; full refetch on every navigation",
+   "problem": "Opening an account fetches all its movements each time, going back refetches the whole list (3565), switching Director tabs unmounts the CC tab and refetches again, and nothing is kept between visits.",
+   "suggestion": "Keep accounts and per-client movements in a parent-level cache (or one onSnapshot on cuentas_corrientes with cleanup) and refresh in the background; show cached data immediately.",
+   "impact": "medium",
+   "lines": "pedidos.html:3494-3504, 3565, 3965-3987"
+  },
+  {
+   "title": "New-account modal does two sequential full-collection reads",
+   "problem": "cargarClientesDisponibles reads all clientes and then all cuentas_corrientes one after the other, although the accounts are already in the `clientes` state of this component.",
+   "suggestion": "Reuse the loaded accounts and fetch only clientes (or receive the client list as a prop from VistaDirector, which already loads it for alerts).",
+   "impact": "low",
+   "lines": "pedidos.html:3481-3492"
+  },
+  {
+   "title": "Long ledgers rendered in full, totals recomputed on every render",
+   "problem": "The detail renders one card per movement with no pagination or windowing and recomputes reverse(), totalPedidos and totalPagos on each render; ModalPdfCC re-filters all movements on every keystroke of the date pickers.",
+   "suggestion": "useMemo for derived totals and the reversed list, render the latest 50 with 'Ver más', memoise the filtered set by (desde, hasta).",
+   "impact": "low",
+   "lines": "pedidos.html:3717-3724, 4004-4005, 4057"
+  },
+  {
+   "title": "TabStats recomputes all aggregates over the entire order history on each render",
+   "problem": "filter + three aggregation passes over every pedido ever loaded (plus synthetic entries) run on every render of VistaDirector while the Stats tab is open, with no memoisation.",
+   "suggestion": "Wrap the aggregation in useMemo keyed by [pedidos, periodo]; longer term query pedidos by fechaEntrega range instead of loading the whole collection in the parent.",
+   "impact": "low",
+   "lines": "pedidos.html:4109-4134"
+  }
+ ]
+}
