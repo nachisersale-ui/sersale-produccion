@@ -177,7 +177,7 @@
               {pedido.items.map((it,i)=>(
                 <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
                   <span style={{flex:1,fontSize:13,color:"#262C32"}}>{it.producto}</span>
-                  <input type="number" inputMode="decimal" step="any" min="0" placeholder="kg"
+                  <SersaleBase.InputDecimal placeholder="kg"
                     style={{width:90,padding:"10px 12px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:16,textAlign:"right"}}
                     value={kgValues[i]||""} onChange={e=>setKgValues({...kgValues,[i]:e.target.value})} />
                   <span style={{fontSize:12,color:"#79828B",width:24}}>kg</span>
@@ -207,7 +207,7 @@
               {pedido.items.map((it,i)=>(
                 <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
                   <span style={{flex:1,fontSize:13,color:"#262C32"}}>{it.producto}</span>
-                  <input type="number" inputMode="decimal" step="any" min="0" placeholder="kg"
+                  <SersaleBase.InputDecimal placeholder="kg"
                     style={{width:90,padding:"10px 12px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:16,textAlign:"right"}}
                     value={editKgValues[i]!=null ? editKgValues[i] : ""} onChange={e=>setEditKgValues({...editKgValues,[i]:e.target.value})} />
                   <span style={{fontSize:12,color:"#79828B",width:24}}>kg</span>
@@ -535,8 +535,8 @@
                       </select>
                 )}
                 <div style={{display:"flex",gap:8}}>
-                  <input style={{flex:1,padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
-                    type="number" inputMode="decimal" step="any" min="0" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
+                  <SersaleBase.InputDecimal style={{flex:1,padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
+                     placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
                   <select style={{width:110,padding:"12px 10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
                     value={item.unidad} onChange={e=>updItem(i,"unidad",e.target.value)}>
                     {UNIDADES.map(u=><option key={u} value={u}>{u}</option>)}

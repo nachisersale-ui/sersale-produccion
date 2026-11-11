@@ -279,8 +279,8 @@
                   <option value="Otro">Otro (especificar en observaciones)</option>
                 </select>
                 <div style={{display:"flex",gap:8,marginTop:8}}>
-                  <input style={{flex:1,padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
-                    type="number" inputMode="decimal" min="0" step="any" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
+                  <SersaleBase.InputDecimal style={{flex:1,padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                     placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
                   <select style={{width:120,padding:"12px 10px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                     value={item.unidad} onChange={e=>updItem(i,"unidad",e.target.value)}>
                     {UNIDADES.map(u=><option key={u} value={u}>{u}</option>)}
@@ -999,8 +999,8 @@
                       value={item.producto} onChange={e=>updEditItem(i,"producto",e.target.value)} placeholder="Producto" />
                   )}
                   <div style={{display:"flex",gap:8,marginTop:8}}>
-                    <input style={{flex:1,padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
-                      type="number" inputMode="decimal" min="0" step="any" placeholder="Cantidad" value={item.cantidad} onChange={e=>updEditItem(i,"cantidad",e.target.value)} />
+                    <SersaleBase.InputDecimal style={{flex:1,padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                       placeholder="Cantidad" value={item.cantidad} onChange={e=>updEditItem(i,"cantidad",e.target.value)} />
                     <select style={{width:120,padding:"12px 10px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                       value={item.unidad} onChange={e=>updEditItem(i,"unidad",e.target.value)}>
                       {UNIDADES.map(u=><option key={u} value={u}>{u}</option>)}
@@ -1075,7 +1075,7 @@
                   <input style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                     placeholder="Proveedor / tropa" value={mp.proveedor} onChange={e=>updMP(i,"proveedor",e.target.value)} />
                   <div style={{display:"flex",alignItems:"center",gap:4}}>
-                    <input type="number" inputMode="decimal" style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
+                    <SersaleBase.InputDecimal style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                       placeholder="Kg" value={mp.kg} onChange={e=>updMP(i,"kg",e.target.value)} />
                     <span style={{fontSize:11,color:"#79828B"}}>kg</span>
                   </div>
@@ -1097,7 +1097,7 @@
                 <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:8}}>
                   <input style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                     placeholder="Nombre del producto" value={p.nombre} onChange={e=>updProd(i,"nombre",e.target.value)} />
-                  <input type="number" inputMode="decimal" style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
+                  <SersaleBase.InputDecimal style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                     placeholder="Cant." value={p.cantidad} onChange={e=>updProd(i,"cantidad",e.target.value)} />
                   <select style={{padding:"8px",borderRadius:8,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                     value={p.unidad} onChange={e=>updProd(i,"unidad",e.target.value)}>
@@ -1177,7 +1177,7 @@
                   placeholder="Nombre del producto (como figura en Stock)" value={it.nombre} list="stock-nombres" autoComplete="off"
                   onChange={e=>updSalidaItem(i,"nombre",e.target.value)} />
                 <div style={{display:"flex",gap:8}}>
-                  <input type="number" inputMode="decimal" style={{flex:1,padding:"10px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                  <SersaleBase.InputDecimal style={{flex:1,padding:"10px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                     placeholder="Cantidad" value={it.cantidad} onChange={e=>updSalidaItem(i,"cantidad",e.target.value)} />
                   <select style={{width:110,padding:"10px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                     value={it.unidad} onChange={e=>updSalidaItem(i,"unidad",e.target.value)}>
@@ -1231,12 +1231,12 @@
               </div>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Peso total (kg)</label>
-                <input type="number" inputMode="decimal" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <SersaleBase.InputDecimal style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   placeholder="0" value={faenaForm.pesoTotal} onChange={e=>{ const pt=e.target.value; setFaenaForm({...faenaForm,pesoTotal:pt,pesoPromedio:promedioFaena(faenaForm.cantidad,pt)}); }} />
               </div>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Peso prom. (kg)</label>
-                <input type="number" inputMode="decimal" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <SersaleBase.InputDecimal style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   placeholder="0" value={faenaForm.pesoPromedio} onChange={e=>setFaenaForm({...faenaForm,pesoPromedio:e.target.value})} />
               </div>
             </div>
@@ -1282,12 +1282,12 @@
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Cantidad actual *</label>
-                <input type="number" inputMode="decimal" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <SersaleBase.InputDecimal style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   placeholder="0" value={stockForm.cantidad} onChange={e=>setStockForm({...stockForm,cantidad:e.target.value})} />
               </div>
               <div>
                 <label style={{display:"block",fontWeight:600,fontSize:13,color:"#3A424A",marginBottom:6}}>Mínimo alerta</label>
-                <input type="number" inputMode="decimal" style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
+                <SersaleBase.InputDecimal style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff"}}
                   placeholder="0 = sin alerta" value={stockForm.minimo} onChange={e=>setStockForm({...stockForm,minimo:e.target.value})} />
               </div>
             </div>

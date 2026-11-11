@@ -191,6 +191,70 @@
     return [ejecutar, estado[0]];
   }
 
+  // ── Campo para kilos y cantidades con decimales ──────────────────────────
+  // El campo "número" del navegador se lleva mal con la coma decimal en el
+  // iPhone. Este campo es de texto con teclado numérico: acepta coma o punto
+  // (30,4 o 30.4), muestra coma y entrega el valor como siempre se guardó, con
+  // punto ("30.4"). En kilos el punto nunca es separador de miles.
+
+  /** Lo que se va escribiendo: solo dígitos y una coma; como mucho `dec` decimales. */
+  function decimalLimpiar(texto, dec) {
+    var t = String(texto == null ? "" : texto).replace(/\./g, ",").replace(/[^\d,]/g, "");
+    var i = t.indexOf(",");
+    if (i === -1) return t;
+    return t.slice(0, i) + "," + t.slice(i + 1).replace(/,/g, "").slice(0, dec);
+  }
+  /** Texto del campo -> valor guardado: "30,4" -> "30.4", "30," -> "30", ",5" -> "0.5". */
+  function decimalValor(texto) {
+    var t = String(texto == null ? "" : texto).replace(",", ".");
+    if (t === "" || t === ".") return "";
+    if (t.charAt(0) === ".") t = "0" + t;
+    if (t.charAt(t.length - 1) === ".") t = t.slice(0, -1);
+    return t;
+  }
+  /** Valor guardado -> texto del campo: "30.4" o 30.4 -> "30,4". */
+  function decimalVista(valor) {
+    if (valor == null || valor === "") return "";
+    return String(valor).replace(".", ",");
+  }
+  /**
+   * Para React. Se usa como un <input>: `value` con punto decimal (texto o número)
+   * y `onChange` recibe { target: { value } } con punto decimal.
+   *   <SersaleBase.InputDecimal placeholder="kg" value={kg} onChange={e => setKg(e.target.value)} />
+   * `decimales`: máximo de decimales (3 por defecto: hasta gramos).
+   */
+  function InputDecimal(props) {
+    var R = window.React;
+    var dec = props.decimales == null ? 3 : props.decimales;
+    var afuera = props.value == null ? "" : String(props.value);
+    var estado = R.useState(decimalVista(afuera));
+    var texto = estado[0];
+    var setTexto = estado[1];
+    // Si el valor cambia desde afuera (otra hoja, formulario limpiado), se refleja;
+    // mientras la persona escribe ("30,") no se le pisa lo que lleva puesto.
+    R.useEffect(
+      function () {
+        var mio = decimalValor(texto);
+        var igual = mio === afuera || (mio !== "" && afuera !== "" && Number(mio) === Number(afuera));
+        if (!igual) setTexto(decimalVista(afuera));
+      },
+      [afuera]
+    );
+    var resto = {};
+    for (var k in props) if (k !== "value" && k !== "onChange" && k !== "decimales") resto[k] = props[k];
+    return R.createElement(
+      "input",
+      Object.assign({ type: "text", inputMode: "decimal", autoComplete: "off", enterKeyHint: "done" }, resto, {
+        value: texto,
+        onChange: function (e) {
+          var t = decimalLimpiar(e.target.value, dec);
+          setTexto(t);
+          if (props.onChange) props.onChange({ target: { value: decimalValor(t) } });
+        },
+      })
+    );
+  }
+
   // ── Gesto "atrás" del teléfono ───────────────────────────────────────────
   // Cada vista o ventana que se abre dentro de una página anota una entrada en
   // el historial. Así el gesto de volver (deslizar desde el borde en el iPhone,
@@ -276,6 +340,10 @@
     waLink: waLink,
     esc: esc,
     useAccion: useAccion,
+    InputDecimal: InputDecimal,
+    decimalLimpiar: decimalLimpiar,
+    decimalValor: decimalValor,
+    decimalVista: decimalVista,
     abrirAtras: abrirAtras,
     useAtras: useAtras,
   };

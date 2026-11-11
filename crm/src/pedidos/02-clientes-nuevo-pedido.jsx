@@ -873,8 +873,8 @@
                       </select>
                 )}
                 <div style={{display:"flex",gap:8}}>
-                  <input style={{flex:1,padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
-                    type="number" inputMode="decimal" min="0" step="any" placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
+                  <SersaleBase.InputDecimal style={{flex:1,padding:"12px 14px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
+                     placeholder="Cantidad" value={item.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
                   <select style={{width:110,padding:"12px 10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:14,background:"#fff",outline:"none"}}
                     value={item.unidad} onChange={e=>updItem(i,"unidad",e.target.value)}>
                     {UNIDADES.map(u=><option key={u} value={u}>{u}</option>)}

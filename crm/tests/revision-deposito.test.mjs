@@ -161,7 +161,7 @@ test("depósito: dos teléfonos corrigiendo kg del mismo pedido listo: lo que gu
     await texto(h, BUEN_SABOR, { exact: true }).first().click();
     await boton(h, "⚖️ kg").click();
     await texto(h, "Editar kg — " + BUEN_SABOR).waitFor();
-    assert.equal(await camposKg(h).nth(1).inputValue(), "9.76");
+    assert.equal(await camposKg(h).nth(1).inputValue(), "9,76");
 
     // El director, desde su teléfono, corrige el pernil: pesaba 11,4.
     const otro = copia(antes);
@@ -187,7 +187,7 @@ test("depósito: dos teléfonos corrigiendo kg del mismo pedido listo: lo que gu
       if (!(await boton(h, "⚖️ kg").count())) await texto(h, BUEN_SABOR, { exact: true }).first().click();
       await boton(h, "⚖️ kg").click();
       await texto(h, "Editar kg — " + BUEN_SABOR).waitFor();
-      assert.equal(await camposKg(h).nth(1).inputValue(), "11.4");
+      assert.equal(await camposKg(h).nth(1).inputValue(), "11,4");
       await camposKg(h).nth(0).fill("21");
       await boton(h, "✓ Guardar kg").click();
       const final = await esperarDoc(h, "pedidos/" + id, (d) => d.items[0].kgReal === 21);
@@ -247,7 +247,7 @@ test("depósito sin señal: la hoja de kg no se cierra ni pierde lo escrito, y a
     await toast(h, /Sin conexión/).first().waitFor();
     await pausa(2500); // la hoja se cerraba sola a los 1,5 s
     assert.equal(await texto(h, "Anotar kg por ítem").count(), 1, "la hoja sigue abierta: no se guardó nada");
-    assert.deepEqual([await camposKg(h).nth(0).inputValue(), await camposKg(h).nth(1).inputValue(), await camposKg(h).nth(2).inputValue()], ["2.1", "3.05", "4.2"]);
+    assert.deepEqual([await camposKg(h).nth(0).inputValue(), await camposKg(h).nth(1).inputValue(), await camposKg(h).nth(2).inputValue()], ["2,1", "3,05", "4,2"]);
     assert.equal((await h.doc("pedidos/" + id)).estado, "pendiente");
 
     await h.sinRed(false);

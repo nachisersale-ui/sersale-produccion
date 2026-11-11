@@ -92,3 +92,23 @@ test("texto: comparar nombres y armar links", () => {
   assert.equal(B.waLink("Hola & chau #1 +54", "11 6763-7860"), "https://wa.me/1167637860?text=Hola%20%26%20chau%20%231%20%2B54");
   assert.equal(B.esc(`<b onclick="x">O'Brien & Cía</b>`), "&lt;b onclick=&quot;x&quot;&gt;O&#39;Brien &amp; Cía&lt;/b&gt;");
 });
+
+test("campo de kilos: acepta coma o punto y entrega el valor con punto", () => {
+  const B = cargar();
+  // lo que se va escribiendo
+  assert.equal(B.decimalLimpiar("30,4", 3), "30,4");
+  assert.equal(B.decimalLimpiar("30.4", 3), "30,4"); // el punto es decimal, nunca miles
+  assert.equal(B.decimalLimpiar("30,", 3), "30,");
+  assert.equal(B.decimalLimpiar("30,4,5", 3), "30,45");
+  assert.equal(B.decimalLimpiar("12,34567", 3), "12,345");
+  assert.equal(B.decimalLimpiar("3o,4 kg", 3), "3,4");
+  assert.equal(B.decimalLimpiar("-5", 3), "5");
+  // valor que se guarda
+  const casos = [["30,4", "30.4"], ["30,", "30"], [",5", "0.5"], ["", ""], [",", ""], ["0,250", "0.250"], ["12", "12"]];
+  for (const [texto, valor] of casos) assert.equal(B.decimalValor(texto), valor, JSON.stringify(texto));
+  // valor guardado -> lo que se muestra
+  assert.equal(B.decimalVista("30.4"), "30,4");
+  assert.equal(B.decimalVista(30.4), "30,4");
+  assert.equal(B.decimalVista(null), "");
+  assert.equal(B.decimalVista(""), "");
+});

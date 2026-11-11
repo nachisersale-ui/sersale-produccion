@@ -335,7 +335,7 @@
                     )}
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 80px 1fr",gap:6}}>
-                    <input type="number" inputMode="decimal" step="any" min="0" style={{padding:"9px 10px",borderRadius:9,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
+                    <SersaleBase.InputDecimal style={{padding:"9px 10px",borderRadius:9,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
                       placeholder="Cant." value={it.cantidad} onChange={e=>updItem(i,"cantidad",e.target.value)} />
                     <select style={{padding:"9px 6px",borderRadius:9,border:"1.5px solid #D8DCE0",fontSize:12,background:"#fff"}}
                       value={it.unidad} onChange={e=>updItem(i,"unidad",e.target.value)}>

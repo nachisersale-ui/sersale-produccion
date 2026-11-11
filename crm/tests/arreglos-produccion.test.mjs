@@ -361,7 +361,7 @@ test("salida: si un nombre no figura no se descuenta nada y el formulario queda;
     assert.equal(db.stock_produccion[idPanceta].cantidad, panceta, "no se descontó la línea que sí coincidía");
     assert.equal(Object.keys(db.stock_movimientos).length, movsAntes, "no se registró ningún movimiento");
     assert.equal(await nombres.nth(0).inputValue(), "panceta ahumada ", "lo escrito sigue en el formulario");
-    assert.equal(await cantidades.nth(1).inputValue(), "2.5");
+    assert.equal(await cantidades.nth(1).inputValue(), "2,5");
 
     // Corrige el nombre: la unidad pasa sola a la del ítem (kg).
     await nombres.nth(1).fill("Chorizo Puro Cerdo");
@@ -496,12 +496,12 @@ test("faena: el promedio acompaña a las cabezas, la fecha propuesta es hoy y ed
     await p.getByRole("button", { name: "+ Registrar" }).click();
     const modal = p.getByText("Registrar faena").locator("xpath=../..");
     assert.equal(await modal.locator('input[type="date"]').inputValue(), HOY);
-    const num = modal.locator('input[type="number"]'); // cabezas, peso total, promedio
+    const num = modal.locator('input[inputmode="numeric"], input[inputmode="decimal"]'); // cabezas, peso total, promedio
     await num.nth(0).fill("10");
     await num.nth(1).fill("1000");
     assert.equal(await num.nth(2).inputValue(), "100");
     await num.nth(0).fill("12"); // corrige las cabezas
-    assert.equal(await num.nth(2).inputValue(), "83.3");
+    assert.equal(await num.nth(2).inputValue(), "83,3"); // los decimales se muestran con coma
     await modal.getByRole("button", { name: "Guardar" }).click();
     await p.locator(".ss-toast", { hasText: "Faena guardada" }).waitFor();
     let db = await h.dump();

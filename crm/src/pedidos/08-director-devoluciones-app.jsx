@@ -851,7 +851,7 @@
                   </div>
                   <div>
                     <label style={{display:"block",fontWeight:600,fontSize:12,color:"#3A424A",marginBottom:5}}>Cantidad</label>
-                    <input type="number" inputMode="decimal" min="0" step="any" aria-label="Cantidad devuelta" style={{width:"100%",padding:"10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
+                    <SersaleBase.InputDecimal aria-label="Cantidad devuelta" style={{width:"100%",padding:"10px",borderRadius:12,border:"1.5px solid #D8DCE0",fontSize:13,background:"#fff"}}
                       placeholder="0" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})} />
                   </div>
                   <div>
