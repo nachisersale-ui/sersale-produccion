@@ -253,7 +253,8 @@
       const borrador = { kg: rsvKilos(kg), kgHasta: rsvKilos(kgHasta), precioKg: SersaleBase.numero(precioKg), sena: SersaleBase.numero(sena) };
       const total = rsvTotal(borrador), resta = rsvResta(borrador);
       // Con un rango de kilos ("de 10 a 12"), el total y lo que resta también son un rango.
-      const totalMax = rsvTotalMax(borrador);
+      // Con la seña igual al total del tope no resta nada ("$0"): con el resto del mínimo decía "-$20.000".
+      const totalMax = rsvTotalMax(borrador), restaMax = rsvRestaMax(borrador);
 
       // ── Salir con algo a medio cargar: se pregunta antes de perderlo ──
       // "Lo escrito" se compara contra cómo estaba el formulario al abrirlo (o al quedar
@@ -403,7 +404,7 @@
               </div>
             </div>
             <div id="rsv-kg-ayuda" style={{marginTop:6,fontSize:12,color:"#79828B",lineHeight:1.35}}>
-              {rsvKgHasta(borrador) != null
+              {borrador.kg > 0 && rsvKgHasta(borrador) != null /* sin kilos todavía no hay rango: decía "de 0 a 12 kg" */
                 ? <>Se le puede vender de <strong style={{color:"#3A424A"}}>{rsvKgTexto(borrador)}</strong>.</>
                 : <>Si no pidió un peso justo (ej. “de 10 a 12 kg”), poné en <strong style={{color:"#5C666F"}}>Hasta</strong> el máximo que se le puede vender.</>}
             </div>
@@ -432,7 +433,7 @@
               </button>
             </div>
             {resta != null && borrador.sena > 0 && (
-              <div style={{marginTop:8,fontSize:13,color:"#5C666F"}}>Resta cobrar al retirar: <strong style={{color:"#191E23"}}>{rsvRestaTexto(borrador) || SersaleBase.fmtMonto(resta)}</strong></div>
+              <div style={{marginTop:8,fontSize:13,color:"#5C666F"}}>Resta cobrar al retirar: <strong style={{color:"#191E23"}}>{rsvRestaTexto(borrador) || SersaleBase.fmtMonto(restaMax != null ? restaMax : resta)}</strong></div>
             )}
 
             <label style={RSV_ETIQUETA} htmlFor="rsv-retiro">Fecha de retiro</label>
@@ -507,7 +508,7 @@
               <div style={{textAlign:"right"}}>
                 {entregada ? null
                   : resta == null ? null
-                  : restaTexto ? <div>Resta: <strong style={{...dato,whiteSpace:"nowrap"}}>{restaTexto}</strong></div>
+                  : restaTexto ? <div>Resta: <strong style={{...dato,display:"inline-block"}}>{restaTexto}</strong></div> /* inline-block y no nowrap: el rango va junto si entra y, en un iPhone angosto, se parte entre los importes ("$130.500 a $166.750" se salía de la tarjeta) */
                   : <span className="badge" style={{background:"#DDEBE3",color:"#2F6B4F"}}>PAGADO</span>}
                 {!entregada && !(sena > 0) && <div style={{marginTop:2}}>{sinSena}</div>}
               </div>
