@@ -93,7 +93,12 @@ export async function launch(opts = {}) {
   const preparar = (p) => {
     p.on("pageerror", (e) => errores.push({ tipo: "pageerror", texto: String(e && e.stack ? e.stack : e), url: p.url() }));
     p.on("console", (m) => {
-      if (m.type() === "error") errores.push({ tipo: "console.error", texto: m.text(), url: p.url() });
+      if (m.type() !== "error") return;
+      // Ruido del arnés, no de la app: con el reloj fijado, cada pestaña lleva su propio reloj
+      // simulado y pueden diferir en 1 ms; Firestore (que comparte la copia local entre pestañas)
+      // lo anota como error. En un teléfono real hay un solo reloj.
+      if (/Detected an update time that is in the future/.test(m.text())) return;
+      errores.push({ tipo: "console.error", texto: m.text(), url: p.url() });
     });
     p.on("dialog", async (d) => {
       const reg = { tipo: d.type(), mensaje: d.message() };
