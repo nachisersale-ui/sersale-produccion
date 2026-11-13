@@ -77,6 +77,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 <li>📒 Movimientos CC</li><li>💰 Ventas Diarias</li><li>🏭 Stock</li><li>🐖 Faenas</li>
 <li>🏷️ Lotes</li><li>💲 Precios por Cliente</li>
 <li>↩️ Devoluciones</li><li>📊 Movimientos de Stock</li><li>📝 Reportes de Producción</li>
+<li>🎄 Reservas de fin de año</li>
 </ul>
 <button class="btn btn-primary" id="btnBackup" onclick="generarBackup()">💾 Generar Backup Excel</button>
 <button class="btn btn-back" onclick="location.href='index.html'">← Volver al CRM</button>
@@ -93,7 +94,7 @@ try{db=window.sersaleDbCompat();estado_index('✅ Conectado a Firebase');}catch(
 function fbGet(p){return db.collection(p).get({source:'server'}).then(function(s){return s.docs.map(function(d){return{id:d.id,data:d.data()};});});}
 
 // Colecciones que entran en el backup (todas las que usa el CRM, menos usuarios y configuración).
-var COLECCIONES_index=['pedidos','remitos','clientes','cuentas_corrientes','cc_movimientos','devoluciones','ventas_diarias','stock_produccion','stock_movimientos','reportes','faenas','trazabilidad_lotes','precios_cliente'];
+var COLECCIONES_index=['pedidos','remitos','clientes','cuentas_corrientes','cc_movimientos','devoluciones','ventas_diarias','stock_produccion','stock_movimientos','reportes','faenas','trazabilidad_lotes','precios_cliente','reservas'];
 
 // Lo que va a una celda: texto o número. Una fecha guardada como Timestamp sale
 // como día y hora de Buenos Aires; cualquier otro objeto, como texto.
@@ -208,6 +209,7 @@ async function generarBackup(){
     conteos.Precios=crearHoja('Precios','PRECIOS POR CLIENTE',['ID','Cliente','Producto','Precio ($)'],filas(base.precios_cliente,function(d){var pc=d.data;return[d.id,pc.cliente||'',pc.producto||'',pc.precio||0];}));
     // Estas tres colecciones no entraban en el backup.
     conteos.Devoluciones=crearHoja('Devoluciones','DEVOLUCIONES',['ID','Fecha','Cliente','Producto','Cantidad','Unidad','Motivo','Descripción','Pedido original','Monto ($)','Estado'],filas(base.devoluciones,function(d){var v=d.data;return[d.id,dia_index(v.fecha,v.createdAt),v.cliente||'',v.producto||'',v.cantidad!=null?v.cantidad:'',v.unidad||'',v.motivo||'',v.descripcion||'',v.fechaPedidoOrig||'',v.monto||0,v.estado||''];}));
+    conteos.Reservas=crearHoja('Reservas','RESERVAS DE FIN DE AÑO',['ID','Fecha del pedido','Cliente','Contacto','Ítem','Kg','Precio por kg ($)','Total estimado ($)','Seña ($)','Resta cobrar ($)','Fecha de retiro','Estado','Observaciones'],filas(base.reservas,function(d){var v=d.data;var kg=Number(v.kg)||0,pr=Number(v.precioKg)||0,se=Number(v.sena)||0;var tot=kg>0&&pr>0?Math.round(kg*pr):'';return[d.id,v.fechaReserva||'',v.cliente||'',v.contacto||'',v.item||'',kg,pr||'',tot,se,tot===''?'':tot-se,v.fechaRetiro||'',v.estado||'',v.obs||''];}).sort(function(a,b){return String(a[1]).localeCompare(String(b[1]));}));
     var movsStock=base.stock_movimientos.slice().sort(function(a,b){return momento_index(b.data.createdAt,b.data.fecha)-momento_index(a.data.createdAt,a.data.fecha);});
     conteos['Stock Mov']=crearHoja('Stock Movimientos','MOVIMIENTOS DE STOCK',['ID','Fecha','Producto','Tipo','Subtipo','Cantidad','Unidad','Destino','Encargado','Reporte','Obs'],filas(movsStock,function(d){var m=d.data;return[d.id,dia_index(m.fecha,m.createdAt),m.nombre||'',m.tipo||'',m.subtipo||'',m.cantidad!=null?m.cantidad:'',m.unidad||'',m.destino||'',m.encargado||'',m.ref||'',m.obs||''];}));
     var reportes=base.reportes.slice().sort(function(a,b){return momento_index(b.data.fechaISO,b.data.fecha)-momento_index(a.data.fechaISO,a.data.fecha);});

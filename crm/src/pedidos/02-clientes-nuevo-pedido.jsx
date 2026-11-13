@@ -441,6 +441,7 @@
                 {key:"comercial", icon:"💼", label:"Comercial",  desc:"Cargar y gestionar pedidos",            color:"#A4232A", showBadge:false},
                 {key:"deposito",  icon:"🏭", label:"Depósito",   desc:"Ver pedidos a preparar y despachar",    color:"#26536E", showBadge:true},
                 {key:"director",  icon:"📊", label:"Director",   desc:"Panel general y cuentas corrientes",    color:"#2A333B", showBadge:true},
+                {key:"reservas",  icon:"🎄", label:"Reservas fin de año", desc:"Lechón, cordero y encargos para las fiestas", color:"#A8702A", showBadge:false},
                 {key:"clientes",  icon:"👥", label:"Clientes",   desc:"Agregar, editar y eliminar clientes",   color:"#6B4E8E", showBadge:false},
                 {key:"productos", icon:"🥩", label:"Productos",  desc:"Agregar productos a cada categoría",      color:"#1F5E56", showBadge:false},
               ].map(v=>(

@@ -963,9 +963,14 @@
           try { sessionStorage.setItem("sersale_vista","director"); } catch(e) {}
           return "director";
         }
+        // Acceso rápido "Reservas de fin de año" del panel (pedidos.html?reservas=1)
+        if (new URLSearchParams(window.location.search).get("reservas") === "1") {
+          try { sessionStorage.setItem("sersale_vista","reservas"); } catch(e) {}
+          return "reservas";
+        }
         // Una vista recordada que no existe dejaba la página en blanco
         const v = sessionStorage.getItem("sersale_vista");
-        return ["home","productos","comercial","deposito","director","clientes"].includes(v) ? v : "home";
+        return ["home","productos","comercial","deposito","director","clientes","reservas"].includes(v) ? v : "home";
       });
       const [nuevosPedidos, setNuevosPedidos] = useState(0);
       const [bannerPedido, setBannerPedido] = useState(null);
@@ -1057,6 +1062,7 @@
           {vista==="deposito"      && <VistaDeposito  onBack={esOperario ? null : ()=>setVista("home")} modoOperario={esOperario} />}
           {vista==="director"      && <VistaDirector  onBack={()=>setVista("home")} />}
           {vista==="clientes"      && <GestionClientes onBack={()=>setVista("home")} />}
+          {vista==="reservas"      && <Reservas onBack={()=>setVista("home")} />}
         </>
       );
     }
