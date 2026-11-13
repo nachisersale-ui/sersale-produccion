@@ -74,7 +74,7 @@ test("alta: se guarda con todos los datos, con decimales en los kilos y la seña
     assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(r.creadoEn));
     assert.deepEqual({ ...r, id: "", creadoEn: "" }, {
       id: "", creadoEn: "", fechaReserva: HOY, cliente: "María Fernández", contacto: "11 5555-1234\nRetira el marido", item: "LECHÓN",
-      kg: 10.5, precioKg: 14500, sena: 50000, fechaRetiro: "2026-12-24", obs: "Lo quiere abierto", estado: "pendiente", creadoPor: "nacho",
+      kg: 10.5, kgHasta: null, precioKg: 14500, sena: 50000, fechaRetiro: "2026-12-24", obs: "Lo quiere abierto", estado: "pendiente", creadoPor: "nacho",
     });
 
     // Vuelve a la lista y muestra la tarjeta con sus importes
@@ -311,8 +311,8 @@ test("acceso directo desde el panel, gesto atrás y hoja en el backup", async ()
     const libro = XLSX.read(fs.readFileSync(ruta));
     assert.ok(libro.SheetNames.includes("Reservas"), "hojas: " + libro.SheetNames.join(", "));
     const filas = XLSX.utils.sheet_to_json(libro.Sheets.Reservas, { header: 1, range: 3 });
-    assert.deepEqual(filas[0], ["ID", "Fecha del pedido", "Cliente", "Contacto", "Ítem", "Kg", "Precio por kg ($)", "Total estimado ($)", "Seña ($)", "Resta cobrar ($)", "Fecha de retiro", "Estado", "Observaciones"]);
-    assert.deepEqual(filas.slice(1).map((f) => [f[1], f[2], f[5], f[7], f[8], f[9]]), [
+    assert.deepEqual(filas[0], ["ID", "Fecha del pedido", "Cliente", "Contacto", "Ítem", "Kg", "Kg hasta", "Precio por kg ($)", "Total estimado ($)", "Seña ($)", "Resta cobrar ($)", "Fecha de retiro", "Estado", "Observaciones"]);
+    assert.deepEqual(filas.slice(1).map((f) => [f[1], f[2], f[5], f[8], f[9], f[10]]), [
       ["2026-11-01", "Antes", 10, "", 0, ""], // precio a convenir: sin total ni resto
       ["2026-11-05", "María Fernández", 10.5, 152250, 50000, 102250],
     ]);

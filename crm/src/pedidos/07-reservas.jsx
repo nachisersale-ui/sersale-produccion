@@ -7,7 +7,9 @@
     //   cliente       texto         nombre de quien reserva
     //   contacto      texto         teléfono, dirección o lo que haga falta para ubicarlo
     //   item          texto         "LECHÓN", un producto del catálogo o texto libre
-    //   kg            número        kilos pedidos
+    //   kg            número        kilos pedidos (si dio un rango, el mínimo)
+    //   kgHasta       número|null   tope cuando no pidió un peso justo ("de 10 a 12 kg" → 12): hasta
+    //                               cuántos kilos se le puede vender. null (o falta) = peso justo
     //   precioKg      número|null   precio acordado por kilo (null = a convenir)
     //   sena          número        seña que dejó (0 = no dejó nada)
     //   fechaRetiro   "AAAA-MM-DD"  día en que retira ("" = a confirmar)
@@ -32,6 +34,49 @@
     /** Kilos para mostrar: "30,4 kg". */
     function rsvKg(n) {
       return SersaleBase.fmtNumero(Number(n) || 0, 3) + " kg";
+    }
+    /** Tope de kilos cuando el cliente dio un rango ("de 10 a 12 kg" → 12); null si pidió un peso justo. */
+    function rsvKgHasta(r) {
+      const kg = Number(r.kg) || 0, hasta = Number(r.kgHasta) || 0;
+      return hasta > kg ? hasta : null;
+    }
+    /** "10 kg", o "10 a 12 kg" si el máximo es mayor que el mínimo. */
+    function rsvKgRango(min, max) {
+      const a = SersaleBase.redondear(Number(min) || 0, 3), b = SersaleBase.redondear(Number(max) || 0, 3);
+      return b > a ? SersaleBase.fmtNumero(a, 3) + " a " + rsvKg(b) : rsvKg(a);
+    }
+    /** Lo máximo que puede llevar una reserva: el tope del rango, o los kilos si pidió un peso justo. */
+    function rsvKgMax(r) {
+      const hasta = rsvKgHasta(r);
+      return hasta != null ? hasta : Number(r.kg) || 0;
+    }
+    /** Kilos de una reserva para mostrar: "10 kg" o "10 a 12 kg". */
+    function rsvKgTexto(r) {
+      return rsvKgRango(r.kg, rsvKgHasta(r));
+    }
+    /** Total si se lleva el tope del rango; null si no dio un rango o falta el precio. */
+    function rsvTotalMax(r) {
+      const hasta = rsvKgHasta(r), precio = Number(r.precioKg) || 0;
+      return hasta != null && precio > 0 ? SersaleBase.redondear(hasta * precio, 0) : null;
+    }
+    /** Lo que faltaría cobrar si se lleva el tope del rango; null si no dio un rango o falta el precio. */
+    function rsvRestaMax(r) {
+      const total = rsvTotalMax(r);
+      return total == null ? null : SersaleBase.redondear(total - (Number(r.sena) || 0), 0);
+    }
+    /** "$85.000", o "$85.000 a $105.000" si hay un máximo mayor. */
+    function rsvMontoRango(min, max) {
+      return max != null && max > min ? SersaleBase.fmtMonto(min) + " a " + SersaleBase.fmtMonto(max) : SersaleBase.fmtMonto(min);
+    }
+    /**
+     * Lo que falta cobrar de una reserva, en palabras: "$85.000", "$85.000 a $105.000",
+     * "hasta $20.000" (la seña ya cubre el mínimo del rango) o "" si no queda nada.
+     */
+    function rsvRestaTexto(r) {
+      const min = rsvResta(r), max = rsvRestaMax(r);
+      if (min == null) return "";
+      if (min > 0) return rsvMontoRango(min, max);
+      return max != null && max > 0 ? "hasta " + SersaleBase.fmtMonto(max) : "";
     }
     /**
      * Kilos del campo (SersaleBase.InputDecimal los entrega con punto decimal: "10.250")
@@ -184,6 +229,7 @@
       const [itemSel, setItemSel] = useState(itemInicial === "" ? "" : esConocido(itemInicial) ? itemInicial : RSV_OTRO);
       const [itemLibre, setItemLibre] = useState(itemInicial !== "" && !esConocido(itemInicial) ? itemInicial : "");
       const [kg, setKg] = useState(previa.kg != null ? String(previa.kg) : "");
+      const [kgHasta, setKgHasta] = useState(rsvKgHasta(previa) != null ? String(rsvKgHasta(previa)) : "");
       const [precioKg, setPrecioKg] = useState(previa.precioKg != null ? String(previa.precioKg) : "");
       const [sena, setSena] = useState(Number(previa.sena) > 0 ? String(previa.sena) : "");
       const [fechaRetiro, setFechaRetiro] = useState(dia(previa.fechaRetiro));
@@ -204,13 +250,15 @@
       }
 
       const item = itemSel === RSV_OTRO ? rsvItemDeLista(itemLibre) : itemSel;
-      const borrador = { kg: rsvKilos(kg), precioKg: SersaleBase.numero(precioKg), sena: SersaleBase.numero(sena) };
+      const borrador = { kg: rsvKilos(kg), kgHasta: rsvKilos(kgHasta), precioKg: SersaleBase.numero(precioKg), sena: SersaleBase.numero(sena) };
       const total = rsvTotal(borrador), resta = rsvResta(borrador);
+      // Con un rango de kilos ("de 10 a 12"), el total y lo que resta también son un rango.
+      const totalMax = rsvTotalMax(borrador);
 
       // ── Salir con algo a medio cargar: se pregunta antes de perderlo ──
       // "Lo escrito" se compara contra cómo estaba el formulario al abrirlo (o al quedar
       // listo para el ítem siguiente con "Guardar y cargar otro").
-      const firma = JSON.stringify([fechaReserva, cliente, contacto, itemSel, itemLibre, kg, precioKg, sena, fechaRetiro, obs]);
+      const firma = JSON.stringify([fechaReserva, cliente, contacto, itemSel, itemLibre, kg, kgHasta, precioKg, sena, fechaRetiro, obs]);
       const firmaBase = React.useRef(null);
       if (firmaBase.current === null) firmaBase.current = firma;
       const hayCambios = firma !== firmaBase.current;
@@ -246,15 +294,18 @@
         if (!cliente.trim()) return falta("Escribí el nombre del cliente.", "rsv-cliente");
         if (!item) return falta(itemSel === RSV_OTRO ? "Escribí qué reserva." : "Elegí qué reserva.", itemSel === RSV_OTRO ? "rsv-otro" : "rsv-item");
         if (!(borrador.kg > 0)) return falta("Poné cuántos kilos necesita.", "rsv-kg");
+        // "Hasta" igual a los kilos es un peso justo; menor, un error de tipeo.
+        if (borrador.kgHasta > 0 && borrador.kgHasta < borrador.kg) return falta("El «hasta» tiene que ser mayor que los kilos. Si pidió un peso justo, dejalo vacío.", "rsv-kg-hasta");
         if (borrador.precioKg < 0 || borrador.sena < 0) return falta("El precio y la seña no pueden ser negativos. Revisá los importes.", borrador.precioKg < 0 ? "rsv-precio" : "rsv-sena");
         if (fechaRetiro && fechaRetiro < fechaReserva) return falta("La fecha de retiro no puede ser anterior a la del pedido.", "rsv-retiro");
-        if (total != null && borrador.sena > total) return falta("La seña es mayor que el total de la reserva. Revisá los importes.", "rsv-sena");
+        if (total != null && borrador.sena > (totalMax != null ? totalMax : total)) return falta("La seña es mayor que el total de la reserva. Revisá los importes.", "rsv-sena");
         return {
           fechaReserva,
           cliente: cliente.trim().replace(/\s+/g, " "),
           contacto: contacto.trim(),
           item,
           kg: SersaleBase.redondear(borrador.kg, 3),
+          kgHasta: rsvKgHasta(borrador) != null ? SersaleBase.redondear(borrador.kgHasta, 3) : null,
           precioKg: borrador.precioKg > 0 ? SersaleBase.redondear(borrador.precioKg, 2) : null,
           sena: SersaleBase.redondear(borrador.sena, 2),
           fechaRetiro: fechaRetiro || "",
@@ -275,15 +326,15 @@
             // campos, lo que otro teléfono había anotado mientras tanto (la seña que acaba de
             // dejar) volvía al valor que tenía cuando se abrió esta pantalla.
             const cambios = {};
-            Object.keys(d).forEach(k => { if (d[k] !== reserva[k]) cambios[k] = d[k]; });
+            Object.keys(d).forEach(k => { if (d[k] !== reserva[k] && !(d[k] == null && reserva[k] == null)) cambios[k] = d[k]; });
             if (Object.keys(cambios).length > 0) await updateDoc(doc(db, "reservas", reserva.id), { ...cambios, actualizadoEn: ahora });
           }
           SersaleUI.toast(nueva ? "Reserva guardada: " + d.cliente + " · " + d.item : "Reserva actualizada", { tipo: "ok" });
           if (otroItem === true) {
             // Mismo cliente, otro ítem: queda el nombre, el contacto y las fechas.
-            setItemSel(""); setItemLibre(""); setKg(""); setPrecioKg(""); setSena(""); setObs(""); setPrecioSugerido(false);
+            setItemSel(""); setItemLibre(""); setKg(""); setKgHasta(""); setPrecioKg(""); setSena(""); setObs(""); setPrecioSugerido(false);
             firmaBase.current = null; // lo que queda ya está guardado: no es "algo a medio cargar"
-            setCargados(c => c.concat(d.item + " · " + rsvKg(d.kg)));
+            setCargados(c => c.concat(d.item + " · " + rsvKgTexto(d)));
             const sel = document.getElementById("rsv-item");
             if (sel) sel.scrollIntoView({ block: "center" });
             if (onGuardada) onGuardada(false);
@@ -347,18 +398,26 @@
                 <SersaleBase.InputDecimal id="rsv-kg" style={RSV_CAMPO} placeholder="Ej: 10,5" aria-label="Kilos" value={kg} onChange={e=>setKg(e.target.value)} />
               </div>
               <div>
-                <label style={RSV_ETIQUETA} htmlFor="rsv-precio">Precio por kg</label>
-                <div style={{position:"relative"}}>
-                  <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"#A3ABB3",fontSize:16}}>$</span>
-                  <InputMonto id="rsv-precio" style={{...RSV_CAMPO, paddingLeft:26}} placeholder="A convenir" aria-label="Precio por kg" value={precioKg} onChange={v=>{ setPrecioKg(v); setPrecioSugerido(false); }} />
-                </div>
+                <label style={RSV_ETIQUETA} htmlFor="rsv-kg-hasta">Hasta <span style={{textTransform:"none",letterSpacing:0,fontWeight:400}}>(opcional)</span></label>
+                <SersaleBase.InputDecimal id="rsv-kg-hasta" style={RSV_CAMPO} placeholder="Ej: 12" aria-label="Hasta (kg)" value={kgHasta} onChange={e=>setKgHasta(e.target.value)} />
               </div>
+            </div>
+            <div id="rsv-kg-ayuda" style={{marginTop:6,fontSize:12,color:"#79828B",lineHeight:1.35}}>
+              {rsvKgHasta(borrador) != null
+                ? <>Se le puede vender de <strong style={{color:"#3A424A"}}>{rsvKgTexto(borrador)}</strong>.</>
+                : <>Si no pidió un peso justo (ej. “de 10 a 12 kg”), poné en <strong style={{color:"#5C666F"}}>Hasta</strong> el máximo que se le puede vender.</>}
+            </div>
+
+            <label style={RSV_ETIQUETA} htmlFor="rsv-precio">Precio por kg</label>
+            <div style={{position:"relative"}}>
+              <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"#A3ABB3",fontSize:16}}>$</span>
+              <InputMonto id="rsv-precio" style={{...RSV_CAMPO, paddingLeft:26}} placeholder="A convenir" aria-label="Precio por kg" value={precioKg} onChange={v=>{ setPrecioKg(v); setPrecioSugerido(false); }} />
             </div>
             {precioSugerido && (
               <div style={{marginTop:8,fontSize:13,color:"#784212"}}>Precio de la última reserva de {itemSel}. Cambialo si acordaste otro.</div>
             )}
             {total != null && (
-              <div style={{marginTop:8,fontSize:13,color:"#5C666F"}}>Total estimado: <strong style={{color:"#191E23"}}>{SersaleBase.fmtMonto(total)}</strong></div>
+              <div style={{marginTop:8,fontSize:13,color:"#5C666F"}}>Total estimado: <strong style={{color:"#191E23"}}>{rsvMontoRango(total, totalMax)}</strong>{totalMax != null && " según lo que pese"}</div>
             )}
 
             <label style={RSV_ETIQUETA} htmlFor="rsv-sena">Seña</label>
@@ -373,7 +432,7 @@
               </button>
             </div>
             {resta != null && borrador.sena > 0 && (
-              <div style={{marginTop:8,fontSize:13,color:"#5C666F"}}>Resta cobrar al retirar: <strong style={{color:"#191E23"}}>{SersaleBase.fmtMonto(resta)}</strong></div>
+              <div style={{marginTop:8,fontSize:13,color:"#5C666F"}}>Resta cobrar al retirar: <strong style={{color:"#191E23"}}>{rsvRestaTexto(borrador) || SersaleBase.fmtMonto(resta)}</strong></div>
             )}
 
             <label style={RSV_ETIQUETA} htmlFor="rsv-retiro">Fecha de retiro</label>
@@ -416,6 +475,7 @@
       const [abierta, setAbierta] = useState(false);
       const ver = !plegable || abierta;
       const total = rsvTotal(r), resta = rsvResta(r);
+      const hasta = rsvKgHasta(r), restaTexto = rsvRestaTexto(r);
       const sena = Number(r.sena) || 0;
       const entregada = r.estado === "entregada";
       const cuando = entregada ? "" : rsvCuando(r.fechaRetiro);
@@ -433,7 +493,7 @@
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontWeight:800,fontSize:16,color:"#191E23",overflowWrap:"anywhere"}}>{r.cliente}</div>
                 <div style={{fontSize:15,color:"#191E23",marginTop:3,overflowWrap:"anywhere"}}>
-                  <strong>{r.item}</strong> · <strong style={{whiteSpace:"nowrap"}}><span style={dato}>{SersaleBase.fmtNumero(Number(r.kg) || 0, 3)}</span> kg</strong>
+                  <strong>{r.item}</strong> · <strong style={{whiteSpace:"nowrap"}}><span style={dato}>{SersaleBase.fmtNumero(Number(r.kg) || 0, 3)}</span>{hasta != null && <> a <span style={dato}>{SersaleBase.fmtNumero(hasta, 3)}</span></>} kg</strong>
                 </div>
               </div>
               {entregada && <span className="badge" style={{background:"#DDEBE3",color:"#2F6B4F",flexShrink:0}}>ENTREGADA</span>}
@@ -447,7 +507,7 @@
               <div style={{textAlign:"right"}}>
                 {entregada ? null
                   : resta == null ? null
-                  : resta > 0 ? <div style={{whiteSpace:"nowrap"}}>Resta: <strong style={dato}>{SersaleBase.fmtMonto(resta)}</strong></div>
+                  : restaTexto ? <div>Resta: <strong style={{...dato,whiteSpace:"nowrap"}}>{restaTexto}</strong></div>
                   : <span className="badge" style={{background:"#DDEBE3",color:"#2F6B4F"}}>PAGADO</span>}
                 {!entregada && !(sena > 0) && <div style={{marginTop:2}}>{sinSena}</div>}
               </div>
@@ -458,7 +518,7 @@
           {ver && (
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",marginTop:8,fontSize:13,color:"#5C666F"}}>
               <div>Seña: <strong style={{...dato,color:sena > 0 ? "#2F6B4F" : "#3A424A"}}>{SersaleBase.fmtMonto(sena)}</strong></div>
-              <div>Total: <strong style={{...dato,color:"#3A424A"}}>{total != null ? SersaleBase.fmtMonto(total) : "—"}</strong></div>
+              <div>Total: <strong style={{...dato,color:"#3A424A"}}>{total != null ? rsvMontoRango(total, rsvTotalMax(r)) : "—"}</strong></div>
               <div>Precio: {r.precioKg ? <strong style={{...dato,color:"#3A424A"}}>{SersaleBase.fmtMonto(r.precioKg)}/kg</strong> : <strong style={{color:"#3A424A"}}>a convenir</strong>}</div>
               <div>Reservó: <strong style={{...dato,color:"#3A424A"}}>{SersaleBase.fmtFecha(r.fechaReserva) || "—"}</strong></div>
             </div>
@@ -534,10 +594,10 @@
 
       const [cambiarEstado, cambiando] = SersaleBase.useAccion(async (r, estado) => {
         if (estado === "entregada") {
-          const resta = rsvResta(r);
+          const resta = rsvResta(r), restaTexto = rsvRestaTexto(r);
           const ok = await SersaleUI.confirmar({
             titulo: "Marcar como entregada",
-            cuerpo: r.cliente + " · " + r.item + " · " + rsvKg(r.kg) + "\n" + (resta == null ? "Precio a convenir: se cobra al entregar." : resta > 0 ? "Resta cobrar: " + SersaleBase.fmtMonto(resta) + " (calculado con " + rsvKg(r.kg) + ")" : "Ya está pago con la seña."),
+            cuerpo: r.cliente + " · " + r.item + " · " + rsvKgTexto(r) + "\n" + (resta == null ? "Precio a convenir: se cobra al entregar." : restaTexto ? "Resta cobrar: " + restaTexto + (rsvKgHasta(r) != null ? " (según lo que pese, de " + rsvKgTexto(r) + ")" : " (calculado con " + rsvKg(r.kg) + ")") : "Ya está pago con la seña."),
             aceptar: "Entregada",
           });
           if (!ok) return;
@@ -557,7 +617,7 @@
         const sena = Number(r.sena) || 0;
         const ok = await SersaleUI.confirmar({
           titulo: "Eliminar reserva",
-          cuerpo: r.cliente + " · " + r.item + " · " + rsvKg(r.kg) + (sena > 0 ? "\nOjo: dejó una seña de " + SersaleBase.fmtMonto(sena) + "." : "") + "\nNo se puede deshacer.",
+          cuerpo: r.cliente + " · " + r.item + " · " + rsvKgTexto(r) + (sena > 0 ? "\nOjo: dejó una seña de " + SersaleBase.fmtMonto(sena) + "." : "") + "\nNo se puede deshacer.",
           aceptar: "Eliminar",
           peligro: true,
         });
@@ -599,14 +659,19 @@
       rsvOrdenar(pendientes, "reserva").forEach(r => {
         const nombre = rsvItemDeLista(r.item, deLista) || "(sin ítem)";
         const k = SersaleBase.norm(nombre);
-        if (!porItem.has(k)) porItem.set(k, { item: nombre, cantidad: 0, kg: 0 });
+        if (!porItem.has(k)) porItem.set(k, { item: nombre, cantidad: 0, kg: 0, kgMax: 0 });
         porItem.get(k).cantidad += 1;
         porItem.get(k).kg += Number(r.kg) || 0;
+        porItem.get(k).kgMax += rsvKgMax(r);
       });
-      const resumen = Array.from(porItem.values()).sort((a, b) => b.kg - a.kg);
+      const resumen = Array.from(porItem.values()).sort((a, b) => b.kgMax - a.kgMax || b.kg - a.kg);
+      // Con reservas "de 10 a 12 kg" lo que hay que tener también es un rango: mínimo y tope.
       const totalKg = pendientes.reduce((s, r) => s + (Number(r.kg) || 0), 0);
+      const totalKgMax = pendientes.reduce((s, r) => s + rsvKgMax(r), 0);
+      const hayRango = SersaleBase.redondear(totalKgMax, 1) > SersaleBase.redondear(totalKg, 1);
       const totalSenas = pendientes.reduce((s, r) => s + (Number(r.sena) || 0), 0);
       const totalResta = pendientes.reduce((s, r) => s + Math.max(0, rsvResta(r) || 0), 0);
+      const totalRestaMax = pendientes.reduce((s, r) => { const max = rsvRestaMax(r); return s + Math.max(0, (max != null ? max : rsvResta(r)) || 0); }, 0);
 
       const resumenAbierto = verResumen == null ? resumen.length <= 4 : verResumen;
       const chip = activo => ({ minHeight:44, padding:"0 14px", borderRadius:20, border:"1.5px solid " + (activo ? "#A4232A" : "#D8DCE0"), background:activo ? "#A4232A" : "#fff", color:activo ? "#fff" : "#3A424A", fontWeight:600, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" });
@@ -651,7 +716,7 @@
                   <div style={{background:"#fff",borderRadius:14,border:"1px solid #D8DCE0",padding:"12px 14px",marginBottom:14}}>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:8,textAlign:"center"}}>
                       <div><div style={{...dato,fontWeight:700,fontSize:18,color:"#191E23"}}>{pendientes.length}</div><div style={{fontSize:11,color:"#79828B"}}>pendientes</div></div>
-                      <div><div style={{...dato,fontWeight:700,fontSize:18,color:"#191E23"}}>{SersaleBase.fmtNumero(totalKg, 1)}</div><div style={{fontSize:11,color:"#79828B"}}>kg reservados</div></div>
+                      <div><div style={{...dato,fontWeight:700,fontSize:18,color:"#191E23"}}>{SersaleBase.fmtNumero(totalKg, 1)}</div><div style={{fontSize:11,color:"#79828B"}}>kg reservados</div>{hayRango && <div style={{fontSize:11,color:"#784212",fontWeight:600}}>hasta <span style={dato}>{SersaleBase.fmtNumero(totalKgMax, 1)}</span> kg</div>}</div>
                       <div><div style={{...dato,fontWeight:700,fontSize:18,color:"#2F6B4F"}}>{SersaleBase.fmtMonto(totalSenas)}</div><div style={{fontSize:11,color:"#79828B"}}>en señas</div></div>
                     </div>
                     <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #EDEEF0"}}>
@@ -661,10 +726,10 @@
                       {resumenAbierto && resumen.map(x => (
                         <div key={x.item} style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:13,padding:"3px 0",color:"#191E23"}}>
                           <span style={{overflowWrap:"anywhere"}}>{x.item} <span style={{color:"#79828B"}}>× {x.cantidad}</span></span>
-                          <strong style={{...dato,flexShrink:0}}>{rsvKg(x.kg)}</strong>
+                          <strong style={{...dato,flexShrink:0}}>{rsvKgRango(x.kg, x.kgMax)}</strong>
                         </div>
                       ))}
-                      {totalResta > 0 && <div style={{marginTop:6,fontSize:12,color:"#5C666F"}}>Resta cobrar al entregar: <strong style={dato}>{SersaleBase.fmtMonto(totalResta)}</strong></div>}
+                      {totalRestaMax > 0 && <div style={{marginTop:6,fontSize:12,color:"#5C666F"}}>Resta cobrar al entregar: <strong style={dato}>{totalResta > 0 ? rsvMontoRango(totalResta, totalRestaMax) : "hasta " + SersaleBase.fmtMonto(totalRestaMax)}</strong></div>}
                     </div>
                   </div>
                 )}
@@ -704,7 +769,7 @@
                       {cabecera && (
                         <div style={{background:!f || (n < 0 && !atrasado) ? "#79828B" : n < 0 ? "#C33039" : n === 0 ? "#2F6B4F" : n === 1 ? "#A8702A" : "#26536E",borderRadius:10,padding:"6px 12px",margin:"4px 0 6px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:4}}>
                           <span style={{fontWeight:700,fontSize:12,color:"#fff"}}>{f ? ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"][SersaleBase.diaSemana(f)] + " " + SersaleBase.fmtFechaCorta(f) + " — " + (atrasado ? "sin retirar (" + rsvCuando(f) + ")" : rsvCuando(f)) : "Retiro a confirmar"}</span>
-                          <span style={{fontSize:11,background:"rgba(255,255,255,0.25)",color:"#fff",borderRadius:99,padding:"2px 8px",fontWeight:700}}>{delDia.length} · {rsvKg(delDia.reduce((s2, x) => s2 + (Number(x.kg) || 0), 0))}</span>
+                          <span style={{fontSize:11,background:"rgba(255,255,255,0.25)",color:"#fff",borderRadius:99,padding:"2px 8px",fontWeight:700}}>{delDia.length} · {rsvKgRango(delDia.reduce((s2, x) => s2 + (Number(x.kg) || 0), 0), delDia.reduce((s2, x) => s2 + rsvKgMax(x), 0))}</span>
                         </div>
                       )}
                       <ReservaTarjeta r={r} orden={r.estado === "entregada" ? "✓" : "#" + (lugar[r.id] || "")}

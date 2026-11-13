@@ -460,7 +460,7 @@ test("backup: las reservas del mismo día salen en el orden en que se cargaron",
     const { XLSX, libro } = await bajarBackup(h);
     const filas = XLSX.utils.sheet_to_json(libro.Sheets.Reservas, { header: 1, range: 4, defval: "" });
     assert.deepEqual(filas.map((f) => f[2]), ["", "Del Día Anterior", "Primera", "Segunda", "Tercera"]);
-    assert.deepEqual(filas[0].slice(1), ["", "", "", "", 0, "", "", 0, "", "", "", ""]);
+    assert.deepEqual(filas[0].slice(1), ["", "", "", "", 0, "", "", "", 0, "", "", "", ""]);
   } finally {
     await h.close();
   }
