@@ -416,3 +416,28 @@ test("formulario: abre arriba aunque la lista esté bajada, y propone el último
     await h.close();
   }
 });
+
+test("el nombre es texto libre (no sugiere los clientes del CRM) y los campos de fecha no se salen del ancho", async () => {
+  const h = await abrir();
+  try {
+    await boton(h, "+ Nueva").click();
+    const nombre = h.page.locator("#rsv-cliente");
+    await nombre.waitFor();
+    assert.equal(await nombre.getAttribute("list"), null, "sin lista de sugerencias");
+    assert.equal(await h.page.locator("datalist").count(), 0);
+    assert.equal(await nombre.getAttribute("autocomplete"), "off");
+    // Los campos de fecha miden lo mismo que los demás y la página no se pasa del ancho del teléfono
+    const ancho = (sel) => h.page.locator(sel).evaluate((el) => Math.round(el.getBoundingClientRect().right));
+    const derecha = await ancho("#rsv-cliente");
+    assert.equal(await ancho("#rsv-fecha"), derecha);
+    assert.equal(await ancho("#rsv-retiro"), derecha);
+    for (const id of ["#rsv-fecha", "#rsv-retiro"]) {
+      const estilo = await h.page.locator(id).evaluate((el) => { const c = getComputedStyle(el); return { apariencia: c.appearance || c.webkitAppearance, minimo: c.minWidth, maximo: c.maxWidth }; });
+      assert.deepEqual(estilo, { apariencia: "none", minimo: "0px", maximo: "100%" }, id);
+    }
+    assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth), 390);
+    assert.equal(await h.page.evaluate(() => getComputedStyle(document.body).overflowX), "clip");
+  } finally {
+    await h.close();
+  }
+});

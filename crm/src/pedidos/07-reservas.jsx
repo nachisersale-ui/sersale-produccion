@@ -167,7 +167,7 @@
     const RSV_ETIQUETA = { display:"block", fontWeight:600, fontSize:13, color:"#3A424A", margin:"14px 0 6px" };
 
     // ── Formulario (alta y edición) ──
-    function ReservaForm({ reserva, clientes, anteriores, onCerrar, onGuardada }) {
+    function ReservaForm({ reserva, anteriores, onCerrar, onGuardada }) {
       const nueva = !reserva || !reserva.id;
       const catalogo = getProductos() || {};
       // Lo que ya está guardado puede venir cargado a mano en la base con otro tipo de dato
@@ -310,9 +310,9 @@
             <input id="rsv-fecha" type="date" style={RSV_CAMPO} value={fechaReserva} onChange={e=>setFechaReserva(e.target.value)} />
 
             <label style={RSV_ETIQUETA} htmlFor="rsv-cliente">Nombre del cliente</label>
-            <input id="rsv-cliente" style={RSV_CAMPO} list="rsv-clientes" placeholder="Nombre y apellido" autoComplete="off" autoCapitalize="words" autoCorrect="off" spellCheck={false}
+            {/* Texto libre: quienes reservan son particulares, no los clientes cargados en el CRM. */}
+            <input id="rsv-cliente" style={RSV_CAMPO} placeholder="Nombre y apellido" autoComplete="off" autoCapitalize="words" autoCorrect="off" spellCheck={false}
               value={cliente} onChange={e=>setCliente(e.target.value)} />
-            <datalist id="rsv-clientes">{(clientes || []).map(n => <option key={n} value={n} />)}</datalist>
 
             <label style={RSV_ETIQUETA} htmlFor="rsv-contacto">Datos de contacto</label>
             <textarea id="rsv-contacto" style={{...RSV_CAMPO, minHeight:64, resize:"vertical", fontFamily:"inherit"}} placeholder="Teléfono, dirección, quién retira…"
@@ -493,7 +493,6 @@
       // Lo que se ve, ¿lo confirmó el servidor o es solo lo guardado en este teléfono?
       const [copia, setCopia] = useState({ sinServidor: false, nuncaBajadas: false });
       const [intento, setIntento] = useState(0);
-      const [clientes, setClientes] = useState([]);
       const [form, setForm] = useState(null); // null | {} (nueva) | reserva (editar)
       const [ver, setVer] = useState("pendiente"); // pendiente | entregada | todas
       const [orden, setOrden] = useState(() => (sessionStorage.getItem("sersale_rsv_orden") === "retiro" ? "retiro" : "reserva"));
@@ -528,20 +527,6 @@
         if (window.__fbReady) escuchar(); else document.addEventListener("fbReady", escuchar, { once: true });
         return () => { vivo = false; document.removeEventListener("fbReady", escuchar); if (cortar) cortar(); };
       }, [intento]);
-
-      // Nombres de clientes ya cargados, para sugerirlos al escribir.
-      useEffect(() => {
-        let vivo = true;
-        async function traer() {
-          try {
-            const { db, collection, getDocs } = fb();
-            const snap = await getDocs(collection(db, "clientes"));
-            if (vivo) setClientes([...new Set(snap.docs.map(d => (d.data().nombre || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")));
-          } catch (e) { /* las sugerencias son opcionales */ }
-        }
-        if (window.__fbReady) traer(); else document.addEventListener("fbReady", traer, { once: true });
-        return () => { vivo = false; document.removeEventListener("fbReady", traer); };
-      }, []);
 
       // (El gesto "atrás" del teléfono con el formulario abierto lo atiende ReservaForm.)
 
@@ -588,7 +573,7 @@
       });
 
       if (form) {
-        return <ReservaForm key={form.id || "nueva"} reserva={form} clientes={clientes} anteriores={reservas || []} onCerrar={()=>setForm(null)} onGuardada={cerrar => { if (cerrar) setForm(null); }} />;
+        return <ReservaForm key={form.id || "nueva"} reserva={form} anteriores={reservas || []} onCerrar={()=>setForm(null)} onGuardada={cerrar => { if (cerrar) setForm(null); }} />;
       }
 
       const todas = reservas || [];
