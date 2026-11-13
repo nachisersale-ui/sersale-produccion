@@ -167,7 +167,7 @@
     const RSV_ETIQUETA = { display:"block", fontWeight:600, fontSize:13, color:"#3A424A", margin:"14px 0 6px" };
 
     // ── Formulario (alta y edición) ──
-    function ReservaForm({ reserva, clientes, onCerrar, onGuardada }) {
+    function ReservaForm({ reserva, clientes, anteriores, onCerrar, onGuardada }) {
       const nueva = !reserva || !reserva.id;
       const catalogo = getProductos() || {};
       // Lo que ya está guardado puede venir cargado a mano en la base con otro tipo de dato
@@ -188,6 +188,20 @@
       const [sena, setSena] = useState(Number(previa.sena) > 0 ? String(previa.sena) : "");
       const [fechaRetiro, setFechaRetiro] = useState(dia(previa.fechaRetiro));
       const [obs, setObs] = useState(txt(previa.obs));
+      const [precioSugerido, setPrecioSugerido] = useState(false);
+      const [cargados, setCargados] = useState([]);
+      // El formulario arranca arriba aunque la lista estuviera bajada. Con setTimeout corre después de que
+      // useAtras anota el historial, así al volver la lista queda donde estaba.
+      useEffect(() => { const t = setTimeout(() => window.scrollTo(0, 0), 0); return () => clearTimeout(t); }, []);
+
+      // Al elegir el ítem propone el precio de la última reserva de ese ítem (si no se escribió otro).
+      function elegirItem(v) {
+        setItemSel(v);
+        if (precioKg && !precioSugerido) return;
+        const ult = v && v !== RSV_OTRO ? rsvOrdenar((anteriores || []).filter(x => x.item === v && Number(x.precioKg) > 0), "reserva").pop() : null;
+        setPrecioKg(ult ? String(ult.precioKg) : "");
+        setPrecioSugerido(!!ult);
+      }
 
       const item = itemSel === RSV_OTRO ? rsvItemDeLista(itemLibre) : itemSel;
       const borrador = { kg: rsvKilos(kg), precioKg: SersaleBase.numero(precioKg), sena: SersaleBase.numero(sena) };
@@ -222,14 +236,19 @@
       useEffect(() => SersaleBase.abrirAtras(() => { setRearmar(n => n + 1); salirActual.current(); }), [rearmar]);
 
       function datos() {
-        const falta = m => { SersaleUI.toast(m, { tipo: "error" }); return null; };
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaReserva)) return falta("Poné la fecha del pedido.");
-        if (!cliente.trim()) return falta("Escribí el nombre del cliente.");
-        if (!item) return falta(itemSel === RSV_OTRO ? "Escribí qué reserva." : "Elegí qué reserva.");
-        if (!(borrador.kg > 0)) return falta("Poné cuántos kilos necesita.");
-        if (borrador.precioKg < 0 || borrador.sena < 0) return falta("El precio y la seña no pueden ser negativos. Revisá los importes.");
-        if (fechaRetiro && fechaRetiro < fechaReserva) return falta("La fecha de retiro no puede ser anterior a la del pedido.");
-        if (total != null && borrador.sena > total) return falta("La seña es mayor que el total de la reserva. Revisá los importes.");
+        const falta = (m, id) => {
+          SersaleUI.toast(m, { tipo: "error" });
+          const el = id && document.getElementById(id);
+          if (el) { el.scrollIntoView({ block: "center" }); try { el.focus({ preventScroll: true }); } catch (e) {} }
+          return null;
+        };
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaReserva)) return falta("Poné la fecha del pedido.", "rsv-fecha");
+        if (!cliente.trim()) return falta("Escribí el nombre del cliente.", "rsv-cliente");
+        if (!item) return falta(itemSel === RSV_OTRO ? "Escribí qué reserva." : "Elegí qué reserva.", itemSel === RSV_OTRO ? "rsv-otro" : "rsv-item");
+        if (!(borrador.kg > 0)) return falta("Poné cuántos kilos necesita.", "rsv-kg");
+        if (borrador.precioKg < 0 || borrador.sena < 0) return falta("El precio y la seña no pueden ser negativos. Revisá los importes.", borrador.precioKg < 0 ? "rsv-precio" : "rsv-sena");
+        if (fechaRetiro && fechaRetiro < fechaReserva) return falta("La fecha de retiro no puede ser anterior a la del pedido.", "rsv-retiro");
+        if (total != null && borrador.sena > total) return falta("La seña es mayor que el total de la reserva. Revisá los importes.", "rsv-sena");
         return {
           fechaReserva,
           cliente: cliente.trim().replace(/\s+/g, " "),
@@ -262,8 +281,11 @@
           SersaleUI.toast(nueva ? "Reserva guardada: " + d.cliente + " · " + d.item : "Reserva actualizada", { tipo: "ok" });
           if (otroItem === true) {
             // Mismo cliente, otro ítem: queda el nombre, el contacto y las fechas.
-            setItemSel(""); setItemLibre(""); setKg(""); setPrecioKg(""); setSena(""); setObs("");
+            setItemSel(""); setItemLibre(""); setKg(""); setPrecioKg(""); setSena(""); setObs(""); setPrecioSugerido(false);
             firmaBase.current = null; // lo que queda ya está guardado: no es "algo a medio cargar"
+            setCargados(c => c.concat(d.item + " · " + rsvKg(d.kg)));
+            const sel = document.getElementById("rsv-item");
+            if (sel) sel.scrollIntoView({ block: "center" });
             if (onGuardada) onGuardada(false);
           } else if (onGuardada) onGuardada(true);
         } catch (e) {
@@ -288,7 +310,7 @@
             <input id="rsv-fecha" type="date" style={RSV_CAMPO} value={fechaReserva} onChange={e=>setFechaReserva(e.target.value)} />
 
             <label style={RSV_ETIQUETA} htmlFor="rsv-cliente">Nombre del cliente</label>
-            <input id="rsv-cliente" style={RSV_CAMPO} list="rsv-clientes" placeholder="Nombre y apellido" autoComplete="off" autoCapitalize="words"
+            <input id="rsv-cliente" style={RSV_CAMPO} list="rsv-clientes" placeholder="Nombre y apellido" autoComplete="off" autoCapitalize="words" autoCorrect="off" spellCheck={false}
               value={cliente} onChange={e=>setCliente(e.target.value)} />
             <datalist id="rsv-clientes">{(clientes || []).map(n => <option key={n} value={n} />)}</datalist>
 
@@ -296,8 +318,13 @@
             <textarea id="rsv-contacto" style={{...RSV_CAMPO, minHeight:64, resize:"vertical", fontFamily:"inherit"}} placeholder="Teléfono, dirección, quién retira…"
               value={contacto} onChange={e=>setContacto(e.target.value)} />
 
+            {cargados.length > 0 && (
+              <div style={{marginTop:14,padding:"10px 12px",borderRadius:12,background:"#DDEBE3",color:"#1F4D38",fontSize:13}}>
+                <strong>Ya guardado para {cliente.trim()}:</strong> {cargados.join(" · ")}
+              </div>
+            )}
             <label style={RSV_ETIQUETA} htmlFor="rsv-item">Qué reserva</label>
-            <select id="rsv-item" style={RSV_CAMPO} value={itemSel} onChange={e=>setItemSel(e.target.value)}>
+            <select id="rsv-item" style={RSV_CAMPO} value={itemSel} onChange={e=>elegirItem(e.target.value)}>
               <option value="">Elegir…</option>
               <optgroup label="Fiestas">
                 {RSV_ITEMS_FIESTAS.map(it => <option key={it} value={it}>{it}</option>)}
@@ -310,32 +337,35 @@
               <option value={RSV_OTRO}>Otro (escribir)…</option>
             </select>
             {itemSel === RSV_OTRO && (
-              <input style={{...RSV_CAMPO, marginTop:8}} placeholder="Escribí qué reserva" aria-label="Otro ítem" autoCapitalize="sentences"
+              <input id="rsv-otro" autoFocus style={{...RSV_CAMPO, marginTop:8}} placeholder="Escribí qué reserva" aria-label="Otro ítem" autoCapitalize="characters"
                 value={itemLibre} onChange={e=>setItemLibre(e.target.value)} />
             )}
 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <div>
-                <label style={RSV_ETIQUETA}>Kilos</label>
-                <SersaleBase.InputDecimal style={RSV_CAMPO} placeholder="Ej: 10,5" aria-label="Kilos" value={kg} onChange={e=>setKg(e.target.value)} />
+                <label style={RSV_ETIQUETA} htmlFor="rsv-kg">Kilos</label>
+                <SersaleBase.InputDecimal id="rsv-kg" style={RSV_CAMPO} placeholder="Ej: 10,5" aria-label="Kilos" value={kg} onChange={e=>setKg(e.target.value)} />
               </div>
               <div>
-                <label style={RSV_ETIQUETA}>Precio por kg</label>
+                <label style={RSV_ETIQUETA} htmlFor="rsv-precio">Precio por kg</label>
                 <div style={{position:"relative"}}>
                   <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"#A3ABB3",fontSize:16}}>$</span>
-                  <InputMonto style={{...RSV_CAMPO, paddingLeft:26}} placeholder="A convenir" aria-label="Precio por kg" value={precioKg} onChange={v=>setPrecioKg(v)} />
+                  <InputMonto id="rsv-precio" style={{...RSV_CAMPO, paddingLeft:26}} placeholder="A convenir" aria-label="Precio por kg" value={precioKg} onChange={v=>{ setPrecioKg(v); setPrecioSugerido(false); }} />
                 </div>
               </div>
             </div>
+            {precioSugerido && (
+              <div style={{marginTop:8,fontSize:13,color:"#784212"}}>Precio de la última reserva de {itemSel}. Cambialo si acordaste otro.</div>
+            )}
             {total != null && (
               <div style={{marginTop:8,fontSize:13,color:"#5C666F"}}>Total estimado: <strong style={{color:"#191E23"}}>{SersaleBase.fmtMonto(total)}</strong></div>
             )}
 
-            <label style={RSV_ETIQUETA}>Seña</label>
+            <label style={RSV_ETIQUETA} htmlFor="rsv-sena">Seña</label>
             <div style={{display:"flex",gap:8,alignItems:"center"}}>
               <div style={{position:"relative",flex:1}}>
                 <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"#A3ABB3",fontSize:16}}>$</span>
-                <InputMonto style={{...RSV_CAMPO, paddingLeft:26}} placeholder="0" aria-label="Seña" value={sena} onChange={v=>setSena(v)} />
+                <InputMonto id="rsv-sena" style={{...RSV_CAMPO, paddingLeft:26}} placeholder="0" aria-label="Seña" value={sena} onChange={v=>setSena(v)} />
               </div>
               <button type="button" onClick={()=>setSena("")} aria-pressed={!(borrador.sena > 0)}
                 style={{minHeight:46,padding:"0 14px",borderRadius:12,border:"1.5px solid " + (borrador.sena > 0 ? "#D8DCE0" : "#A8702A"),background:borrador.sena > 0 ? "#fff" : "#F0E7D9",color:borrador.sena > 0 ? "#5C666F" : "#784212",fontWeight:600,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>
@@ -352,16 +382,14 @@
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
                 {fiestas.map(f => (
                   <button key={f.dia} type="button" onClick={()=>setFechaRetiro(f.dia)}
-                    style={{minHeight:40,padding:"0 14px",borderRadius:20,border:"1.5px solid " + (fechaRetiro === f.dia ? "#A4232A" : "#D8DCE0"),background:fechaRetiro === f.dia ? "#A4232A" : "#fff",color:fechaRetiro === f.dia ? "#fff" : "#3A424A",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+                    style={{minHeight:44,padding:"0 12px",borderRadius:22,border:"1.5px solid " + (fechaRetiro === f.dia ? "#A4232A" : "#D8DCE0"),background:fechaRetiro === f.dia ? "#A4232A" : "#fff",color:fechaRetiro === f.dia ? "#fff" : "#3A424A",fontWeight:600,fontSize:14,cursor:"pointer"}}>
                     {f.texto}
                   </button>
                 ))}
-                {fechaRetiro && (
-                  <button type="button" onClick={()=>setFechaRetiro("")}
-                    style={{minHeight:40,padding:"0 12px",borderRadius:20,border:"none",background:"transparent",color:"#79828B",fontSize:13,cursor:"pointer",textDecoration:"underline"}}>
-                    A confirmar
-                  </button>
-                )}
+                <button type="button" onClick={()=>setFechaRetiro("")} aria-pressed={!fechaRetiro}
+                  style={{minHeight:44,padding:"0 12px",borderRadius:22,border:"1.5px solid " + (!fechaRetiro ? "#A8702A" : "#D8DCE0"),background:!fechaRetiro ? "#F0E7D9" : "#fff",color:!fechaRetiro ? "#784212" : "#3A424A",fontWeight:600,fontSize:14,cursor:"pointer",whiteSpace:"nowrap"}}>
+                  A confirmar
+                </button>
               </div>
             )}
 
@@ -384,7 +412,9 @@
     }
 
     // ── Tarjeta de una reserva ──
-    function ReservaTarjeta({ r, orden, onEditar, onEstado, onEliminar, ocupado }) {
+    function ReservaTarjeta({ r, orden, plegable, onEditar, onEstado, onEliminar, ocupado }) {
+      const [abierta, setAbierta] = useState(false);
+      const ver = !plegable || abierta;
       const total = rsvTotal(r), resta = rsvResta(r);
       const sena = Number(r.sena) || 0;
       const entregada = r.estado === "entregada";
@@ -393,52 +423,65 @@
       const vencida = !entregada && r.fechaRetiro && r.fechaRetiro < SersaleBase.hoy();
       const wa = rsvWhatsApp(r.contacto), tel = rsvTelefono(r.contacto);
       const dato = { fontFamily:"'IBM Plex Mono',ui-monospace,monospace", fontVariantNumeric:"tabular-nums" };
-      const accion = { minHeight:44, padding:"0 12px", borderRadius:12, fontWeight:600, fontSize:13, cursor:"pointer" };
+      const accion = { minHeight:44, minWidth:44, padding:"0 12px", borderRadius:12, fontWeight:600, fontSize:13, cursor:"pointer" };
+      const sinSena = <span style={{display:"inline-block",padding:"1px 8px",borderRadius:10,background:"#F0E7D9",color:"#784212",fontWeight:700,fontSize:12}}>Sin seña</span>;
       return (
         <div data-reserva={r.id} style={{background:"#fff",borderRadius:14,border:"1px solid #D8DCE0",borderLeft:"4px solid " + (entregada ? "#2F6B4F" : vencida ? "#A8702A" : "#A4232A"),padding:"14px 14px 12px",marginBottom:12,opacity:entregada?0.82:1}}>
-          <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
-            <span style={{...dato,flexShrink:0,minWidth:30,textAlign:"center",padding:"4px 6px",borderRadius:8,background:"#EDEEF0",color:"#3A424A",fontSize:12,fontWeight:600}}>{orden}</span>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:800,fontSize:16,color:"#191E23",overflowWrap:"anywhere"}}>{r.cliente}</div>
-              <div style={{fontSize:15,color:"#191E23",marginTop:3,overflowWrap:"anywhere"}}>
-                <strong>{r.item}</strong> · <span style={dato}>{rsvKg(r.kg)}</span>
+          <div onClick={plegable ? ()=>setAbierta(x=>!x) : undefined} role={plegable ? "button" : undefined} aria-expanded={plegable ? abierta : undefined} style={{cursor:plegable?"pointer":"default"}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+              <span style={{...dato,flexShrink:0,minWidth:30,textAlign:"center",padding:"4px 6px",borderRadius:8,background:"#EDEEF0",color:"#3A424A",fontSize:12,fontWeight:600}}>{orden}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:800,fontSize:16,color:"#191E23",overflowWrap:"anywhere"}}>{r.cliente}</div>
+                <div style={{fontSize:15,color:"#191E23",marginTop:3,overflowWrap:"anywhere"}}>
+                  <strong>{r.item}</strong> · <strong style={{whiteSpace:"nowrap"}}><span style={dato}>{SersaleBase.fmtNumero(Number(r.kg) || 0, 3)}</span> kg</strong>
+                </div>
+              </div>
+              {entregada && <span className="badge" style={{background:"#DDEBE3",color:"#2F6B4F",flexShrink:0}}>ENTREGADA</span>}
+            </div>
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginTop:10,fontSize:15,color:"#191E23"}}>
+              <div>
+                <div>Retira: {r.fechaRetiro ? <strong style={dato}>{SersaleBase.fmtFecha(r.fechaRetiro)}</strong> : <strong>a confirmar</strong>}</div>
+                {cuando && <div style={{marginTop:2}}><span style={{display:"inline-block",whiteSpace:"nowrap",padding:"1px 8px",borderRadius:10,fontSize:12,fontWeight:700,background:urgente?"#A4232A":vencida?"#F0E7D9":"#EDEEF0",color:urgente?"#fff":vencida?"#784212":"#5C666F"}}>{cuando}</span></div>}
+              </div>
+              <div style={{textAlign:"right"}}>
+                {entregada ? null
+                  : resta == null ? null
+                  : resta > 0 ? <div style={{whiteSpace:"nowrap"}}>Resta: <strong style={dato}>{SersaleBase.fmtMonto(resta)}</strong></div>
+                  : <span className="badge" style={{background:"#DDEBE3",color:"#2F6B4F"}}>PAGADO</span>}
+                {!entregada && !(sena > 0) && <div style={{marginTop:2}}>{sinSena}</div>}
               </div>
             </div>
-            {entregada && <span className="badge" style={{background:"#DDEBE3",color:"#2F6B4F",flexShrink:0}}>ENTREGADA</span>}
+            {plegable && <div aria-hidden="true" style={{textAlign:"center",lineHeight:"12px",marginTop:4,fontSize:12,color:"#A3ABB3"}}>{abierta ? "▴" : "▾"}</div>}
           </div>
 
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px 12px",marginTop:10,fontSize:13,color:"#3A424A"}}>
-            <div>Reservó: <strong style={dato}>{SersaleBase.fmtFecha(r.fechaReserva) || "—"}</strong></div>
-            <div>
-              Retira: {r.fechaRetiro ? <strong style={dato}>{SersaleBase.fmtFecha(r.fechaRetiro)}</strong> : <strong>a confirmar</strong>}
-              {cuando && <span style={{display:"inline-block",whiteSpace:"nowrap",marginLeft:6,padding:"1px 7px",borderRadius:10,fontSize:11,fontWeight:700,background:urgente?"#A4232A":vencida?"#F0E7D9":"#EDEEF0",color:urgente?"#fff":vencida?"#784212":"#5C666F"}}>{cuando}</span>}
+          {ver && (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",marginTop:8,fontSize:13,color:"#5C666F"}}>
+              <div>Seña: <strong style={{...dato,color:sena > 0 ? "#2F6B4F" : "#3A424A"}}>{SersaleBase.fmtMonto(sena)}</strong></div>
+              <div>Total: <strong style={{...dato,color:"#3A424A"}}>{total != null ? SersaleBase.fmtMonto(total) : "—"}</strong></div>
+              <div>Precio: {r.precioKg ? <strong style={{...dato,color:"#3A424A"}}>{SersaleBase.fmtMonto(r.precioKg)}/kg</strong> : <strong style={{color:"#3A424A"}}>a convenir</strong>}</div>
+              <div>Reservó: <strong style={{...dato,color:"#3A424A"}}>{SersaleBase.fmtFecha(r.fechaReserva) || "—"}</strong></div>
             </div>
-            <div>Precio: {r.precioKg ? <strong style={dato}>{SersaleBase.fmtMonto(r.precioKg)}/kg</strong> : <strong>a convenir</strong>}</div>
-            <div>Total: <strong style={dato}>{total != null ? SersaleBase.fmtMonto(total) : "—"}</strong></div>
-            <div>
-              {sena > 0
-                ? <span>Seña: <strong style={{...dato,color:"#2F6B4F"}}>{SersaleBase.fmtMonto(sena)}</strong></span>
-                : <span style={{padding:"1px 8px",borderRadius:10,background:"#F0E7D9",color:"#784212",fontWeight:700,fontSize:12}}>Sin seña</span>}
-            </div>
-            <div>{resta != null ? <span>Resta: <strong style={dato}>{SersaleBase.fmtMonto(resta)}</strong></span> : null}</div>
-          </div>
+          )}
 
-          {(r.contacto || r.obs) && (
+          {ver && (r.contacto || r.obs) && (
             <div style={{marginTop:10,padding:"8px 10px",background:"#F7F8F9",borderRadius:10,fontSize:13,color:"#3A424A",whiteSpace:"pre-line",overflowWrap:"anywhere"}}>
               {r.contacto && <div>📞 {r.contacto}</div>}
               {r.obs && <div style={{marginTop:r.contacto?4:0,color:"#5C666F"}}>📝 {r.obs}</div>}
             </div>
           )}
 
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
-            {entregada
-              ? <button disabled={ocupado} onClick={()=>onEstado(r, "pendiente")} style={{...accion,border:"1.5px solid #D8DCE0",background:"#fff",color:"#3A424A"}}>↩ Volver a pendiente</button>
-              : <button disabled={ocupado} onClick={()=>onEstado(r, "entregada")} style={{...accion,flex:1,border:"none",background:"#2F6B4F",color:"#fff"}}>✓ Entregada</button>}
-            {wa && <a href={SersaleBase.waLink("", wa)} target="_blank" rel="noopener" aria-label={"WhatsApp a " + r.cliente} style={{...accion,display:"inline-flex",alignItems:"center",textDecoration:"none",border:"1.5px solid #2F6B4F",background:"#fff",color:"#2F6B4F"}}>WhatsApp</a>}
-            {tel && <a href={"tel:" + tel} aria-label={"Llamar a " + r.cliente} style={{...accion,display:"inline-flex",alignItems:"center",textDecoration:"none",border:"1.5px solid #26536E",background:"#fff",color:"#26536E"}}>Llamar</a>}
-            <button disabled={ocupado} onClick={()=>onEditar(r)} style={{...accion,border:"1.5px solid #2A333B",background:"#fff",color:"#2A333B"}}>Editar</button>
-            <button disabled={ocupado} onClick={()=>onEliminar(r)} aria-label={"Eliminar la reserva de " + r.cliente} style={{...accion,border:"1.5px solid #C33039",background:"#fff",color:"#C33039"}}>🗑</button>
-          </div>
+          {ver && (
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
+              {entregada
+                ? <button disabled={ocupado} onClick={()=>onEstado(r, "pendiente")} style={{...accion,border:"1.5px solid #D8DCE0",background:"#fff",color:"#3A424A"}}>↩ Volver a pendiente</button>
+                : <button disabled={ocupado} onClick={()=>onEstado(r, "entregada")} style={{...accion,flex:"1 0 auto",whiteSpace:"nowrap",border:"none",background:"#2F6B4F",color:"#fff"}}>✓ Entregada</button>}
+              {wa && <a href={SersaleBase.waLink("", wa)} target="_blank" rel="noopener" aria-label={"WhatsApp a " + r.cliente} style={{...accion,display:"inline-flex",alignItems:"center",justifyContent:"center",textDecoration:"none",border:"1.5px solid #2F6B4F",background:"#fff",color:"#2F6B4F"}}>WhatsApp</a>}
+              {tel && <a href={"tel:" + tel} aria-label={"Llamar a " + r.cliente} style={{...accion,display:"inline-flex",alignItems:"center",justifyContent:"center",textDecoration:"none",border:"1.5px solid #26536E",background:"#fff",color:"#26536E"}}>Llamar</a>}
+              <button disabled={ocupado} onClick={()=>onEditar(r)} style={{...accion,border:"1.5px solid #2A333B",background:"#fff",color:"#2A333B"}}>Editar</button>
+              <button disabled={ocupado} onClick={()=>onEliminar(r)} aria-label={"Eliminar la reserva de " + r.cliente} style={{...accion,border:"1.5px solid #C33039",background:"#fff",color:"#C33039"}}>🗑</button>
+            </div>
+          )}
         </div>
       );
     }
@@ -455,6 +498,7 @@
       const [ver, setVer] = useState("pendiente"); // pendiente | entregada | todas
       const [orden, setOrden] = useState(() => (sessionStorage.getItem("sersale_rsv_orden") === "retiro" ? "retiro" : "reserva"));
       const [buscar, setBuscar] = useState("");
+      const [verResumen, setVerResumen] = useState(null); // null = según cuántos renglones tenga
 
       // La lista se mantiene al día sola (también con lo que carga otro teléfono).
       useEffect(() => {
@@ -508,7 +552,7 @@
           const resta = rsvResta(r);
           const ok = await SersaleUI.confirmar({
             titulo: "Marcar como entregada",
-            cuerpo: r.cliente + " · " + r.item + " · " + rsvKg(r.kg) + (resta != null && resta > 0 ? "\nResta cobrar: " + SersaleBase.fmtMonto(resta) : ""),
+            cuerpo: r.cliente + " · " + r.item + " · " + rsvKg(r.kg) + "\n" + (resta == null ? "Precio a convenir: se cobra al entregar." : resta > 0 ? "Resta cobrar: " + SersaleBase.fmtMonto(resta) + " (calculado con " + rsvKg(r.kg) + ")" : "Ya está pago con la seña."),
             aceptar: "Entregada",
           });
           if (!ok) return;
@@ -544,7 +588,7 @@
       });
 
       if (form) {
-        return <ReservaForm key={form.id || "nueva"} reserva={form} clientes={clientes} onCerrar={()=>setForm(null)} onGuardada={cerrar => { if (cerrar) setForm(null); }} />;
+        return <ReservaForm key={form.id || "nueva"} reserva={form} clientes={clientes} anteriores={reservas || []} onCerrar={()=>setForm(null)} onGuardada={cerrar => { if (cerrar) setForm(null); }} />;
       }
 
       const todas = reservas || [];
@@ -556,8 +600,11 @@
       // El número de cada reserva es su lugar en el orden de reserva entre las pendientes.
       const lugar = {};
       rsvOrdenar(pendientes, "reserva").forEach((r, i) => { lugar[r.id] = i + 1; });
-      const base = ver === "pendiente" ? pendientes : ver === "entregada" ? entregadas : todas;
-      const visibles = rsvOrdenar(base, orden).filter(r => !buscar.trim() || SersaleBase.coincide([r.cliente, r.item, r.contacto].join(" "), buscar));
+      // Al buscar se mira en todas (pendientes y entregadas): si no, una ya entregada "no existe".
+      const buscando = buscar.trim() !== "";
+      const base = buscando ? todas : ver === "pendiente" ? pendientes : ver === "entregada" ? entregadas : todas;
+      const visibles = rsvOrdenar(base, orden).filter(r => !buscando || SersaleBase.coincide([r.cliente, r.item, r.contacto, r.obs].join(" "), buscar));
+      const plegable = visibles.length > 8;
 
       // Resumen de lo pendiente: cuánto hay que tener de cada cosa.
       // "Lechon", "LECHÓN" y "lechón " son lo mismo: se juntan (antes salían en renglones
@@ -576,15 +623,16 @@
       const totalSenas = pendientes.reduce((s, r) => s + (Number(r.sena) || 0), 0);
       const totalResta = pendientes.reduce((s, r) => s + Math.max(0, rsvResta(r) || 0), 0);
 
-      const chip = activo => ({ minHeight:40, padding:"0 14px", borderRadius:20, border:"1.5px solid " + (activo ? "#A4232A" : "#D8DCE0"), background:activo ? "#A4232A" : "#fff", color:activo ? "#fff" : "#3A424A", fontWeight:600, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" });
+      const resumenAbierto = verResumen == null ? resumen.length <= 4 : verResumen;
+      const chip = activo => ({ minHeight:44, padding:"0 14px", borderRadius:20, border:"1.5px solid " + (activo ? "#A4232A" : "#D8DCE0"), background:activo ? "#A4232A" : "#fff", color:activo ? "#fff" : "#3A424A", fontWeight:600, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" });
       const dato = { fontFamily:"'IBM Plex Mono',ui-monospace,monospace", fontVariantNumeric:"tabular-nums" };
 
       return (
         <div className="crm-page">
           <div className="chapa" style={{background:"#12161A",borderBottom:"2px solid #A4232A",color:"#fff",padding:"14px 20px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:10,boxShadow:"0 4px 20px rgba(192,57,43,0.35)"}}>
-            <button onClick={onBack} aria-label="Volver" style={{background:"none",color:"#fff",border:"none",cursor:"pointer",fontSize:20,padding:"4px 8px 4px 0",minHeight:44}}>←</button>
+            <button onClick={onBack} aria-label="Volver" style={{background:"none",color:"#fff",border:"none",cursor:"pointer",fontSize:20,padding:"4px 8px 4px 0",minHeight:44,minWidth:44,textAlign:"left"}}>←</button>
             <div style={{flex:1,fontWeight:800,fontSize:16}}>Reservas fin de año</div>
-            <button onClick={()=>setForm({})} style={{minHeight:40,padding:"0 14px",borderRadius:10,border:"1px solid rgba(239,234,225,0.3)",background:"rgba(239,234,225,0.12)",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>+ Nueva</button>
+            <button onClick={()=>setForm({})} style={{minHeight:44,padding:"0 14px",borderRadius:10,border:"1px solid rgba(239,234,225,0.3)",background:"rgba(239,234,225,0.12)",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>+ Nueva</button>
           </div>
 
           <div style={{padding:"16px 16px 24px"}}>
@@ -606,7 +654,15 @@
                     en este teléfono todavía no se pudieron traer las reservas ya anotadas{todas.length > 0 ? ", puede haber más de las que se ven" : ""}. Cuando conecte aparecen solas. Lo que cargues mientras tanto queda guardado.
                   </div>
                 )}
-                {pendientes.length > 0 && (
+                {(todas.length > 6 || buscando) && (
+                  <div style={{position:"relative",marginBottom:12}}>
+                    <input style={{...RSV_CAMPO, paddingRight:48}} placeholder="🔍 Buscar cliente, ítem o teléfono" aria-label="Buscar reserva" enterKeyHint="search" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"
+                      value={buscar} onChange={e=>setBuscar(e.target.value)} />
+                    {buscando && <button onClick={()=>setBuscar("")} aria-label="Borrar la búsqueda" style={{position:"absolute",right:2,top:2,width:44,height:44,border:"none",background:"transparent",color:"#5C666F",fontSize:18,cursor:"pointer"}}>✕</button>}
+                  </div>
+                )}
+                {buscando && <div style={{fontSize:12,color:"#5C666F",margin:"-4px 2px 10px"}}>{visibles.length} {visibles.length === 1 ? "reserva encontrada" : "reservas encontradas"} (pendientes y entregadas)</div>}
+                {pendientes.length > 0 && !buscando && (
                   <div style={{background:"#fff",borderRadius:14,border:"1px solid #D8DCE0",padding:"12px 14px",marginBottom:14}}>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:8,textAlign:"center"}}>
                       <div><div style={{...dato,fontWeight:700,fontSize:18,color:"#191E23"}}>{pendientes.length}</div><div style={{fontSize:11,color:"#79828B"}}>pendientes</div></div>
@@ -614,8 +670,10 @@
                       <div><div style={{...dato,fontWeight:700,fontSize:18,color:"#2F6B4F"}}>{SersaleBase.fmtMonto(totalSenas)}</div><div style={{fontSize:11,color:"#79828B"}}>en señas</div></div>
                     </div>
                     <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #EDEEF0"}}>
-                      <div style={{fontSize:11,fontWeight:600,letterSpacing:".08em",textTransform:"uppercase",color:"#79828B",marginBottom:6}}>Qué hay que tener</div>
-                      {resumen.map(x => (
+                      <button onClick={()=>setVerResumen(!resumenAbierto)} aria-expanded={resumenAbierto} style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%",minHeight:44,margin:"-10px 0 -4px",padding:0,border:"none",background:"transparent",cursor:"pointer",fontSize:11,fontWeight:600,letterSpacing:".08em",textTransform:"uppercase",color:"#5C666F"}}>
+                        <span>Qué hay que tener ({resumen.length})</span><span style={{fontSize:13,letterSpacing:0,textTransform:"none"}}>{resumenAbierto ? "Ocultar ▴" : "Ver ▾"}</span>
+                      </button>
+                      {resumenAbierto && resumen.map(x => (
                         <div key={x.item} style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:13,padding:"3px 0",color:"#191E23"}}>
                           <span style={{overflowWrap:"anywhere"}}>{x.item} <span style={{color:"#79828B"}}>× {x.cantidad}</span></span>
                           <strong style={{...dato,flexShrink:0}}>{rsvKg(x.kg)}</strong>
@@ -626,19 +684,16 @@
                   </div>
                 )}
 
-                <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginBottom:8,WebkitOverflowScrolling:"touch"}}>
+                {!buscando && <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginBottom:8,WebkitOverflowScrolling:"touch"}}>
                   <button onClick={()=>setVer("pendiente")} style={chip(ver==="pendiente")}>Pendientes ({pendientes.length})</button>
                   <button onClick={()=>setVer("entregada")} style={chip(ver==="entregada")}>Entregadas ({entregadas.length})</button>
                   <button onClick={()=>setVer("todas")} style={chip(ver==="todas")}>Todas ({todas.length})</button>
-                </div>
+                </div>}
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                   <span style={{fontSize:12,color:"#79828B"}}>Ordenar por fecha de</span>
-                  <button onClick={()=>elegirOrden("reserva")} aria-pressed={orden==="reserva"} style={{...chip(orden==="reserva"),minHeight:36,background:orden==="reserva"?"#2A333B":"#fff",borderColor:orden==="reserva"?"#2A333B":"#D8DCE0"}}>Reserva</button>
-                  <button onClick={()=>elegirOrden("retiro")} aria-pressed={orden==="retiro"} style={{...chip(orden==="retiro"),minHeight:36,background:orden==="retiro"?"#2A333B":"#fff",borderColor:orden==="retiro"?"#2A333B":"#D8DCE0"}}>Retiro</button>
+                  <button onClick={()=>elegirOrden("reserva")} aria-pressed={orden==="reserva"} style={{...chip(orden==="reserva"),background:orden==="reserva"?"#2A333B":"#fff",borderColor:orden==="reserva"?"#2A333B":"#D8DCE0"}}>Reserva</button>
+                  <button onClick={()=>elegirOrden("retiro")} aria-pressed={orden==="retiro"} style={{...chip(orden==="retiro"),background:orden==="retiro"?"#2A333B":"#fff",borderColor:orden==="retiro"?"#2A333B":"#D8DCE0"}}>Retiro</button>
                 </div>
-                {(todas.length > 6 || buscar !== "") && (
-                  <input style={{...RSV_CAMPO, marginBottom:12}} placeholder="🔍 Buscar por cliente, ítem o contacto" aria-label="Buscar reserva" value={buscar} onChange={e=>setBuscar(e.target.value)} />
-                )}
 
                 {visibles.length === 0 && (
                   <div style={{textAlign:"center",padding:"36px 16px",color:"#79828B"}}>
@@ -652,11 +707,27 @@
                   </div>
                 )}
 
-                {visibles.map(r => (
-                  <ReservaTarjeta key={r.id} r={r} orden={r.estado === "entregada" ? "✓" : "#" + (lugar[r.id] || "")}
-                    ocupado={cambiando || eliminando}
-                    onEditar={x=>setForm(x)} onEstado={cambiarEstado} onEliminar={eliminar} />
-                ))}
+                {visibles.map((r, i) => {
+                  const f = r.fechaRetiro || "";
+                  const cabecera = orden === "retiro" && (i === 0 || (visibles[i - 1].fechaRetiro || "") !== f);
+                  const delDia = cabecera ? visibles.filter(x => (x.fechaRetiro || "") === f) : [];
+                  const n = f ? SersaleBase.diasEntre(SersaleBase.hoy(), f) : null;
+                  // Un día pasado solo es "sin retirar" si le queda alguna pendiente.
+                  const atrasado = f && n < 0 && delDia.some(x => x.estado !== "entregada");
+                  return (
+                    <React.Fragment key={r.id}>
+                      {cabecera && (
+                        <div style={{background:!f || (n < 0 && !atrasado) ? "#79828B" : n < 0 ? "#C33039" : n === 0 ? "#2F6B4F" : n === 1 ? "#A8702A" : "#26536E",borderRadius:10,padding:"6px 12px",margin:"4px 0 6px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:4}}>
+                          <span style={{fontWeight:700,fontSize:12,color:"#fff"}}>{f ? ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"][SersaleBase.diaSemana(f)] + " " + SersaleBase.fmtFechaCorta(f) + " — " + (atrasado ? "sin retirar (" + rsvCuando(f) + ")" : rsvCuando(f)) : "Retiro a confirmar"}</span>
+                          <span style={{fontSize:11,background:"rgba(255,255,255,0.25)",color:"#fff",borderRadius:99,padding:"2px 8px",fontWeight:700}}>{delDia.length} · {rsvKg(delDia.reduce((s2, x) => s2 + (Number(x.kg) || 0), 0))}</span>
+                        </div>
+                      )}
+                      <ReservaTarjeta r={r} orden={r.estado === "entregada" ? "✓" : "#" + (lugar[r.id] || "")}
+                        plegable={plegable} ocupado={cambiando || eliminando}
+                        onEditar={x=>setForm(x)} onEstado={cambiarEstado} onEliminar={eliminar} />
+                    </React.Fragment>
+                  );
+                })}
               </>
             )}
           </div>

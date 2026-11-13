@@ -334,3 +334,85 @@ test("el operario no ve las reservas", async () => {
     await h.close();
   }
 });
+
+// ── Uso con muchas reservas (días de entrega) ────────────────────────────────
+
+function muchas() {
+  const nombres = ["María Fernández", "Jorge Giménez", "Restaurante Lo de Néstor", "Lucía Paredes", "Carlos Ibáñez", "Ana Sosa", "Pedro Acosta", "Susana Díaz", "Raúl Benítez", "Mónica Ledesma", "Héctor Vera", "Elsa Quiroga"];
+  const items = ["LECHÓN", "CORDERO", "MEDIO LECHÓN", "LECHÓN", "COCHINILLO", "LECHÓN", "MEDIO CORDERO", "LECHÓN", "CORDERO", "LECHÓN", "COCHINILLO", "LECHÓN"];
+  const retiros = ["2026-11-10", "2026-11-11", "2026-12-23", "2026-12-24", "2026-12-24", "2026-12-24", "2026-12-30", "2026-12-31", "2026-12-31", "", "2026-11-09", "2026-12-23"];
+  const out = {};
+  nombres.forEach((n, i) => {
+    out["r" + String(i).padStart(2, "0")] = reserva({
+      cliente: n, item: items[i], kg: 6 + i, precioKg: items[i] === "LECHÓN" ? 14500 + i * 100 : 16900, sena: i % 2 ? 20000 : 0,
+      fechaReserva: "2026-11-" + String(1 + (i % 9)).padStart(2, "0"), fechaRetiro: retiros[i],
+      estado: i === 4 ? "entregada" : "pendiente", creadoEn: "2026-11-0" + (1 + (i % 9)) + "T1" + (i % 10) + ":00:00.000Z",
+    });
+  });
+  return out;
+}
+
+test("con muchas reservas: tarjetas plegadas, buscador que encuentra también las entregadas y días de retiro separados", async () => {
+  const h = await abrir(muchas());
+  try {
+    const maria = tarjeta(h, "María Fernández");
+    await maria.waitFor();
+    // Plegada: se ve quién, qué, cuándo retira y cuánto resta; las acciones aparecen al tocarla
+    const plegada = (await maria.innerText()).replace(/\s+/g, " ");
+    for (const esperado of ["María Fernández", "LECHÓN", "6 kg", "Retira: 10/11/2026", "HOY", "Resta: $87.000"]) assert.ok(plegada.includes(esperado), "falta «" + esperado + "»: " + plegada);
+    assert.equal(await maria.getByRole("button", { name: "✓ Entregada" }).count(), 0);
+    await maria.click();
+    await maria.getByRole("button", { name: "✓ Entregada" }).waitFor();
+    await maria.getByRole("button", { name: "Editar" }).waitFor();
+
+    // El buscador está arriba y busca en todas, también en las entregadas
+    const buscador = h.page.getByLabel("Buscar reserva");
+    await buscador.fill("ibañez");
+    await tarjeta(h, "Carlos Ibáñez").waitFor();
+    await h.page.getByText("1 reserva encontrada (pendientes y entregadas)").waitFor();
+    assert.match(await tarjeta(h, "Carlos Ibáñez").innerText(), /ENTREGADA/);
+    assert.equal(await tarjetas(h).count(), 1);
+    await h.page.getByRole("button", { name: "Borrar la búsqueda" }).click();
+    await maria.waitFor();
+
+    // Por retiro: una franja por día, con cuántas son y cuántos kilos
+    await boton(h, "Retiro").click();
+    const pagina = (await h.page.locator(".crm-page").innerText()).replace(/\s+/g, " ");
+    for (const esperado of ["Lunes 09/11 — sin retirar (ayer) 1 · 16 kg", "Martes 10/11 — HOY 1 · 6 kg", "Miércoles 11/11 — MAÑANA 1 · 7 kg", "Jueves 24/12 — en 44 días 2 · 20 kg", "Retiro a confirmar 1 · 15 kg"]) {
+      assert.ok(pagina.includes(esperado), "falta la franja «" + esperado + "» en: " + pagina.slice(0, 900));
+    }
+    assert.ok(pagina.indexOf("sin retirar (ayer)") < pagina.indexOf("— HOY") && pagina.indexOf("— HOY") < pagina.indexOf("— MAÑANA"), "lo atrasado primero, después hoy y mañana");
+    assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth), 390, "sin desborde a lo ancho");
+    assert.deepEqual(erroresReales(h.errores), []);
+  } finally {
+    await h.close();
+  }
+});
+
+test("formulario: abre arriba aunque la lista esté bajada, y propone el último precio del ítem", async () => {
+  const h = await abrir(muchas());
+  try {
+    await tarjeta(h, "María Fernández").waitFor();
+    await h.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await boton(h, "+ Nueva").click();
+    await h.page.getByText("Nueva reserva").waitFor();
+    await h.page.waitForFunction(() => window.scrollY === 0);
+    assert.ok(await h.page.locator("#rsv-cliente").isVisible());
+
+    // Último LECHÓN reservado (por fecha de reserva, el 08/11): Susana Díaz, $15.200
+    await h.page.locator("#rsv-item").selectOption("LECHÓN");
+    assert.equal(await h.page.getByLabel("Precio por kg").inputValue(), "15.200");
+    // Si el precio se escribió a mano, cambiar de ítem no lo pisa
+    await llenar(h, { precio: "15000" });
+    await h.page.locator("#rsv-item").selectOption("CORDERO");
+    assert.equal(await h.page.getByLabel("Precio por kg").inputValue(), "15.000");
+    // Un ítem sin reservas anteriores no propone nada
+    await h.page.getByLabel("Precio por kg").fill("");
+    await h.page.locator("#rsv-item").selectOption("MEDIO CORDERO");
+    assert.equal(await h.page.getByLabel("Precio por kg").inputValue(), "16.900");
+    await h.page.locator("#rsv-item").selectOption("Queso Tybo");
+    assert.equal(await h.page.getByLabel("Precio por kg").inputValue(), "");
+  } finally {
+    await h.close();
+  }
+});
