@@ -112,6 +112,17 @@ function momento_index(){for(var i=0;i<arguments.length;i++){var f=SersaleBase.a
 // Kg que se facturan de un ítem: lo pesado (aunque sea 0) o, si no se pesó, lo pedido. Igual que el remito.
 function kgItem_index(it){if(it.kgReal!=null&&it.kgReal!=='')return Number(it.kgReal)||0;return parseFloat(it.cantidad)||0;}
 
+// Reservas es una colección nueva: si las reglas de la base todavía no la habilitan
+// (permission-denied), el backup de todo lo demás se genera igual y se avisa bien claro.
+// Antes, por esa sola colección no se generaba ningún archivo. Cualquier otro error
+// (sin señal, lectura cortada) sigue frenando el backup, como en el resto.
+var reservasSinPermiso_index=false;
+function leerColeccion_index(n){
+  if(n!=='reservas')return fbGet(n);
+  reservasSinPermiso_index=false;
+  return fbGet(n).catch(function(e){if(e&&e.code==='permission-denied'){console.error('Backup: la base no permite leer las reservas',e);reservasSinPermiso_index=true;return [];}throw e;});
+}
+
 // Cada intento prueba la conexión de cero: si el anterior falló, Firestore queda un rato en
 // "sin conexión" y contestaría que no hay señal sin volver a probar.
 async function reiniciarRed_index(){try{await db.disableNetwork();await db.enableNetwork();}catch(e){console.warn(e);}}
@@ -124,7 +135,7 @@ function leerTodo_index(alAvanzar,limite){
     function cerrar(fn,v){if(fin)return;fin=true;clearTimeout(reloj);fn(v);}
     function vigilar(){if(!limite)return;clearTimeout(reloj);reloj=setTimeout(function(){var e=new Error('La lectura quedó trabada');e.trabada=true;cerrar(mal,e);},limite);}
     vigilar();
-    Promise.all(COLECCIONES_index.map(function(n){return fbGet(n).then(function(r){hechas++;if(!fin){vigilar();alAvanzar(hechas);}return r;});}))
+    Promise.all(COLECCIONES_index.map(function(n){return leerColeccion_index(n).then(function(r){hechas++;if(!fin){vigilar();alAvanzar(hechas);}return r;});}))
       .then(function(r){cerrar(ok,r);},function(e){cerrar(mal,e);});
   });
 }
@@ -213,7 +224,9 @@ async function generarBackup(){
     conteos['Stock Mov']=crearHoja('Stock Movimientos','MOVIMIENTOS DE STOCK',['ID','Fecha','Producto','Tipo','Subtipo','Cantidad','Unidad','Destino','Encargado','Reporte','Obs'],filas(movsStock,function(d){var m=d.data;return[d.id,dia_index(m.fecha,m.createdAt),m.nombre||'',m.tipo||'',m.subtipo||'',m.cantidad!=null?m.cantidad:'',m.unidad||'',m.destino||'',m.encargado||'',m.ref||'',m.obs||''];}));
     var reportes=base.reportes.slice().sort(function(a,b){return momento_index(b.data.fechaISO,b.data.fecha)-momento_index(a.data.fechaISO,a.data.fecha);});
     conteos.Reportes=crearHoja('Reportes Producción','REPORTES DE PRODUCCIÓN',['ID','Fecha','Área','Encargado','Producto','Cantidad','Unidad','Obs ítem','Obs'],filas(reportes,function(d){var r=d.data;var its=lista_index(r.items).length?r.items:[{}];var f=dia_index(r.fechaISO,r.fecha);return its.map(function(it){return[d.id,f,r.area||'',r.encargado||'',it.producto||'-',it.cantidad!=null?it.cantidad:'',it.unidad||'',it.obs||'',r.obs||''];});},true));
-    conteos.Reservas=crearHoja('Reservas','RESERVAS DE FIN DE AÑO',['ID','Fecha del pedido','Cliente','Contacto','Ítem','Kg','Precio por kg ($)','Total estimado ($)','Seña ($)','Resta cobrar ($)','Fecha de retiro','Estado','Observaciones'],filas(base.reservas,function(d){var v=d.data;var kg=Number(v.kg)||0,pr=Number(v.precioKg)||0,se=Number(v.sena)||0;var tot=kg>0&&pr>0?Math.round(kg*pr):'';return[d.id,v.fechaReserva||'',v.cliente||'',v.contacto||'',v.item||'',kg,pr||'',tot,se,tot===''?'':tot-se,v.fechaRetiro||'',v.estado||'',v.obs||''];}).sort(function(a,b){return String(a[1]).localeCompare(String(b[1]));}));
+    // Reservas: por fecha del pedido y, en el mismo día, en el orden en que se cargaron (como en la pantalla).
+    var reservas=base.reservas.slice().sort(function(a,b){return String(a.data.fechaReserva||'').localeCompare(String(b.data.fechaReserva||''))||String(a.data.creadoEn||'').localeCompare(String(b.data.creadoEn||''));});
+    conteos.Reservas=crearHoja('Reservas','RESERVAS DE FIN DE AÑO'+(reservasSinPermiso_index?' — ⚠ NO SE PUDIERON LEER: la base de datos no lo permite':''),['ID','Fecha del pedido','Cliente','Contacto','Ítem','Kg','Precio por kg ($)','Total estimado ($)','Seña ($)','Resta cobrar ($)','Fecha de retiro','Estado','Observaciones'],filas(reservas,function(d){var v=d.data;var kg=Number(v.kg)||0,pr=Number(v.precioKg)||0,se=Number(v.sena)||0;var tot=kg>0&&pr>0?Math.round(kg*pr):'';return[d.id,v.fechaReserva||'',v.cliente||'',v.contacto||'',v.item||'',kg,pr||'',tot,se,tot===''?'':tot-se,v.fechaRetiro||'',v.estado||'',v.obs||''];}));
     var wsRes=XLSX.utils.aoa_to_sheet([]);
     XLSX.utils.sheet_add_aoa(wsRes,[['BACKUP CRM — FRIGORÍFICO SERSALE'],['CUIT 30-70227633-7'],[],['Fecha:',fechaStr],[],['MÓDULO','REGISTROS']],{origin:'A1'});
     var fila=7;Object.entries(conteos).forEach(function(e){XLSX.utils.sheet_add_aoa(wsRes,[[e[0],e[1]]],{origin:'A'+fila});fila++;});
@@ -224,6 +237,7 @@ async function generarBackup(){
     var total=Object.keys(conteos).reduce(function(s,k){return s+conteos[k];},0);
     estado_index('✅ Backup generado: '+archivo+' ('+total+' registros)'+(conError?' · ⚠️ '+conError+' registro'+(conError===1?'':'s')+' con formato inesperado: figuran con ⚠ en su hoja':''));
     if(conError)SersaleUI.toast(conError+' registro'+(conError===1?'':'s')+' no se pudieron leer bien. Revisá las filas con ⚠ en el Excel.',{tipo:'error'});
+    if(reservasSinPermiso_index){document.getElementById('status').textContent+=' · ⚠️ SIN las reservas de fin de año: la base de datos no permite leerlas. Avisá para que se habilite.';SersaleUI.toast('El backup salió sin las reservas de fin de año: la base de datos no permite leerlas.',{tipo:'error'});}
   }catch(e){fallo('No se pudo generar el backup: '+(e&&e.message||e),e);}
   finally{generando_index=false;btn.disabled=false;btn.style.opacity='';}
 }

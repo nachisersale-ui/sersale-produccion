@@ -17,6 +17,7 @@
 
     const RSV_ITEMS_FIESTAS = ["LECHÓN", "CORDERO", "COCHINILLO", "MEDIO LECHÓN", "MEDIO CORDERO"];
     const RSV_OTRO = "__otro__";
+    const RSV_BAJADAS = "sersale_rsv_bajadas"; // marca en el teléfono: las reservas ya se bajaron del servidor alguna vez
 
     /** Total estimado de la reserva (kg × precio), o null si falta alguno de los dos. */
     function rsvTotal(r) {
@@ -33,6 +34,30 @@
       return SersaleBase.fmtNumero(Number(n) || 0, 3) + " kg";
     }
     /**
+     * Kilos del campo (SersaleBase.InputDecimal los entrega con punto decimal: "10.250")
+     * → número. En kilos el punto nunca separa miles: con SersaleBase.numero(), que es
+     * para montos, "10,250" se guardaba como 10.250 kg.
+     */
+    function rsvKilos(v) {
+      const n = parseFloat(v);
+      return isFinite(n) ? n : 0;
+    }
+    /** Ítems conocidos (los de las fiestas y el catálogo de pedidos), por nombre sin mayúsculas ni acentos. */
+    function rsvItemsDeLista() {
+      const catalogo = getProductos() || {};
+      const indice = new Map();
+      RSV_ITEMS_FIESTAS.concat(...Object.keys(catalogo).map(cat => p1ProductosDe(catalogo, cat))).forEach(it => {
+        const k = SersaleBase.norm(it);
+        if (k && !indice.has(k)) indice.set(k, String(it));
+      });
+      return indice;
+    }
+    /** "lechon" o " Medio  Lechón " → el nombre de la lista ("MEDIO LECHÓN"); si no está en la lista, lo escrito. */
+    function rsvItemDeLista(texto, indice) {
+      const t = String(texto == null ? "" : texto).trim().replace(/\s+/g, " ");
+      return (indice || rsvItemsDeLista()).get(SersaleBase.norm(t)) || t;
+    }
+    /**
      * Orden de la lista. "reserva": por fecha de reserva y, en el mismo día, por
      * orden de carga. "retiro": por fecha de retiro (las que no tienen fecha, al
      * final) y después por orden de reserva.
@@ -44,26 +69,79 @@
       const copia = lista.slice();
       if (criterio === "retiro") {
         copia.sort((a, b) => {
-          const ra = a.fechaRetiro || "9999-99-99", rb = b.fechaRetiro || "9999-99-99";
+          // String(): una fecha cargada a mano en la base como número no tiene que tirar la pantalla
+          const ra = String(a.fechaRetiro || "9999-99-99"), rb = String(b.fechaRetiro || "9999-99-99");
           return ra.localeCompare(rb) || porReserva(a, b);
         });
       } else copia.sort(porReserva);
       return copia;
     }
-    /** Número para WhatsApp a partir de lo escrito en "contacto" (celular argentino de 10 dígitos), o "". */
-    function rsvWhatsApp(contacto) {
-      const m = String(contacto || "").match(/(?:\+?54\s*9?\s*)?(?:\(?0?\d{2,4}\)?[\s-]*)?(?:15[\s-]*)?\d{3,4}[\s-]*\d{4}/);
-      if (!m) return "";
-      let d = m[0].replace(/\D/g, "");
-      if (d.indexOf("549") === 0) return d.length === 13 ? d : "";
-      if (d.indexOf("54") === 0 && d.length === 12) return "549" + d.slice(2);
-      d = d.replace(/^0/, "");
-      return d.length === 10 ? "549" + d : "";
+
+    // ── Teléfonos escritos en "contacto" ──
+    // Un botón que llama o escribe a otro número es peor que no tenerlo: solo se
+    // ofrece cuando lo escrito cierra como teléfono argentino.
+    /**
+     * Número nacional (característica + número, 10 cifras) de un teléfono escrito con o
+     * sin +54, 9, 0 y 15: "011 15 5555-1234" → "1155551234". "15 5555-1234" (15 y ocho
+     * cifras) solo puede ser un celular de Buenos Aires (11). Si no cierra, "".
+     */
+    function rsvNumeroNacional(cifras) {
+      let d = String(cifras);
+      if (d.length > 10 && d.indexOf("54") === 0) d = d.slice(2);
+      if (d.length > 10 && d.charAt(0) === "9") d = d.slice(1);
+      if (d.length > 10 && d.charAt(0) === "0") d = d.slice(1);
+      if (d.length === 12) {
+        // característica + 15 + número
+        const m = /^(11)15(\d{8})$/.exec(d) || /^([23]\d{2})15(\d{7})$/.exec(d) || /^([23]\d{3})15(\d{6})$/.exec(d);
+        d = m ? m[1] + m[2] : "";
+      } else if (/^15\d{8}$/.test(d)) d = "11" + d.slice(2);
+      return /^(11|[23]\d)\d{8}$/.test(d) ? d : "";
     }
-    /** Primer teléfono escrito en "contacto", solo dígitos (para llamar), o "". */
+    /**
+     * Teléfonos que hay en "contacto", en el orden en que están escritos: [{ llamar, wa, celular }].
+     * `llamar`: las cifras como se marcan. `wa`: el número para WhatsApp (549 +
+     * característica + número) o "" si no se puede saber (un fijo sin característica).
+     * `celular`: está escrito como celular (con 15 o con +54 9).
+     */
+    function rsvTelefonos(contacto) {
+      const salida = [];
+      const texto = String(contacto == null ? "" : contacto).replace(/\S+@\S+/g, " "); // los mails no son teléfonos
+      // Un teléfono son grupos de cifras unidos por un espacio, guion o punto (a lo sumo
+      // dos seguidos) en el mismo renglón. "Senillosa 626 - 11 5555-1234" o la dirección en
+      // el renglón de arriba son cosas separadas (antes se llamaba al 626 11 5555-1234).
+      (texto.match(/\+?\(?\d+\)?(?:[ .-]{0,2}\(?\d+\)?)*/g) || []).forEach(trozo => {
+        const grupos = trozo.match(/\d+/g);
+        // Si adelante quedó pegada la altura de la calle ("Senillosa 626 11 5555-1234"), se saca de a un grupo.
+        for (let i = 0; i < grupos.length; i++) {
+          const resto = grupos.slice(i), d = resto.join("");
+          // Un primer grupo de una o dos cifras solo puede ser 9, 11, 15 o 54 ("Senillosa 26 4943-2106": 26 no es característica)
+          const suelto = resto[0].length <= 2 && ["9", "11", "15", "54"].indexOf(resto[0]) === -1;
+          const nacional = suelto ? "" : rsvNumeroNacional(d);
+          // Fijo de acá sin característica: "4943-2106" (un DNI, un CUIT o una fecha no tienen esa forma)
+          const local = !nacional && d.length === 8 && (resto.length === 1 || (resto.length === 2 && resto[0].length === 4));
+          if (nacional || local) {
+            const conPais = !!nacional && d.length > 10 && d.indexOf("54") === 0;
+            const celular = !!nacional && [nacional, "0" + nacional, "54" + nacional].indexOf(d) === -1;
+            salida.push({ llamar: (conPais ? "+" : "") + d, wa: nacional ? "549" + nacional : "", celular });
+            break;
+          }
+        }
+      });
+      return salida;
+    }
+    /**
+     * Número para WhatsApp de lo escrito en "contacto", o "". Si hay varios teléfonos, el que
+     * está escrito como celular ("011 4943-2106 / 15-5555-1234": el segundo).
+     */
+    function rsvWhatsApp(contacto) {
+      const conWa = rsvTelefonos(contacto).filter(x => x.wa);
+      const t = conWa.filter(x => x.celular)[0] || conWa[0];
+      return t ? t.wa : "";
+    }
+    /** Primer teléfono escrito en "contacto", para llamar, o "". */
     function rsvTelefono(contacto) {
-      const m = String(contacto || "").match(/\+?\d[\d\s().-]{6,}\d/);
-      return m ? m[0].replace(/[^\d+]/g, "") : "";
+      const t = rsvTelefonos(contacto)[0];
+      return t ? t.llamar : "";
     }
     /** "en 3 días", "HOY", "MAÑANA", "hace 2 días"; "" si no hay fecha. */
     function rsvCuando(dia) {
@@ -92,24 +170,56 @@
     function ReservaForm({ reserva, clientes, onCerrar, onGuardada }) {
       const nueva = !reserva || !reserva.id;
       const catalogo = getProductos() || {};
-      const enCatalogo = it => Object.keys(catalogo).some(cat => (catalogo[cat] || []).includes(it));
-      const itemInicial = reserva && reserva.item ? reserva.item : "";
-      const esConocido = it => RSV_ITEMS_FIESTAS.includes(it) || enCatalogo(it);
+      // Lo que ya está guardado puede venir cargado a mano en la base con otro tipo de dato
+      // (un teléfono como número): los textos se leen como texto y las fechas, solo si lo son.
+      const txt = v => (v == null ? "" : String(v));
+      const dia = v => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "");
+      const previa = reserva || {};
+      const itemInicial = txt(previa.item);
+      const esConocido = it => Object.keys(catalogo).some(cat => p1ProductosDe(catalogo, cat).includes(it)) || RSV_ITEMS_FIESTAS.includes(it);
 
-      const [fechaReserva, setFechaReserva] = useState((reserva && reserva.fechaReserva) || SersaleBase.hoy());
-      const [cliente, setCliente] = useState((reserva && reserva.cliente) || "");
-      const [contacto, setContacto] = useState((reserva && reserva.contacto) || "");
+      const [fechaReserva, setFechaReserva] = useState(dia(previa.fechaReserva) || SersaleBase.hoy());
+      const [cliente, setCliente] = useState(txt(previa.cliente));
+      const [contacto, setContacto] = useState(txt(previa.contacto));
       const [itemSel, setItemSel] = useState(itemInicial === "" ? "" : esConocido(itemInicial) ? itemInicial : RSV_OTRO);
       const [itemLibre, setItemLibre] = useState(itemInicial !== "" && !esConocido(itemInicial) ? itemInicial : "");
-      const [kg, setKg] = useState(reserva && reserva.kg != null ? String(reserva.kg) : "");
-      const [precioKg, setPrecioKg] = useState(reserva && reserva.precioKg != null ? String(reserva.precioKg) : "");
-      const [sena, setSena] = useState(reserva && Number(reserva.sena) > 0 ? String(reserva.sena) : "");
-      const [fechaRetiro, setFechaRetiro] = useState((reserva && reserva.fechaRetiro) || "");
-      const [obs, setObs] = useState((reserva && reserva.obs) || "");
+      const [kg, setKg] = useState(previa.kg != null ? String(previa.kg) : "");
+      const [precioKg, setPrecioKg] = useState(previa.precioKg != null ? String(previa.precioKg) : "");
+      const [sena, setSena] = useState(Number(previa.sena) > 0 ? String(previa.sena) : "");
+      const [fechaRetiro, setFechaRetiro] = useState(dia(previa.fechaRetiro));
+      const [obs, setObs] = useState(txt(previa.obs));
 
-      const item = itemSel === RSV_OTRO ? itemLibre.trim() : itemSel;
-      const borrador = { kg: SersaleBase.numero(kg), precioKg: SersaleBase.numero(precioKg), sena: SersaleBase.numero(sena) };
+      const item = itemSel === RSV_OTRO ? rsvItemDeLista(itemLibre) : itemSel;
+      const borrador = { kg: rsvKilos(kg), precioKg: SersaleBase.numero(precioKg), sena: SersaleBase.numero(sena) };
       const total = rsvTotal(borrador), resta = rsvResta(borrador);
+
+      // ── Salir con algo a medio cargar: se pregunta antes de perderlo ──
+      // "Lo escrito" se compara contra cómo estaba el formulario al abrirlo (o al quedar
+      // listo para el ítem siguiente con "Guardar y cargar otro").
+      const firma = JSON.stringify([fechaReserva, cliente, contacto, itemSel, itemLibre, kg, precioKg, sena, fechaRetiro, obs]);
+      const firmaBase = React.useRef(null);
+      if (firmaBase.current === null) firmaBase.current = firma;
+      const hayCambios = firma !== firmaBase.current;
+      const preguntando = React.useRef(false);
+      async function salir() {
+        if (preguntando.current) return;
+        if (hayCambios) {
+          preguntando.current = true;
+          let ok = false;
+          try {
+            ok = await SersaleUI.confirmar({ titulo: "¿Salir sin guardar?", cuerpo: nueva ? "Se pierde lo que cargaste en esta reserva." : "Se pierden los cambios que hiciste en esta reserva.", aceptar: "Salir", cancelar: "Seguir cargando", peligro: true });
+          } finally { preguntando.current = false; }
+          if (!ok) return;
+        }
+        onCerrar();
+      }
+      // El gesto "atrás" del teléfono hace lo mismo que la flecha. Como el gesto ya consumió
+      // la entrada del historial, se anota otra (rearmar): si la persona decide seguir
+      // cargando, el próximo "atrás" tiene que volver a caer acá y no salir de Reservas.
+      const salirActual = React.useRef(salir);
+      salirActual.current = salir;
+      const [rearmar, setRearmar] = useState(0);
+      useEffect(() => SersaleBase.abrirAtras(() => { setRearmar(n => n + 1); salirActual.current(); }), [rearmar]);
 
       function datos() {
         const falta = m => { SersaleUI.toast(m, { tipo: "error" }); return null; };
@@ -117,6 +227,7 @@
         if (!cliente.trim()) return falta("Escribí el nombre del cliente.");
         if (!item) return falta(itemSel === RSV_OTRO ? "Escribí qué reserva." : "Elegí qué reserva.");
         if (!(borrador.kg > 0)) return falta("Poné cuántos kilos necesita.");
+        if (borrador.precioKg < 0 || borrador.sena < 0) return falta("El precio y la seña no pueden ser negativos. Revisá los importes.");
         if (fechaRetiro && fechaRetiro < fechaReserva) return falta("La fecha de retiro no puede ser anterior a la del pedido.");
         if (total != null && borrador.sena > total) return falta("La seña es mayor que el total de la reserva. Revisá los importes.");
         return {
@@ -141,18 +252,26 @@
           if (nueva) {
             await addDoc(collection(db, "reservas"), { ...d, estado: "pendiente", creadoEn: ahora, creadoPor: sessionStorage.getItem("sersale_usuario") || "" });
           } else {
-            await updateDoc(doc(db, "reservas", reserva.id), { ...d, actualizadoEn: ahora });
+            // Solo se escribe lo que se cambió en este formulario. Si se mandaban todos los
+            // campos, lo que otro teléfono había anotado mientras tanto (la seña que acaba de
+            // dejar) volvía al valor que tenía cuando se abrió esta pantalla.
+            const cambios = {};
+            Object.keys(d).forEach(k => { if (d[k] !== reserva[k]) cambios[k] = d[k]; });
+            if (Object.keys(cambios).length > 0) await updateDoc(doc(db, "reservas", reserva.id), { ...cambios, actualizadoEn: ahora });
           }
           SersaleUI.toast(nueva ? "Reserva guardada: " + d.cliente + " · " + d.item : "Reserva actualizada", { tipo: "ok" });
           if (otroItem === true) {
             // Mismo cliente, otro ítem: queda el nombre, el contacto y las fechas.
             setItemSel(""); setItemLibre(""); setKg(""); setPrecioKg(""); setSena(""); setObs("");
+            firmaBase.current = null; // lo que queda ya está guardado: no es "algo a medio cargar"
             if (onGuardada) onGuardada(false);
           } else if (onGuardada) onGuardada(true);
         } catch (e) {
           console.error(e);
           SersaleUI.toast(e && e.code === "permission-denied"
             ? "La base de datos no permite guardar reservas. Avisá para que se habilite."
+            : e && e.code === "not-found"
+            ? "Esta reserva ya no existe: la eliminaron desde otro teléfono. No se guardó nada."
             : "No se pudo guardar la reserva. Probá de nuevo.", { tipo: "error" });
         }
       });
@@ -161,7 +280,7 @@
       return (
         <div className="crm-page">
           <div className="chapa" style={{background:"#12161A",borderBottom:"2px solid #A4232A",color:"#fff",padding:"18px 20px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:10,boxShadow:"0 4px 20px rgba(192,57,43,0.35)"}}>
-            <button onClick={onCerrar} aria-label="Volver" style={{background:"none",color:"#fff",border:"none",cursor:"pointer",fontSize:20,padding:"4px 8px 4px 0",minHeight:44}}>←</button>
+            <button onClick={()=>salir()} aria-label="Volver" style={{background:"none",color:"#fff",border:"none",cursor:"pointer",fontSize:20,padding:"4px 8px 4px 0",minHeight:44}}>←</button>
             <div style={{flex:1,fontWeight:800,fontSize:16}}>{nueva ? "Nueva reserva" : "Editar reserva"}</div>
           </div>
           <div style={{padding:"6px 20px 24px"}}>
@@ -183,9 +302,9 @@
               <optgroup label="Fiestas">
                 {RSV_ITEMS_FIESTAS.map(it => <option key={it} value={it}>{it}</option>)}
               </optgroup>
-              {Object.keys(catalogo).filter(cat => (catalogo[cat] || []).length > 0).map(cat => (
+              {Object.keys(catalogo).filter(cat => p1ProductosDe(catalogo, cat).length > 0).map(cat => (
                 <optgroup key={cat} label={cat}>
-                  {catalogo[cat].map(it => <option key={cat + "|" + it} value={it}>{it}</option>)}
+                  {p1ProductosDe(catalogo, cat).map(it => <option key={cat + "|" + it} value={it}>{it}</option>)}
                 </optgroup>
               ))}
               <option value={RSV_OTRO}>Otro (escribir)…</option>
@@ -327,7 +446,9 @@
     // ── Pantalla de reservas ──
     function Reservas({ onBack }) {
       const [reservas, setReservas] = useState(null); // null = cargando
-      const [error, setError] = useState(false);
+      const [error, setError] = useState(null); // null | "permiso" | "otro"
+      // Lo que se ve, ¿lo confirmó el servidor o es solo lo guardado en este teléfono?
+      const [copia, setCopia] = useState({ sinServidor: false, nuncaBajadas: false });
       const [intento, setIntento] = useState(0);
       const [clientes, setClientes] = useState([]);
       const [form, setForm] = useState(null); // null | {} (nueva) | reserva (editar)
@@ -340,9 +461,25 @@
         let cortar = null, vivo = true;
         function escuchar() {
           const { db, collection, onSnapshot } = fb();
-          cortar = onSnapshot(collection(db, "reservas"),
-            snap => { if (!vivo) return; setError(false); setReservas(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
-            e => { console.error(e); if (vivo) setError(true); });
+          // includeMetadataChanges: también avisa cuando lo que se mostró de la copia del
+          // teléfono queda confirmado por el servidor (aunque no cambie ninguna reserva).
+          cortar = onSnapshot(collection(db, "reservas"), { includeMetadataChanges: true },
+            snap => {
+              if (!vivo) return;
+              // Sin señal Firestore contesta con lo guardado en el teléfono. Si este teléfono
+              // nunca bajó las reservas, eso es una lista vacía (o solo lo cargado acá) que NO
+              // significa "no hay reservas": se anota cuándo se bajaron de verdad para poder avisarlo.
+              const sinServidor = !!(snap.metadata && snap.metadata.fromCache);
+              let bajadas = !sinServidor;
+              try {
+                if (bajadas) localStorage.setItem(RSV_BAJADAS, "1");
+                else bajadas = !!localStorage.getItem(RSV_BAJADAS);
+              } catch (e) {}
+              setCopia({ sinServidor, nuncaBajadas: !bajadas });
+              setError(null);
+              setReservas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+            },
+            e => { console.error(e); if (vivo) setError(e && e.code === "permission-denied" ? "permiso" : "otro"); });
         }
         if (window.__fbReady) escuchar(); else document.addEventListener("fbReady", escuchar, { once: true });
         return () => { vivo = false; document.removeEventListener("fbReady", escuchar); if (cortar) cortar(); };
@@ -362,8 +499,7 @@
         return () => { vivo = false; document.removeEventListener("fbReady", traer); };
       }, []);
 
-      // El gesto "atrás" del teléfono cierra el formulario en vez de salir de Reservas.
-      SersaleBase.useAtras(!!form, () => setForm(null));
+      // (El gesto "atrás" del teléfono con el formulario abierto lo atiende ReservaForm.)
 
       function elegirOrden(o) { setOrden(o); try { sessionStorage.setItem("sersale_rsv_orden", o); } catch (e) {} }
 
@@ -412,6 +548,9 @@
       }
 
       const todas = reservas || [];
+      // No se afirma "no hay reservas" (ni que la lista está completa) si este teléfono nunca
+      // las bajó, o si está sin conexión y no tiene ninguna guardada.
+      const sinConfirmar = copia.nuncaBajadas || (copia.sinServidor && todas.length === 0 && navigator.onLine === false);
       const pendientes = todas.filter(r => r.estado !== "entregada");
       const entregadas = todas.filter(r => r.estado === "entregada");
       // El número de cada reserva es su lugar en el orden de reserva entre las pendientes.
@@ -421,14 +560,18 @@
       const visibles = rsvOrdenar(base, orden).filter(r => !buscar.trim() || SersaleBase.coincide([r.cliente, r.item, r.contacto].join(" "), buscar));
 
       // Resumen de lo pendiente: cuánto hay que tener de cada cosa.
-      const porItem = {};
-      pendientes.forEach(r => {
-        const k = r.item || "(sin ítem)";
-        if (!porItem[k]) porItem[k] = { item: k, cantidad: 0, kg: 0 };
-        porItem[k].cantidad += 1;
-        porItem[k].kg += Number(r.kg) || 0;
+      // "Lechon", "LECHÓN" y "lechón " son lo mismo: se juntan (antes salían en renglones
+      // separados y ninguno decía cuánto lechón hay que tener).
+      const deLista = rsvItemsDeLista();
+      const porItem = new Map();
+      rsvOrdenar(pendientes, "reserva").forEach(r => {
+        const nombre = rsvItemDeLista(r.item, deLista) || "(sin ítem)";
+        const k = SersaleBase.norm(nombre);
+        if (!porItem.has(k)) porItem.set(k, { item: nombre, cantidad: 0, kg: 0 });
+        porItem.get(k).cantidad += 1;
+        porItem.get(k).kg += Number(r.kg) || 0;
       });
-      const resumen = Object.values(porItem).sort((a, b) => b.kg - a.kg);
+      const resumen = Array.from(porItem.values()).sort((a, b) => b.kg - a.kg);
       const totalKg = pendientes.reduce((s, r) => s + (Number(r.kg) || 0), 0);
       const totalSenas = pendientes.reduce((s, r) => s + (Number(r.sena) || 0), 0);
       const totalResta = pendientes.reduce((s, r) => s + Math.max(0, rsvResta(r) || 0), 0);
@@ -448,8 +591,8 @@
             {error && (
               <div style={{textAlign:"center",padding:"30px 16px",background:"#fff",borderRadius:14,border:"1px solid #D8DCE0"}}>
                 <p style={{fontWeight:700,fontSize:15,marginBottom:6}}>No se pudieron cargar las reservas</p>
-                <p style={{fontSize:13,color:"#5C666F",marginBottom:14}}>{navigator.onLine === false ? "No hay conexión." : "Puede ser la señal."}</p>
-                <button onClick={()=>{ setError(false); setReservas(null); setIntento(n => n + 1); }} style={{minHeight:44,padding:"0 20px",borderRadius:12,border:"none",background:"#2A333B",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>Reintentar</button>
+                <p style={{fontSize:13,color:"#5C666F",marginBottom:14}}>{error === "permiso" ? "La base de datos no permite ver las reservas. Avisá para que se habilite." : navigator.onLine === false ? "No hay conexión." : "Puede ser la señal."}</p>
+                <button onClick={()=>{ setError(null); setReservas(null); setIntento(n => n + 1); }} style={{minHeight:44,padding:"0 20px",borderRadius:12,border:"none",background:"#2A333B",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>Reintentar</button>
               </div>
             )}
 
@@ -457,6 +600,12 @@
 
             {!error && reservas !== null && (
               <>
+                {sinConfirmar && (
+                  <div role="status" style={{background:"#F0E7D9",border:"1.5px solid #A8702A",color:"#784212",borderRadius:14,padding:"12px 14px",marginBottom:14,fontSize:13,fontWeight:600,lineHeight:1.4}}>
+                    {navigator.onLine === false ? "Sin conexión: " : "Sin señal suficiente: "}
+                    en este teléfono todavía no se pudieron traer las reservas ya anotadas{todas.length > 0 ? ", puede haber más de las que se ven" : ""}. Cuando conecte aparecen solas. Lo que cargues mientras tanto queda guardado.
+                  </div>
+                )}
                 {pendientes.length > 0 && (
                   <div style={{background:"#fff",borderRadius:14,border:"1px solid #D8DCE0",padding:"12px 14px",marginBottom:14}}>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:8,textAlign:"center"}}>
@@ -487,7 +636,7 @@
                   <button onClick={()=>elegirOrden("reserva")} aria-pressed={orden==="reserva"} style={{...chip(orden==="reserva"),minHeight:36,background:orden==="reserva"?"#2A333B":"#fff",borderColor:orden==="reserva"?"#2A333B":"#D8DCE0"}}>Reserva</button>
                   <button onClick={()=>elegirOrden("retiro")} aria-pressed={orden==="retiro"} style={{...chip(orden==="retiro"),minHeight:36,background:orden==="retiro"?"#2A333B":"#fff",borderColor:orden==="retiro"?"#2A333B":"#D8DCE0"}}>Retiro</button>
                 </div>
-                {todas.length > 6 && (
+                {(todas.length > 6 || buscar !== "") && (
                   <input style={{...RSV_CAMPO, marginBottom:12}} placeholder="🔍 Buscar por cliente, ítem o contacto" aria-label="Buscar reserva" value={buscar} onChange={e=>setBuscar(e.target.value)} />
                 )}
 
@@ -495,8 +644,8 @@
                   <div style={{textAlign:"center",padding:"36px 16px",color:"#79828B"}}>
                     {todas.length === 0 ? (
                       <>
-                        <p style={{fontWeight:700,fontSize:15,color:"#3A424A",marginBottom:6}}>Todavía no hay reservas</p>
-                        <p style={{fontSize:13,marginBottom:16}}>Anotá acá lo que los clientes dejan reservado para las fiestas.</p>
+                        {!sinConfirmar && <p style={{fontWeight:700,fontSize:15,color:"#3A424A",marginBottom:6}}>Todavía no hay reservas</p>}
+                        {!sinConfirmar && <p style={{fontSize:13,marginBottom:16}}>Anotá acá lo que los clientes dejan reservado para las fiestas.</p>}
                         <button onClick={()=>setForm({})} style={{minHeight:48,padding:"0 22px",borderRadius:14,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer"}}>+ Nueva reserva</button>
                       </>
                     ) : buscar.trim() ? "Ninguna reserva coincide con la búsqueda." : ver === "pendiente" ? "No quedan reservas pendientes." : "Todavía no se entregó ninguna reserva."}

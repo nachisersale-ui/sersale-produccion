@@ -289,8 +289,10 @@ test("acceso directo desde el panel, gesto atrás y hoja en el backup", async ()
   const h = await launch({ rol: "director", etiqueta: "rsv", seed });
   try {
     await h.ir("index.html");
+    // El pedido de abrir Reservas va en la dirección y vale una sola vez (se saca al usarlo)
+    assert.equal(await h.page.getByRole("link", { name: "Reservas de fin de año" }).getAttribute("href"), "pedidos.html?reservas=1");
     await h.page.getByText("Reservas de fin de año").click();
-    await h.page.waitForURL(/pedidos\.html\?reservas=1$/);
+    await h.page.waitForURL(/pedidos\.html/);
     await tarjeta(h, "María Fernández").waitFor();
     // El gesto atrás cierra el formulario y después vuelve al inicio de Pedidos
     await boton(h, "+ Nueva").click();

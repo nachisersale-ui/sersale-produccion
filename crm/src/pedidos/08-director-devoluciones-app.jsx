@@ -965,6 +965,9 @@
         }
         // Acceso rápido "Reservas de fin de año" del panel (pedidos.html?reservas=1)
         if (new URLSearchParams(window.location.search).get("reservas") === "1") {
+          // Vale una sola vez (como ?vr=1): si quedaba en la dirección, cada recarga de la
+          // página volvía a Reservas aunque la persona ya estuviera en otra vista.
+          try { window.history.replaceState(window.history.state, "", window.location.pathname); } catch(e) {}
           try { sessionStorage.setItem("sersale_vista","reservas"); } catch(e) {}
           return "reservas";
         }
