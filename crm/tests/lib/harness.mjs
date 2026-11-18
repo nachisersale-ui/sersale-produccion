@@ -3,6 +3,7 @@
 // local de Firestore. Cada prueba usa su propio proyecto "demo-*", así los
 // datos de una no se mezclan con los de otra y nunca se toca la base real.
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "./playwright.mjs";
 import { startServer } from "./server.mjs";
 import { startEmulator, newProjectId, seedDb, dumpDb, clearDb, getDocument } from "./emulator.mjs";
@@ -195,7 +196,7 @@ export async function launch(opts = {}) {
     limpiar: () => clearDb(projectId),
     sinRed: (v) => context.setOffline(!!v),
     captura: async (nombre, { fullPage = false, p = page } = {}) => {
-      const archivo = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "screenshots", process.env.SHOT_SET || "actual", nombre + ".png");
+      const archivo = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "screenshots", process.env.SHOT_SET || "actual", nombre + ".png");
       await p.screenshot({ path: archivo, fullPage });
       return archivo;
     },

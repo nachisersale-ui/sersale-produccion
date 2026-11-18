@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { launch, erroresReales } from "./lib/harness.mjs";
 import { buildSeed } from "./lib/seed.mjs";
 
@@ -400,7 +401,7 @@ test("ventas: con mala señal, si el servidor guardó pero la confirmación no l
 // campo con el cursor). Ya está corregido: una página abierta no se recarga sola. La
 // prueba quedó sin la marca "todo" en la revisión de la capa compartida.
 
-const DIST = new URL("../dist/", import.meta.url).pathname;
+const DIST = fileURLToPath(new URL("../dist/", import.meta.url));
 const visibilidad = (p, estado) =>
   p.evaluate((estado) => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => estado });
