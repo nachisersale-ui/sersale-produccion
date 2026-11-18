@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<script src="js/sesion.js"></script>
+  <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/base.js"></script>
+<script src="js/shell.js"></script>
+  <title>CRM — Frigorífico Sersale</title>
+  <style>
+    /* ── Sistema visual Sersale ────────────────────────────
+       carbón (cámara de frío) · lacre (sello) · hueso (rótulo) */
+    :root{
+      --carbon:#12161A; --pizarra:#1B2228;
+      --lacre:#A4232A;  --lacre-cl:#C33039;
+      --hueso:#EFEAE1;  --fondo:#EDEEF0;
+      --tinta:#191E23;  --acero:#79828B;
+      --linea:#D8DCE0;
+      --app-max-w:480px;
+    }
+    @media (min-width:768px){ :root{ --app-max-w:880px } }
+    @media (min-width:1200px){ :root{ --app-max-w:1020px } }
+
+    *{ box-sizing:border-box; margin:0; padding:0 }
+    body{ font-family:'IBM Plex Sans',system-ui,-apple-system,sans-serif; background:var(--fondo); color:var(--tinta);
+          min-height:100vh; padding-bottom:76px; -webkit-font-smoothing:antialiased }
+    .display{ font-family:'Barlow Condensed',Haettenschweiler,sans-serif; text-transform:uppercase; font-weight:700; line-height:1; letter-spacing:.035em }
+    .eyebrow{ font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:10px; font-weight:500; letter-spacing:.17em; text-transform:uppercase; color:var(--acero) }
+    .dato{ font-family:'IBM Plex Mono',ui-monospace,monospace; font-variant-numeric:tabular-nums }
+    svg{ display:block }
+
+    /* ── Portada de acceso ── */
+    .gate{ min-height:100vh; background:var(--carbon); display:flex; flex-direction:column; align-items:center;
+           justify-content:center; padding:34px 22px; position:relative; overflow:hidden }
+    .gate::before{ content:""; position:absolute; top:-24%; left:50%; transform:translateX(-50%);
+           width:min(720px,150vw); height:min(720px,150vw); pointer-events:none;
+           background:radial-gradient(circle, rgba(164,35,42,.40) 0%, rgba(164,35,42,0) 62%) }
+    .gate-in{ position:relative; width:100%; max-width:430px }
+    .seal{ width:104px; height:104px; object-fit:contain; display:block; margin:0 auto 18px;
+           filter:drop-shadow(0 12px 28px rgba(0,0,0,.6)) }
+    .rule{ height:1px; max-width:250px; margin:15px auto 11px;
+           background:linear-gradient(90deg,transparent,var(--lacre-cl) 45%,var(--lacre-cl) 55%,transparent) }
+
+    /* Tarjeta de acceso: papel de rótulo con borde troquelado */
+    .acceso{ position:relative; width:100%; font:inherit; text-align:left; cursor:pointer; border:none;
+             background:var(--hueso); color:var(--tinta); border-radius:3px 3px 11px 11px;
+             padding:22px 15px 17px; box-shadow:0 14px 30px rgba(0,0,0,.45);
+             transition:transform .18s cubic-bezier(.2,.8,.3,1), box-shadow .18s }
+    .acceso::before{ content:""; position:absolute; top:0; left:0; right:0; height:8px;
+             background-image:radial-gradient(circle, var(--carbon) 1.7px, transparent 1.9px);
+             background-size:9px 8px; background-position:1px -3px }
+    .acceso:hover{ transform:translateY(-3px); box-shadow:0 20px 38px rgba(0,0,0,.55) }
+    .acceso:active{ transform:translateY(-1px) scale(.99) }
+    .acceso:focus-visible{ outline:2px solid var(--lacre-cl); outline-offset:3px }
+    .acceso .req{ font-family:'IBM Plex Mono',monospace; font-size:9px; font-weight:600; letter-spacing:.15em;
+             text-transform:uppercase; display:flex; align-items:center; gap:5px; margin-bottom:9px }
+    .acceso .pip{ width:5px; height:5px; border-radius:50%; flex-shrink:0 }
+
+    /* ── Panel director ── */
+    .topbar{ background:var(--carbon); color:var(--hueso); padding:15px 18px 17px; position:relative }
+    .topbar::after{ content:""; position:absolute; left:0; right:0; bottom:0; height:2px; background:var(--lacre) }
+    .mod{ display:block; position:relative; overflow:hidden; text-decoration:none; color:var(--tinta);
+          background:#fff; border:1px solid var(--linea); border-radius:12px; padding:16px 14px 15px;
+          transition:transform .16s, box-shadow .16s, border-color .16s }
+    .mod::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+          background:var(--rule,var(--lacre));
+          transform:scaleY(0); transform-origin:top; transition:transform .18s cubic-bezier(.2,.8,.3,1) }
+    .mod:hover{ transform:translateY(-2px); border-color:#C4CAD1; box-shadow:0 10px 24px rgba(18,22,26,.10) }
+    .mod:hover::before{ transform:scaleY(1) }
+    .mod:active{ transform:translateY(0) scale(.99) }
+    .qa{ display:flex; align-items:center; gap:11px; padding:11px 12px; margin-bottom:7px; font-size:13.5px;
+         font-weight:500; text-decoration:none; color:var(--tinta); background:#fff;
+         border:1px solid var(--linea); border-radius:10px; transition:background .14s, border-color .14s }
+    .qa:hover{ background:#F6F7F9; border-color:#C4CAD1 }
+    .panel{ background:#fff; border:1px solid var(--linea); border-radius:14px; padding:15px 14px }
+    .salir{ position:absolute; top:14px; right:14px; display:flex; align-items:center; gap:6px;
+            background:rgba(239,234,225,.09); color:var(--hueso); border:1px solid rgba(239,234,225,.18);
+            border-radius:8px; padding:6px 10px; font-size:11px; font-weight:600; cursor:pointer;
+            font-family:inherit; transition:background .15s }
+    .salir:hover{ background:rgba(196,48,57,.85); border-color:transparent }
+
+    /* ── Modales y formularios ── */
+    .modal-bg{ position:fixed; inset:0; background:rgba(12,15,18,.72); backdrop-filter:blur(3px);
+               display:flex; align-items:center; justify-content:center; z-index:1000; padding:20px }
+    .modal-box{ background:#fff; border-radius:14px; padding:26px 24px; width:100%; max-width:380px;
+                box-shadow:0 26px 70px rgba(0,0,0,.45); border-top:3px solid var(--lacre) }
+    .input-field{ width:100%; padding:12px 13px; border:1px solid var(--linea); border-radius:9px; font-size:15px;
+                  font-family:inherit; color:var(--tinta); background:#FBFBFC; margin-bottom:10px; transition:border-color .15s, background .15s }
+    .input-field:focus{ outline:none; border-color:var(--lacre); background:#fff }
+    .btn-primary{ width:100%; padding:13px; border:none; border-radius:9px; background:var(--lacre); color:var(--hueso);
+                  font-family:'Barlow Condensed',sans-serif; text-transform:uppercase; letter-spacing:.08em;
+                  font-weight:600; font-size:17px; cursor:pointer; transition:background .15s }
+    .btn-primary:hover{ background:var(--lacre-cl) }
+    .btn-primary:disabled{ background:#B9BFC5; cursor:not-allowed }
+    .btn-secondary{ width:100%; padding:11px; border:1px solid var(--linea); border-radius:9px; background:#fff;
+                    color:var(--acero); font-size:13.5px; font-family:inherit; cursor:pointer; margin-top:8px }
+    .btn-secondary:hover{ background:#F6F7F9 }
+    .err-msg{ color:var(--lacre-cl); font-size:12.5px; font-weight:600; margin-bottom:9px; min-height:18px }
+    .ok-msg{ color:#2F6B4F; font-size:12.5px; font-weight:600; margin-bottom:9px; min-height:18px }
+
+    /* ── Movimiento ── */
+    @keyframes subir{ from{ opacity:0; transform:translateY(14px) } to{ opacity:1; transform:none } }
+    @keyframes sello{ from{ opacity:0; transform:scale(.86) } to{ opacity:1; transform:none } }
+    @keyframes trazo{ from{ transform:scaleX(0); opacity:0 } to{ transform:scaleX(1); opacity:1 } }
+    @keyframes shake{ 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
+    .fade-in{ animation:subir .4s ease-out both }
+    .an-sello{ animation:sello .55s cubic-bezier(.2,.8,.3,1) both }
+    .an-1{ animation:subir .5s ease-out .12s both }
+    .an-rule{ animation:trazo .5s ease-out .30s both }
+    .an-2{ animation:subir .5s ease-out .36s both }
+    .an-3{ animation:subir .5s ease-out .48s both }
+    .shake{ animation:shake .4s }
+    @media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important } }
+  </style>
+
+  <script type="module">
+    import { db, collection, addDoc, getDocs, getDocsFromServer, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot } from "./js/fb.js";
+    window.__db = db;
+    window.__fb = { collection, addDoc, getDocs, getDocsFromServer, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot };
+    window.__fbReady = true;
+    document.dispatchEvent(new Event("fbReady"));
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    // ===== ESTADO DE SESIÓN =====
+    var sesionRole = sessionStorage.getItem("sersale_role"); // "director" | "operario" | null
+    var sesionUsuario = sessionStorage.getItem("sersale_usuario") || "";
+    var sesionNombre = sessionStorage.getItem("sersale_nombre") || "";
+
+    // ===== HASH SHA-256 =====
+    async function hashPassword(pwd) {
+      var enc = new TextEncoder().encode(pwd);
+      var buf = await crypto.subtle.digest("SHA-256", enc);
+      return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,"0"); }).join("");
+    }
+
+    // ===== FIREBASE HELPERS =====
+    function fb() { return window.__fb ? Object.assign({db: window.__db}, window.__fb) : null; }
+    function waitForFirebase(callback) {
+      if (window.__fbReady) callback();
+      else document.addEventListener("fbReady", callback);
+    }
+
+
+    // ===== ÍCONOS (SVG de trazo, heredan color) =====
+    function ico(nombre, tam) {
+      var t = tam || 22;
+      var d = {
+        pedidos:  '<path d="M3 7.6 12 3l9 4.6v8.8L12 21l-9-4.6z"/><path d="m3 7.6 9 4.6 9-4.6M12 12.2V21"/>',
+        panel:    '<path d="M4 20h16"/><path d="M6.5 20v-6M11 20V8m4.5 12v-9M20 20V5"/>',
+        planta:   '<path d="M3 21h18"/><path d="M4.5 21V11l5 3V11l5 3V7.5l5 3V21"/><path d="M8 17.5h.01M13 17.5h.01M18 17.5h.01"/>',
+        ventas:   '<rect x="2.8" y="6.2" width="18.4" height="11.6" rx="2"/><circle cx="12" cy="12" r="2.4"/><path d="M6 12h.01M18 12h.01"/>',
+        presup:   '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M10 12.5h5M10 16h3.5"/>',
+        usuarios: '<circle cx="9.2" cy="8.4" r="3.1"/><path d="M3.6 20c0-3.1 2.5-4.9 5.6-4.9s5.6 1.8 5.6 4.9"/><path d="M16.4 6.1a3.1 3.1 0 0 1 0 5.6M17.6 20c0-2.3-.7-3.8-1.9-4.6"/>',
+        carrito:  '<path d="M2.8 4h2.4l2.3 10.4h9.6l2.1-7.6H6.3"/><circle cx="9.6" cy="19" r="1.4"/><circle cx="16.6" cy="19" r="1.4"/>',
+        rayo:     '<path d="M13.2 2.6 5.4 13.4h5.2l-1.2 8 8-11h-5.4z"/>',
+        backup:   '<path d="M12 3.4v10.4"/><path d="m8.2 10.6 3.8 3.8 3.8-3.8"/><path d="M4.2 19.6h15.6"/>',
+        salir:    '<path d="M12 3.2v8.6"/><path d="M7.1 6.4a7.6 7.6 0 1 0 9.8 0"/>',
+        candado:  '<rect x="4.6" y="10.4" width="14.8" height="10" rx="2.2"/><path d="M8.2 10.4V7.6a3.8 3.8 0 0 1 7.6 0v2.8"/>',
+        puerta:   '<path d="M14.6 3.2H5.4v17.6h9.2"/><path d="M10.4 12h9.4"/><path d="m16.6 8.8 3.2 3.2-3.2 3.2"/>'
+      };
+      return '<svg width="'+t+'" height="'+t+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+             'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (d[nombre]||'') + '</svg>';
+    }
+
+    // ===== RENDER PRINCIPAL =====
+    function render() {
+      if (sesionRole === "director") {
+        document.getElementById("app").innerHTML = renderDashboardDirector();
+      } else {
+        // Operario o sin sesión: pantalla de selección de rol
+        document.getElementById("app").innerHTML = renderSeleccionRol();
+      }
+      aplicarNav();
+    }
+
+    // La barra inferior solo existe una vez iniciada la sesión como Director.
+    // Se llama también en DOMContentLoaded porque el nodo se declara después de este script.
+    function aplicarNav() {
+      var visible = (sesionRole === "director");
+      if (window.SersaleUI) SersaleUI.nav(visible);
+      document.body.style.paddingBottom = visible ? "" : "0";
+    }
+    document.addEventListener("DOMContentLoaded", aplicarNav);
+
+    // ===== PANTALLA: SELECCIÓN DE ROL =====
+    function renderSeleccionRol() {
+      function acceso(cfg) {
+        return '<button class="acceso ' + cfg.anim + '" onclick="' + cfg.accion + '">' +
+          '<div class="req" style="color:' + cfg.pipColor + '">' +
+            '<span class="pip" style="background:' + cfg.pipColor + '"></span>' + cfg.req +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:9px;margin-bottom:5px">' +
+            '<span style="color:' + cfg.pipColor + '">' + ico(cfg.icono, 19) + '</span>' +
+            '<span class="display" style="font-size:25px">' + cfg.titulo + '</span>' +
+          '</div>' +
+          '<div style="font-size:12px;line-height:1.45;color:#5C666F">' + cfg.desc + '</div>' +
+        '</button>';
+      }
+      return '<div class="gate"><div class="gate-in">' +
+        '<img src="' + LOGO + '" class="seal an-sello" alt="Sello Frigorífico Sersale" />' +
+        '<h1 class="display an-1" style="color:var(--hueso);font-size:31px;text-align:center;letter-spacing:.05em">Frigor\u00edfico Sersale</h1>' +
+        '<div class="rule an-rule"></div>' +
+        '<p class="eyebrow an-1" style="text-align:center;color:rgba(239,234,225,.5)">Sistema de gesti\u00f3n interno</p>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:26px">' +
+          acceso({ anim:"an-2", accion:"abrirLoginDirector()", icono:"candado", pipColor:"#A4232A",
+                   req:"Con clave", titulo:"Director", desc:"Pedidos, producci\u00f3n, ventas y cuentas corrientes" }) +
+          acceso({ anim:"an-3", accion:"entrarOperario()", icono:"puerta", pipColor:"#2F6B4F",
+                   req:"Sin clave", titulo:"Operario", desc:"Dep\u00f3sito: preparaci\u00f3n y despacho de pedidos" }) +
+        '</div>' +
+        '<p class="dato an-3" style="text-align:center;margin-top:30px;font-size:10px;letter-spacing:.1em;color:rgba(239,234,225,.34)">' +
+          'CUIT 30-70227633-7 &nbsp;\u00b7&nbsp; SENASA EST. 3839' +
+        '</p>' +
+      '</div></div>';
+    }
+
+    // ===== ACCIÓN: ENTRAR COMO OPERARIO =====
+    window.entrarOperario = function() {
+      sessionStorage.setItem("sersale_role", "operario");
+      sessionStorage.removeItem("sersale_usuario");
+      sessionStorage.removeItem("sersale_nombre");
+      // Compatibilidad: muchos módulos aún chequean sersale_auth
+      sessionStorage.setItem("sersale_auth", "ok");
+      window.location.href = "pedidos.html";
+    };
+
+    // ===== ACCIÓN: ABRIR MODAL DE LOGIN DIRECTOR =====
+    window.abrirLoginDirector = function() {
+      if (document.getElementById("__login_modal")) return; // doble toque: una sola ventana
+      var abierto = Date.now();
+      var modal = document.createElement("div");
+      modal.className = "modal-bg";
+      modal.id = "__login_modal";
+      modal.innerHTML =
+        '<div class="modal-box fade-in" onclick="event.stopPropagation()">' +
+          '<div style="margin-bottom:18px">' +
+            '<p class="eyebrow" style="margin-bottom:5px">Acceso con clave</p>' +
+            '<h2 class="display" style="font-size:27px;color:var(--tinta)">Director</h2>' +
+            '<p style="font-size:12.5px;color:var(--acero);margin-top:4px">Usuario y contrase\u00f1a del sistema</p>' +
+          '</div>' +
+          '<form id="__login_form">' +
+            '<input type="text" id="__login_user" name="username" class="input-field" placeholder="Usuario" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next" autofocus />' +
+            '<input type="password" id="__login_pwd" name="password" class="input-field" placeholder="Contraseña" autocomplete="current-password" enterkeyhint="go" />' +
+            '<label style="display:flex;align-items:center;gap:10px;margin:2px 2px 4px;font-size:13.5px;color:var(--tinta);cursor:pointer;min-height:40px">' +
+              '<input type="checkbox" id="__login_recordar" checked style="width:20px;height:20px;accent-color:#A4232A;flex-shrink:0" />' +
+              '<span>Recordarme en este dispositivo</span>' +
+            '</label>' +
+            '<div id="__login_msg" class="err-msg"></div>' +
+            '<button type="submit" class="btn-primary" id="__login_btn">Ingresar</button>' +
+            '<button type="button" class="btn-secondary" onclick="cerrarLoginModal()">Cancelar</button>' +
+          '</form>' +
+        '</div>';
+      // El segundo toque de un doble toque cae en el fondo: no tiene que cerrar lo que recién se abrió.
+      modal.onclick = function(){ if (Date.now() - abierto > 400) cerrarLoginModal(); };
+      document.body.appendChild(modal);
+      document.getElementById("__login_form").onsubmit = function(e) {
+        e.preventDefault();
+        intentarLogin();
+      };
+      setTimeout(function(){
+        // Si la persona (o el autocompletado) ya está en otro campo del formulario, no se le saca el cursor.
+        var u = document.getElementById("__login_user"), a = document.activeElement;
+        if (u && !(a && a !== u && a.form && a.form.id === "__login_form")) u.focus();
+      }, 100);
+    };
+
+    window.cerrarLoginModal = function() {
+      var m = document.getElementById("__login_modal");
+      if (m) m.remove();
+    };
+
+    // ===== ACCIÓN: INTENTAR LOGIN =====
+    async function intentarLogin() {
+      var usuario = document.getElementById("__login_user").value.trim().toLowerCase();
+      var pwd = document.getElementById("__login_pwd").value;
+      var msg = document.getElementById("__login_msg");
+      var btn = document.getElementById("__login_btn");
+      if (btn.disabled) return; // ya hay un intento en curso
+      msg.textContent = "";
+      msg.className = "err-msg";
+      if (!usuario || !pwd) {
+        msg.textContent = "Completá usuario y contraseña";
+        return;
+      }
+      // Deja el formulario listo para otro intento, con lo que la persona escribió.
+      function soltar(texto, conShake) {
+        msg.className = "err-msg";
+        msg.textContent = texto;
+        if (conShake) shake();
+        btn.disabled = false;
+        btn.textContent = "Ingresar";
+      }
+      btn.disabled = true;
+      btn.textContent = "Verificando...";
+      if (!window.__fbReady) {
+        msg.textContent = "Conectando con la base de datos...";
+        var conectado = await new Promise(function(r){
+          document.addEventListener("fbReady", function(){ r(true); }, {once:true});
+          setTimeout(function(){ r(!!window.__fbReady); }, 10000);
+        });
+        if (!conectado) { soltar("No se pudo conectar. Revisá la conexión y volvé a abrir la app."); return; }
+        msg.textContent = "";
+      }
+      try {
+        var f = fb();
+        var col = f.collection(f.db, "usuarios");
+        var snap = await f.getDocs(col);
+        var pwdHash = await hashPassword(pwd);
+        if (!btn.isConnected) return; // tocó "Cancelar" mientras se verificaba
+
+        // Una lista de usuarios vacía solo vale si la contestó el servidor. Con mala
+        // señal en un teléfono sin datos guardados la copia local viene vacía, y acá
+        // se creaba (o se pisaba) un Director con lo que se hubiera escrito.
+        if (snap.empty) {
+          try {
+            snap = await f.getDocsFromServer(col);
+          } catch (errServ) {
+            console.error(errServ);
+            soltar("Sin conexión con el servidor. Probá de nuevo cuando haya señal.");
+            return;
+          }
+          if (!btn.isConnected) return;
+        }
+
+        // ¿Bootstrap? Si la colección está vacía, creo el primer Director con estas credenciales
+        if (snap.empty) {
+          if (!/^[a-z0-9_.-]+$/.test(usuario)) { soltar("Para el primer usuario usá solo letras minúsculas, números, _ . -"); return; }
+          if (pwd.length < 4) { soltar("La contraseña debe tener al menos 4 caracteres"); return; }
+          msg.className = "ok-msg";
+          msg.textContent = "Creando primer usuario Director...";
+          var nuevo = {
+            usuario: usuario,
+            passwordHash: pwdHash,
+            nombre: usuario.charAt(0).toUpperCase() + usuario.slice(1),
+            activo: true,
+            creado: f.Timestamp.now()
+          };
+          await f.setDoc(f.doc(f.db, "usuarios", usuario), nuevo);
+          // Loguearlo
+          loginExitoso(usuario, nuevo.nombre);
+          return;
+        }
+
+        // Buscar usuario
+        var encontrado = null;
+        snap.forEach(function(d){
+          if (d.id === usuario || String(d.data().usuario || "").toLowerCase() === usuario) {
+            encontrado = Object.assign({id: d.id}, d.data());
+          }
+        });
+        if (!encontrado || encontrado.passwordHash !== pwdHash) {
+          soltar("Usuario o contraseña incorrectos", true);
+          return;
+        }
+        if (encontrado.activo === false) {
+          soltar("Usuario desactivado", true);
+          return;
+        }
+        loginExitoso(encontrado.usuario || encontrado.id, encontrado.nombre || encontrado.id);
+      } catch(err) {
+        console.error(err);
+        // "unavailable": el servidor no respondió y en este teléfono no hay usuarios guardados.
+        if (err && err.code === "unavailable") soltar("Sin conexión con el servidor. Probá de nuevo cuando haya señal.");
+        else soltar(navigator.onLine === false ? "Sin conexión. Probá de nuevo cuando haya señal." : "Error al conectar. Reintentá.");
+      }
+    }
+
+    function shake() {
+      var box = document.querySelector("#__login_modal .modal-box");
+      if (box) { box.classList.add("shake"); setTimeout(function(){ box.classList.remove("shake"); }, 400); }
+    }
+
+    function loginExitoso(usuario, nombre) {
+      sessionStorage.setItem("sersale_role", "director");
+      sessionStorage.setItem("sersale_usuario", usuario);
+      sessionStorage.setItem("sersale_nombre", nombre);
+      sessionStorage.setItem("sersale_auth", "ok"); // compat con guards existentes
+      sesionRole = "director";
+      sesionUsuario = usuario;
+      sesionNombre = nombre;
+      // Recordar la sesión en este teléfono (30 días) si quedó tildado
+      var rec = document.getElementById("__login_recordar");
+      if (window.SersaleSesion) { if (!rec || rec.checked) SersaleSesion.recordar(); else SersaleSesion.olvidar(); }
+      cerrarLoginModal();
+      render();
+    }
+
+    // ===== CERRAR SESIÓN =====
+    window.cerrarSesion = function() {
+      sessionStorage.removeItem("sersale_role");
+      sessionStorage.removeItem("sersale_usuario");
+      sessionStorage.removeItem("sersale_nombre");
+      sessionStorage.removeItem("sersale_auth");
+      if (window.SersaleSesion) SersaleSesion.olvidar();
+      sesionRole = null; sesionUsuario = ""; sesionNombre = "";
+      render();
+    };
+
+    // ===== SESIÓN VIGENTE =====
+    // "Desactivar" o "Eliminar" un usuario no le cortaba el acceso: la sesión
+    // recordada en su teléfono seguía entrando 30 días. Al abrir el panel se
+    // controla contra la lista de usuarios; sin señal o sin datos no se cierra nada.
+    var verificando_index = false;
+    async function verificarSesion_index() {
+      if (sesionRole !== "director" || !sesionUsuario || verificando_index) return;
+      var f = fb();
+      if (!f) return;
+      verificando_index = true;
+      try {
+        var revisado = sesionUsuario;
+        var snap = await f.getDocs(f.collection(f.db, "usuarios"));
+        if (snap.empty) return; // todavía no hay usuarios cargados (o no hay datos): no se puede afirmar nada
+        var existe = false, activo = false;
+        snap.forEach(function(d){
+          var u = d.data();
+          if (d.id === revisado || (u.usuario || d.id) === revisado) { existe = true; if (u.activo !== false) activo = true; }
+        });
+        if (sesionRole !== "director" || sesionUsuario !== revisado) return; // salió o entró otro mientras tanto
+        if (activo) return;
+        window.cerrarUsrModal();
+        window.cerrarSesion();
+        SersaleUI.toast(existe ? "Tu usuario fue desactivado. Pedile a otro director que lo active." : "Tu usuario ya no existe. Ingresá con otro usuario.", { tipo: "error", ms: 8000 });
+      } catch (err) {
+        console.warn("No se pudo controlar la sesión:", err && (err.code || err.message));
+      } finally {
+        verificando_index = false;
+      }
+    }
+
+    // Saludo y fecha del panel, siempre en hora de Buenos Aires.
+    function saludoDelDia_index() {
+      var ahora = new Date();
+      var h = (parseInt(SersaleBase.fmtHora(ahora), 10) || 0) % 24;
+      return {
+        saludo: h < 12 ? "Buenos d\u00edas" : (h < 19 ? "Buenas tardes" : "Buenas noches"),
+        hoy: ahora.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long", timeZone: SersaleBase.ZONA })
+      };
+    }
+    var panelMostrado_index = "";
+
+    // Al volver a la pantalla (gesto "atrás", o la app que quedó abierta desde ayer)
+    // se vuelve a leer la sesión, y el panel no queda con el saludo y la fecha viejos.
+    function alVolver_index() {
+      if (document.visibilityState === "hidden") return;
+      var rol = sessionStorage.getItem("sersale_role");
+      var cambioSesion = rol !== sesionRole;
+      if (cambioSesion) {
+        sesionRole = rol;
+        sesionUsuario = sessionStorage.getItem("sersale_usuario") || "";
+        sesionNombre = sessionStorage.getItem("sersale_nombre") || "";
+      }
+      if (sesionRole !== "director") {
+        if (cambioSesion) { window.cerrarUsrModal(); render(); }
+        return;
+      }
+      var d = saludoDelDia_index();
+      if (!document.querySelector(".modal-bg") && (cambioSesion || d.saludo + d.hoy !== panelMostrado_index)) render();
+      verificarSesion_index();
+    }
+    window.addEventListener("pageshow", function(e){ if (e.persisted) alVolver_index(); });
+    document.addEventListener("visibilitychange", alVolver_index);
+
+    // ===== DASHBOARD DIRECTOR =====
+    function renderDashboardDirector() {
+      var modulos = [
+        {ico:"pedidos",  nombre:"Pedidos",      desc:"Carga, remitos y cuentas corrientes", url:"pedidos.html",       color:"#A4232A"},
+        {ico:"panel",    nombre:"Dashboard",    desc:"KPIs y facturaci\u00f3n",                url:"dashboard.html",     color:"#26536E"},
+        {ico:"planta",   nombre:"Producci\u00f3n",  desc:"Faena, stock y salidas",              url:"produccion.html",    color:"#2F6B4F"},
+        {ico:"ventas",   nombre:"Ventas",       desc:"Cierre de caja diario",               url:"ventas.html",        color:"#6B4E8E"},
+        {ico:"presup",   nombre:"Presupuestos", desc:"Listas de precios y cotizaciones",    url:"presupuestos.html",  color:"#A8702A"},
+        {ico:"usuarios", nombre:"Usuarios",     desc:"Altas y accesos al sistema",          onclick:"abrirGestionUsuarios()", color:"#3E4A55"}
+      ];
+      var cards = "";
+      modulos.forEach(function(m){
+        var attr = m.url ? ('href="'+m.url+'"') : ('href="javascript:void(0)" onclick="'+m.onclick+'"');
+        cards += '<a ' + attr + ' class="mod" style="--rule:'+m.color+'">' +
+          '<span style="color:'+m.color+';display:block;margin-bottom:9px">' + ico(m.ico, 23) + '</span>' +
+          '<span class="display" style="font-size:20px;display:block;margin-bottom:3px">'+m.nombre+'</span>' +
+          '<span style="font-size:11.5px;color:var(--acero);line-height:1.4;display:block">'+m.desc+'</span></a>';
+      });
+
+      var delDia = saludoDelDia_index();
+      var saludo = delDia.saludo;
+      var hoy = delDia.hoy;
+      panelMostrado_index = saludo + hoy;
+
+      function rapido(icono, texto, href, color) {
+        return '<a href="'+href+'" class="qa"><span style="color:'+color+';flex-shrink:0">'+ico(icono,19)+'</span>'+texto+'</a>';
+      }
+
+      return '<div class="fade-in" style="max-width:var(--app-max-w);margin:0 auto">' +
+        '<div class="topbar">' +
+          '<div style="display:flex;align-items:center;gap:13px">' +
+            '<img src="' + LOGO + '" alt="" style="height:50px;width:50px;object-fit:contain;flex-shrink:0" />' +
+            '<div style="min-width:0">' +
+              '<p class="eyebrow" style="color:rgba(239,234,225,.45);margin-bottom:3px">Panel director</p>' +
+              '<h1 class="display" style="font-size:23px">Frigor\u00edfico Sersale</h1>' +
+            '</div>' +
+          '</div>' +
+          '<button class="salir" onclick="cerrarSesion()">' + ico("salir",13) + 'Salir</button>' +
+          '<p style="font-size:12.5px;color:rgba(239,234,225,.62);margin-top:13px">' + saludo + ', ' + escapeHtml(sesionNombre) +
+            ' <span class="dato" style="color:rgba(239,234,225,.34);font-size:10.5px">\u00b7 ' + hoy + '</span></p>' +
+        '</div>' +
+        '<div style="padding:22px 16px 0">' +
+          '<p class="eyebrow" style="margin-bottom:12px">M\u00f3dulos</p>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:11px">' + cards + '</div>' +
+          '<p class="eyebrow" style="margin:26px 0 12px">Accesos r\u00e1pidos</p>' +
+          '<div class="panel">' +
+            rapido("carrito", "Cargar un pedido nuevo",      "pedidos.html",      "#A4232A") +
+            rapido("rayo",    "Registrar una venta r\u00e1pida", "pedidos.html?vr=1", "#2F6B4F") +
+            rapido("pedidos", "Reservas de fin de a\u00f1o",     "pedidos.html?reservas=1", "#A8702A") +
+            rapido("presup",  "Generar un presupuesto",      "presupuestos.html", "#A8702A") +
+            rapido("panel",   "Ver KPIs del mes",            "dashboard.html",    "#26536E") +
+            '<a href="backup.html" class="qa" style="margin-bottom:0;border-style:dashed">' +
+              '<span style="color:var(--acero);flex-shrink:0">' + ico("backup",19) + '</span>Descargar backup en Excel</a>' +
+          '</div>' +
+          '<div class="dato" style="text-align:center;padding:30px 0 22px;font-size:10px;letter-spacing:.09em;color:#A3ABB3;line-height:1.9">' +
+            'FRIGOR\u00cdFICO SERSALE SRL<br>CUIT 30-70227633-7 &nbsp;\u00b7&nbsp; SENASA EST. 3839<br>WHATSAPP 11-6763-7860' +
+          '</div>' +
+        '</div></div>';
+    }
+
+    function escapeHtml(s) {
+      return String(s || "").replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]; });
+    }
+
+    // ===== GESTIÓN DE USUARIOS (Director only) =====
+    window.abrirGestionUsuarios = async function() {
+      if (sesionRole !== "director") return;
+      // "Volver" y "Crear usuario" vuelven a llamar acá: se saca la ventana anterior
+      // para no apilar una arriba de la otra (quedaban botones que no respondían).
+      window.cerrarUsrModal();
+      var abierto = Date.now();
+      var modal = document.createElement("div");
+      modal.className = "modal-bg";
+      modal.id = "__usr_modal";
+      modal.style.alignItems = "flex-start";
+      modal.style.overflowY = "auto";
+      modal.style.padding = "20px 12px";
+      modal.innerHTML =
+        '<div class="modal-box fade-in" style="max-width:520px;padding:22px" onclick="event.stopPropagation()">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+            '<h2 style="font-size:18px;font-weight:800;color:#191E23">👥 Gestión de Usuarios</h2>' +
+            '<button onclick="cerrarUsrModal()" aria-label="Cerrar" style="background:none;border:none;font-size:22px;cursor:pointer;color:#79828B;line-height:1;min-width:44px;min-height:44px">×</button>' +
+          '</div>' +
+          '<button onclick="abrirFormUsuario()" class="btn-primary" style="margin-bottom:14px">➕ Nuevo Director</button>' +
+          '<div id="__usr_lista" style="min-height:80px"><p style="text-align:center;color:#79828B;font-size:13px">Cargando...</p></div>' +
+          '<button class="btn-secondary" onclick="cerrarUsrModal()">Cerrar</button>' +
+        '</div>';
+      modal.onclick = function(){ if (Date.now() - abierto > 400) window.cerrarUsrModal(); };
+      document.body.appendChild(modal);
+      await cargarListaUsuarios();
+    };
+
+    window.cerrarUsrModal = function() {
+      document.querySelectorAll('[id="__usr_modal"]').forEach(function(m){ m.remove(); });
+    };
+
+    async function cargarListaUsuarios() {
+      var cont = document.getElementById("__usr_lista");
+      if (!cont) return;
+      try {
+        var f = fb();
+        var snap = await f.getDocs(f.collection(f.db, "usuarios"));
+        if (snap.empty) {
+          cont.innerHTML = '<p style="text-align:center;color:#79828B;font-size:13px;padding:20px">No hay usuarios cargados</p>';
+          return;
+        }
+        var html = '<div style="border:1px solid #E8E8E8;border-radius:10px;overflow:hidden">';
+        var arr = [];
+        snap.forEach(function(d){ arr.push(Object.assign({}, d.data(), {id:d.id})); });
+        arr.sort(function(a,b){ return String(a.usuario||a.id).localeCompare(String(b.usuario||b.id)); });
+        var btnCss = 'border:none;border-radius:8px;min-width:44px;min-height:44px;cursor:pointer;font-size:16px;flex-shrink:0';
+        arr.forEach(function(u, i){
+          var nombre = escapeHtml(u.nombre || u.id);
+          var usr = escapeHtml(u.usuario || u.id);
+          var activo = u.activo !== false;
+          var esActual = (u.usuario || u.id) === sesionUsuario || u.id === sesionUsuario;
+          // Los botones llevan el id del documento como dato (no dentro de un onclick armado
+          // a mano): el id puede no ser igual al nombre de usuario y puede traer comillas.
+          var datos = ' data-usr-id="' + escapeHtml(u.id) + '" data-usr-nombre="' + usr + '"';
+          html += '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;'+(i>0?"border-top:1px solid #E4E7EA":"")+';background:'+(activo?"#fff":"#F7F8F9")+'">' +
+            '<div style="flex:1;min-width:0">' +
+              '<div style="font-weight:700;font-size:14px;color:#191E23">' + nombre + (esActual?' <span style="font-size:10px;color:#2F6B4F;font-weight:600">(vos)</span>':'') + '</div>' +
+              '<div style="font-size:11px;color:#79828B">@'+usr+' · '+(activo?"Activo":"Desactivado")+'</div>' +
+            '</div>' +
+            '<button data-usr-accion="clave"' + datos + ' title="Cambiar contraseña" aria-label="Cambiar contraseña" style="background:#E7EDF1;' + btnCss + '">🔑</button>' +
+            (esActual ? '' : '<button data-usr-accion="' + (activo?"desactivar":"activar") + '"' + datos + ' title="' + (activo?"Desactivar":"Activar") + '" aria-label="' + (activo?"Desactivar":"Activar") + '" style="background:' + (activo?"#F3EEE2":"#E9F0EC") + ';' + btnCss + '">' + (activo?"🚫":"✅") + '</button>') +
+            (esActual ? '' : '<button data-usr-accion="eliminar"' + datos + ' title="Eliminar" aria-label="Eliminar" style="background:#F7EAEA;' + btnCss + '">🗑️</button>') +
+          '</div>';
+        });
+        html += '</div>';
+        cont.innerHTML = html;
+        cont.onclick = function(e) {
+          var b = e.target.closest ? e.target.closest("button[data-usr-accion]") : null;
+          if (!b) return;
+          var id = b.getAttribute("data-usr-id");
+          var etiqueta = b.getAttribute("data-usr-nombre");
+          var accion = b.getAttribute("data-usr-accion");
+          if (accion === "clave") window.cambiarPwdUsuario(id, etiqueta);
+          else if (accion === "eliminar") window.eliminarUsuario(id, etiqueta);
+          else window.toggleActivoUsuario(id, accion === "activar");
+        };
+      } catch(err) {
+        console.error(err);
+        cont.innerHTML = '<p style="text-align:center;color:#C33039;font-size:13px;padding:20px">Error al cargar usuarios</p>';
+      }
+    }
+
+    window.abrirFormUsuario = function() {
+      var box = document.querySelector("#__usr_modal .modal-box");
+      if (!box) return;
+      var html =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+          '<h2 style="font-size:18px;font-weight:800;color:#191E23">➕ Nuevo Director</h2>' +
+          '<button onclick="abrirGestionUsuarios()" aria-label="Volver" style="background:none;border:none;font-size:22px;cursor:pointer;color:#79828B;line-height:1;min-width:44px;min-height:44px">×</button>' +
+        '</div>' +
+        '<form id="__nuevo_usr_form" autocomplete="off">' +
+          '<input type="text" id="__nu_nombre" class="input-field" placeholder="Nombre completo (ej: Fernando García)" autocomplete="off" />' +
+          '<input type="text" id="__nu_usuario" class="input-field" placeholder="Usuario (sin espacios, ej: fernando)" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" />' +
+          '<input type="password" id="__nu_pwd" class="input-field" placeholder="Contraseña" autocomplete="new-password" />' +
+          '<input type="password" id="__nu_pwd2" class="input-field" placeholder="Repetir contraseña" autocomplete="new-password" />' +
+          '<div id="__nu_msg" class="err-msg"></div>' +
+          '<button type="submit" class="btn-primary" id="__nu_btn">Crear usuario</button>' +
+          '<button type="button" class="btn-secondary" onclick="abrirGestionUsuarios()">Volver</button>' +
+        '</form>';
+      box.innerHTML = html;
+      var creando = false;
+      document.getElementById("__nuevo_usr_form").onsubmit = async function(e) {
+        e.preventDefault();
+        if (creando) return; // doble toque
+        var nombre = document.getElementById("__nu_nombre").value.trim();
+        var usr = document.getElementById("__nu_usuario").value.trim().toLowerCase();
+        var p1 = document.getElementById("__nu_pwd").value;
+        var p2 = document.getElementById("__nu_pwd2").value;
+        var msg = document.getElementById("__nu_msg");
+        var btn = document.getElementById("__nu_btn");
+        msg.textContent = "";
+        if (!nombre || !usr || !p1) { msg.textContent = "Completá todos los campos"; return; }
+        if (!/^[a-z0-9_.-]+$/.test(usr)) { msg.textContent = "Usuario solo con letras minúsculas, números, _ . -"; return; }
+        if (p1.length < 4) { msg.textContent = "La contraseña debe tener al menos 4 caracteres"; return; }
+        if (p1 !== p2) { msg.textContent = "Las contraseñas no coinciden"; return; }
+        if (navigator.onLine === false) { msg.textContent = "Sin conexión: probá de nuevo cuando haya señal"; return; }
+        creando = true;
+        btn.disabled = true;
+        btn.textContent = "Creando...";
+        try {
+          var f = fb();
+          var ref = f.doc(f.db, "usuarios", usr);
+          // Mismo criterio que el ingreso: el usuario puede estar en el id o en el campo "usuario".
+          var repetido = false;
+          var todos = await f.getDocs(f.collection(f.db, "usuarios"));
+          todos.forEach(function(d){
+            if (d.id.toLowerCase() === usr || String(d.data().usuario || "").toLowerCase() === usr) repetido = true;
+          });
+          if (!repetido) repetido = (await f.getDoc(ref)).exists();
+          if (repetido) { msg.textContent = "Ya existe un usuario con ese nombre"; return; }
+          var pwdHash = await hashPassword(p1);
+          await f.setDoc(ref, {
+            usuario: usr, passwordHash: pwdHash, nombre: nombre, activo: true, creado: f.Timestamp.now()
+          });
+          SersaleUI.toast("Usuario @" + usr + " creado", { tipo: "ok" });
+          await window.abrirGestionUsuarios();
+        } catch(err) {
+          console.error(err);
+          msg.textContent = "No se pudo crear el usuario. Probá de nuevo.";
+        } finally {
+          creando = false;
+          btn.disabled = false;
+          btn.textContent = "Crear usuario";
+        }
+      };
+    };
+
+    // Cambios sobre un usuario: de a uno por vez, con señal, y si falla se avisa.
+    var usrOcupado_index = false;
+    async function usrOperacion_index(fn, textoError) {
+      if (usrOcupado_index) { SersaleUI.toast("Esperá: todavía se está guardando el cambio anterior.", { tipo: "info" }); return false; }
+      if (navigator.onLine === false) { SersaleUI.toast("Sin conexión: los usuarios se cambian con señal.", { tipo: "error" }); return false; }
+      usrOcupado_index = true;
+      try {
+        await fn(fb());
+        return true;
+      } catch(err) {
+        console.error(err);
+        SersaleUI.toast(textoError, { tipo: "error" });
+        return false;
+      } finally {
+        usrOcupado_index = false;
+      }
+    }
+
+    // `id` es el id del documento en "usuarios"; `etiqueta`, el nombre de usuario que se muestra.
+    window.cambiarPwdUsuario = async function(id, etiqueta) {
+      var pedido = SersaleUI.pedirTexto({ titulo: "Nueva contraseña", etiqueta: "Para @" + (etiqueta || id) + " (mínimo 4 caracteres)", aceptar: "Guardar" });
+      // Que el teclado del teléfono no le ponga mayúscula ni "corrija" la clave.
+      var campos = document.querySelectorAll(".ss-hoja .ss-campo");
+      var campo = campos[campos.length - 1];
+      if (campo) { campo.setAttribute("autocapitalize", "none"); campo.setAttribute("autocorrect", "off"); campo.setAttribute("spellcheck", "false"); }
+      var nueva = await pedido;
+      if (!nueva) return;
+      if (nueva.length < 4) { SersaleUI.toast("La contraseña debe tener al menos 4 caracteres. No se cambió.", { tipo: "error" }); return; }
+      var ok = await usrOperacion_index(async function(f) {
+        var pwdHash = await hashPassword(nueva);
+        await f.updateDoc(f.doc(f.db, "usuarios", id), { passwordHash: pwdHash });
+      }, "No se pudo cambiar la contraseña. Probá de nuevo.");
+      if (ok) SersaleUI.toast("Contraseña de @" + (etiqueta || id) + " actualizada", { tipo: "ok" });
+    };
+
+    window.toggleActivoUsuario = async function(id, nuevoEstado) {
+      await usrOperacion_index(async function(f) {
+        await f.updateDoc(f.doc(f.db, "usuarios", id), { activo: nuevoEstado });
+      }, "No se pudo actualizar el usuario. Probá de nuevo.");
+      await cargarListaUsuarios();
+    };
+
+    window.eliminarUsuario = async function(id, etiqueta) {
+      var si = await SersaleUI.confirmar({
+        titulo: "¿Eliminar al usuario @" + (etiqueta || id) + "?",
+        cuerpo: "No va a poder ingresar más. Esta acción no se puede deshacer.",
+        aceptar: "Eliminar", peligro: true
+      });
+      if (!si) return;
+      var ok = await usrOperacion_index(async function(f) {
+        await f.deleteDoc(f.doc(f.db, "usuarios", id));
+      }, "No se pudo eliminar el usuario. Probá de nuevo.");
+      if (ok) SersaleUI.toast("Usuario @" + (etiqueta || id) + " eliminado", { tipo: "ok" });
+      await cargarListaUsuarios();
+    };
+
+    // ===== INIT =====
+    var LOGO = "assets/logo.png";
+    render();
+    waitForFirebase(verificarSesion_index);
+  </script>
+
+  
+
+</body>
+</html>

@@ -1,0 +1,662 @@
+{
+ "summary": "Section audited: /home/user/sersale-produccion/crm/src/produccion.html lines 1-800 (I read the whole file, 1-1620, for context; findings are limited to 1-800 except where flagged as cross-section).\n\nWhat it does for the business: this is the production module. (1) Head: a sessionStorage role gate (only role \"director\" or a legacy session may stay; \"operario\" is sent to pedidos.html), CDN loading of React 18 + in-browser Babel + Firebase 10.7.0 Firestore + jsPDF, shared styles. (2) VistaEncargado (default view): an area manager picks one of 6 production areas, types their name and lists the products made in a batch (\"tanda\") with quantity/unit; the report is saved to `reportes`, and rows reported in \"piezas\" automatically add to `stock_produccion` (matched by exact product name) and log an \"entrada\" in `stock_movimientos`. (3) VistaDirector (first ~500 lines of logic): loads the day's reports with per-area totals, edits/deletes reports, manages finished-goods stock (CRUD, +/- stepper, multi-line \"salida\" that subtracts stock and logs movements), low-stock WhatsApp alerts through CallMeBot (ConfigWhatsApp + sendStockAlert), slaughter records (`faenas`) and traceability lots (`trazabilidad_lotes`, auto-numbered YYYYMMDD-NNN), plus the full-screen \"Editar Reporte\" form.\n\nMain risks found: stock quantities are written as absolute values computed from stale screen state (rapid +/- taps, edits and concurrent phones lose updates); editing or deleting a report never reverts the stock it generated; default dates use UTC (tomorrow after 21:00 ART); ConfigWhatsApp is declared inside VistaDirector so it remounts and re-reads Firestore on every parent render; units are ignored when impacting stock; multi-document writes are not atomic; offline/failed reads are displayed as \"no data\". No money amounts are handled in this section (quantities only).\n\nStructural note for other agents: ConfigWhatsApp (540-607) and sendStockAlert (610-621) are nested inside VistaDirector, which runs from line 297 to 1599. `increment`, `runTransaction`, `writeBatch`, `onSnapshot` and `limit` are NOT imported at line 29 and must be added to both the import and window.__firebase for any fix that needs them. Outside my section but worth knowing: lines 1262 and 1280 do `AREAS[r.area].color` without a guard, so one report with an unknown area key would crash the whole director view.",
+ "components": [
+  {
+   "name": "Role gate (inline IIFE)",
+   "lines": "produccion.html:4-13",
+   "purpose": "Reads sessionStorage sersale_role: 'director' stays; 'operario' is redirected to pedidos.html; otherwise legacy sersale_auth==='ok' stays; anything else goes to index.html."
+  },
+  {
+   "name": "Head: meta, fonts, CDN scripts",
+   "lines": "produccion.html:15-26, 56",
+   "purpose": "no-cache meta tags, Google Fonts, viewport (maximum-scale=1.0), React/ReactDOM 18 UMD and @babel/standalone 7.26.4 from unpkg, jsPDF 2.5.1 from cdnjs (loaded eagerly, only used by the PDF export at line 1118)."
+  },
+  {
+   "name": "Firebase init (type=module)",
+   "lines": "produccion.html:27-45",
+   "purpose": "initializeApp + getFirestore for project sersale-produccion; exposes window.__db, window.__firebase {collection, addDoc, getDocs, getDoc, updateDoc, deleteDoc, doc, query, orderBy, where, Timestamp, setDoc}, sets window.__fbReady=true and dispatches document event 'fbReady'. No Firebase Auth."
+  },
+  {
+   "name": "Global styles",
+   "lines": "produccion.html:46-91",
+   "purpose": "Reset, --app-max-w responsive width, .crm-page, body/html padding-bottom 64px for the fixed bottom nav, shared visual layer (fonts, focus ring, scrollbars)."
+  },
+  {
+   "name": "Constants and helpers: AREAS, UNIDADES, CATEGORIAS_STOCK, fmt, fmtH, fmtN, getFirebase",
+   "lines": "produccion.html:97-120",
+   "purpose": "AREAS = 6 hard-coded production areas (cocidos, crudos, secos, frescos, ahumados, pastas) each with label/color/icon and a hard-coded product name list; UNIDADES = kg|piezas|ganchos|bolsas|unidades; CATEGORIAS_STOCK (9 values); fmt/fmtH format an ISO instant as local es-AR date/time; fmtN rounds to 2 decimals; getFirebase() returns {db, ...window.__firebase}."
+  },
+  {
+   "name": "VistaEncargado",
+   "lines": "produccion.html:125-292",
+   "purpose": "Batch report wizard: step 'area' (grid of areas, 214-238) -> step 'form' (name, product rows, general notes, 240-291) -> success screen (189-212). addItem/updItem/remItem (135-137) manage rows; enviar() (139-179) saves the report and auto-impacts stock for rows in 'piezas'; nuevo() (181-185) resets everything."
+  },
+  {
+   "name": "VistaDirector: state",
+   "lines": "produccion.html:297-339",
+   "purpose": "All director state in one component: tab, report filters (date/area), report being edited, stock list/form/filters/sub-tab, salida form, movements, faena list/form/month filter, lots list/form/month filter."
+  },
+  {
+   "name": "cargar + effect",
+   "lines": "produccion.html:342-359",
+   "purpose": "Queries `reportes` for the selected local day (Timestamp range) or the whole collection when the date is empty; filters by area client-side; re-runs on filtroFecha/filtroArea change."
+  },
+  {
+   "name": "abrirEdit / updEditItem / addEditItem / remEditItem / guardarEdit / eliminarReporte",
+   "lines": "produccion.html:362-404",
+   "purpose": "Edit a report's encargado/items/obs (updateDoc + editadoEn) or hard-delete it. Neither touches stock or movements."
+  },
+  {
+   "name": "cargarStock / cargarMovimientos + effects",
+   "lines": "produccion.html:407-423",
+   "purpose": "Load the whole stock_produccion collection (orderBy nombre) on entering the Stock tab; load the whole stock_movimientos collection (orderBy createdAt desc, no limit) on entering the Movimientos sub-tab."
+  },
+  {
+   "name": "abrirModalSalida / updSalidaItem / addSalidaItem / remSalidaItem / guardarSalida",
+   "lines": "produccion.html:425-478",
+   "purpose": "Multi-line stock exit (despacho a sucursal PP/CAB, venta planta, pedido cliente): for each line finds the stock item by exact name, subtracts (clamped at 0), logs a 'salida' movement; then reloads stock, re-reads it again and sends a WhatsApp alert with every low-stock item."
+  },
+  {
+   "name": "abrirModalStock / guardarStock / eliminarStock / ajustarCantidad",
+   "lines": "produccion.html:480-536",
+   "purpose": "Create/edit/delete stock items and the +/-1 stepper (absolute write of cantidad; WhatsApp alert when at/below minimum)."
+  },
+  {
+   "name": "ConfigWhatsApp (nested inside VistaDirector)",
+   "lines": "produccion.html:540-607",
+   "purpose": "Collapsible banner on the Stock tab to view/save CallMeBot phone + API key in config/whatsapp. Declared inside VistaDirector, so it is a new component type on every parent render."
+  },
+  {
+   "name": "sendStockAlert",
+   "lines": "produccion.html:610-621",
+   "purpose": "Reads config/whatsapp and calls the CallMeBot WhatsApp HTTP API with a low-stock message."
+  },
+  {
+   "name": "cargarFaenas / abrirModalFaena / guardarFaena / eliminarFaena",
+   "lines": "produccion.html:624-677",
+   "purpose": "Slaughter records CRUD (date, animal type, heads, total and average weight, notes); whole collection loaded on entering the Faena tab."
+  },
+  {
+   "name": "generarNumeroLote / cargarLotes / addMateriaPrima, updMP, remMP, addProducto, updProd, remProd / guardarLote",
+   "lines": "produccion.html:680-729",
+   "purpose": "Traceability lots: form helpers and creation with auto number YYYYMMDD-NNN (NNN = count of existing lots with that date prefix + 1). No edit/delete of lots exists."
+  },
+  {
+   "name": "Derived data: totalesDia, stockFiltrado, stockAlerta",
+   "lines": "produccion.html:732-745",
+   "purpose": "Per-area totals of the loaded reports grouped by producto+unidad; stock list filtered by category; low-stock list (minimo>0 && cantidad<=minimo)."
+  },
+  {
+   "name": "Edit report screen (early return of VistaDirector)",
+   "lines": "produccion.html:748-803",
+   "purpose": "Full-screen form shown instead of the director panel while `editando` is set: encargado, product rows (select limited to the area's products, or free text if the area is unknown), notes, save."
+  }
+ ],
+ "firestore": [
+  {
+   "collection": "reportes",
+   "docId": "Firestore auto-id (addDoc)",
+   "ops": "addDoc (147). getDocs(query(collection, where('fecha','>=',Timestamp.fromDate(local 00:00:00)), where('fecha','<=',Timestamp.fromDate(local 23:59:59)), orderBy('fecha','desc'))) when a date is selected, or getDocs(query(collection, orderBy('fecha','desc'))) with no date (346-353). updateDoc {encargado, items, obs, editadoEn} (385-390). deleteDoc (400).",
+   "fields": "area: string, key of AREAS = 'cocidos'|'crudos'|'secos'|'frescos'|'ahumados'|'pastas'. encargado: string, free text, trimmed on create (not trimmed on edit). fecha: Firestore Timestamp (Timestamp.now(), client clock) - the field used for querying/sorting. fechaISO: string, ISO-8601 UTC instant from new Date().toISOString() e.g. '2026-11-10T15:04:05.123Z' (stored on create; on read it is overwritten in memory with fecha.toDate().toISOString()). items: array of { producto: string (one of AREAS[area].productos or the literal 'Otro'), cantidad: STRING holding a number exactly as returned by <input type=number> e.g. '12' or '12.5' (never converted to number), unidad: 'kg'|'piezas'|'ganchos'|'bolsas'|'unidades', obs: string, may be '' }. obs: string (trimmed on create). editadoEn: string ISO-8601 UTC instant, only present after an edit.",
+   "lines": "produccion.html:146-147, 342-357, 379-404",
+   "notes": "Only rows with both producto and cantidad truthy are saved. Rows whose unidad==='piezas' also generate stock side effects (see stock_produccion / stock_movimientos). Docs without a Timestamp `fecha` are invisible to the day query; a string `fecha` would throw at .toDate() (354) in the no-date query and blank the list. Not exported by backup.html."
+  },
+  {
+   "collection": "stock_produccion",
+   "docId": "Firestore auto-id (addDoc)",
+   "ops": "getDocs(query(collection, where('nombre','==',<product name>))) and take docs[0] (156, 445). updateDoc {cantidad, updatedAt} (160 add, 454 subtract clamped at 0, 528 stepper). getDocs(query(collection, orderBy('nombre'))) (410, and again at 471). updateDoc with the full form (506). addDoc (509). deleteDoc (520).",
+   "fields": "nombre: string, trimmed; it is the join key - must equal reportes.items[].producto / the salida line name exactly (case, accents, spaces). categoria: string, one of 'Cocidos'|'Jamones Crudos'|'Secos'|'Frescos'|'Ahumados'|'Pastas'|'Materia Prima'|'Insumos'|'Otro'. cantidad: number (float, parseFloat(...)||0; never rounded, can carry float noise such as 2.1999999999999997). unidad: 'kg'|'piezas'|'ganchos'|'bolsas'|'unidades' (default 'kg' for new items). minimo: number, 0 = no alert. obs: string, trimmed. updatedAt: string ISO-8601 UTC instant.",
+   "lines": "produccion.html:156-160, 407-413, 445-454, 471-473, 490-536",
+   "notes": "All quantity writes are absolute values computed client-side (read-modify-write, no transaction, no increment). No uniqueness on nombre. Low stock rule here: minimo>0 && cantidad<=minimo (backup.html line 102 uses cantidad<minimo, strict). Docs missing `nombre` are excluded by orderBy('nombre'). Firestore orders nombre by byte order (uppercase < lowercase < accented), while the local insert at 510 uses localeCompare."
+  },
+  {
+   "collection": "stock_movimientos",
+   "docId": "Firestore auto-id (addDoc)",
+   "ops": "addDoc from a production report (162-169). addDoc from a salida (455-463). getDocs(query(collection, orderBy('createdAt','desc'))) with no limit (419).",
+   "fields": "Common: stockId: string (stock_produccion doc id). nombre: string (product name, denormalised). tipo: 'entrada'|'salida'. subtipo: 'produccion' (entrada) | 'despacho'|'venta'|'pedido' (salida). cantidad: number (float). unidad: string - always 'piezas' for entradas; for salidas whatever was chosen in the form ('piezas'|'kg'|'bolsas'|'ganchos'|'unidades'), not necessarily the stock item's unit. fecha: string 'YYYY-MM-DD' - for entradas it is new Date().toISOString().split('T')[0] (UTC date, i.e. tomorrow after 21:00 ART); for salidas it is the value of the date input (local date chosen by the user, default computed in UTC). createdAt: string ISO-8601 UTC instant (sort key). Entrada only: ref: string (reportes doc id), encargado: string. Salida only: destino: 'PP'|'CAB' when subtipo='despacho', 'Planta' when 'venta', 'Cliente' when 'pedido'; obs: string, trimmed.",
+   "lines": "produccion.html:162-169, 416-422, 455-463",
+   "notes": "Append-only log; never updated or deleted here. Manual +/- adjustments (528), stock edits (506), report edits (385) and report deletes (400) do NOT create or correct movements, so the log does not reconcile with stock. Docs missing createdAt are excluded from the list query. Not exported by backup.html."
+  },
+  {
+   "collection": "config/whatsapp",
+   "docId": "Fixed document id 'whatsapp' in collection 'config'",
+   "ops": "getDoc (551 on every ConfigWhatsApp mount, 613 on every alert). setDoc WITHOUT merge - replaces the whole document (563).",
+   "fields": "phone: string, trimmed, expected digits with country code e.g. '5491112345678' (no validation). apikey: string, trimmed, CallMeBot API key in plain text.",
+   "lines": "produccion.html:547-557, 559-568, 610-619",
+   "notes": "Alerts are active only when both fields are non-empty. Other documents in `config` are used by pedidos.html (config/productos, config/ultima_alerta_email, config/contador_remitos); only this page touches config/whatsapp."
+  },
+  {
+   "collection": "faenas",
+   "docId": "Firestore auto-id (addDoc)",
+   "ops": "getDocs(query(collection, orderBy('fecha','desc'))) (627). updateDoc with the full form (660). addDoc (663). deleteDoc (674).",
+   "fields": "fecha: string 'YYYY-MM-DD' from <input type=date> (default computed in UTC at 639). tipo: 'Cerdo'|'Vaca'|'Ternero'|'Cordero'|'Otro'. cantidad: number, integer heads (parseInt(...)||0). pesoTotal: number kg (parseFloat(...)||0, 0 when empty). pesoPromedio: number kg (parseFloat(...)||0, 0 when empty; typed or auto-filled by the form, not recomputed on save). obs: string, trimmed. createdAt: string ISO-8601 UTC instant - rewritten on every edit.",
+   "lines": "produccion.html:624-677",
+   "notes": "Month filter and totals are done client-side with fecha.startsWith('YYYY-MM') (lines 1450-1454, outside this section) and assume cantidad/pesoTotal are numbers. backup.html tolerates fecha being a Timestamp, this page does not (f.fecha.startsWith)."
+  },
+  {
+   "collection": "trazabilidad_lotes",
+   "docId": "Firestore auto-id (addDoc)",
+   "ops": "getDocs(query(collection, orderBy('fechaElab','desc'))) (688). getDocs(query(collection, orderBy('nroLote','desc'))) - the whole collection, only to count same-day lots (712). addDoc (716). No update or delete.",
+   "fields": "nroLote: string 'YYYYMMDD-NNN' where YYYYMMDD = fechaElab without dashes and NNN = (number of existing lots whose nroLote starts with that date) + 1, zero-padded to 3. fechaElab: string 'YYYY-MM-DD'. fechaVenc: string 'YYYY-MM-DD'. operario: string, trimmed. materiasPrimas: array of { tipo: 'cerdo'|'vacuno', corte: string (optional, may be ''), proveedor: string, kg: number }. productos: array of { nombre: string (free text), cantidad: number, unidad: 'piezas'|'kg'|'bolsas'|'unidades' }. obs: string, trimmed. createdAt: string ISO-8601 UTC instant.",
+   "lines": "produccion.html:680-729",
+   "notes": "Lots do not touch stock. Docs missing fechaElab/nroLote are excluded by the orderBy of each query. No check that fechaVenc >= fechaElab."
+  }
+ ],
+ "clientState": [
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_role",
+   "usage": "Read only. 'director' -> page allowed; 'operario' -> redirect to pedidos.html; any other value falls through to the legacy check. Written by index.html (entrarOperario / director login).",
+   "lines": "produccion.html:6-8"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_auth",
+   "usage": "Read only. Legacy pass: if role is neither director nor operario and this equals 'ok', the page is allowed; otherwise redirect to index.html.",
+   "lines": "produccion.html:10-11"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__db",
+   "usage": "Firestore instance created by the module script; consumed through getFirebase().",
+   "lines": "produccion.html:41, 120"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__firebase",
+   "usage": "Object with the Firestore functions available to the Babel script: collection, addDoc, getDocs, getDoc, updateDoc, deleteDoc, doc, query, orderBy, where, Timestamp, setDoc. increment / runTransaction / writeBatch / onSnapshot / limit are NOT exposed.",
+   "lines": "produccion.html:29, 42"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.__fbReady + document event 'fbReady'",
+   "usage": "Readiness flag and event. Every loader does `if(window.__fbReady) load(); else document.addEventListener('fbReady', load)`; the listeners are never removed. In practice the module script always runs before Babel compiles on DOMContentLoaded, so the event branch is only hit if the Firebase CDN import fails (then lists stay on 'Cargando...' forever).",
+   "lines": "produccion.html:43-44, 359, 414, 423, 556, 631, 692"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "window.jspdf / React / ReactDOM / Babel",
+   "usage": "UMD globals from CDN script tags. jsPDF is only used by the report export at line 1118 (outside this section).",
+   "lines": "produccion.html:24-26, 56, 97"
+  },
+  {
+   "kind": "domId",
+   "key": "root",
+   "usage": "React mount point; empty until Babel has compiled the script (no splash).",
+   "lines": "produccion.html:94"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "CSS custom property --app-max-w",
+   "usage": "Shared max width (480/860/960px) used inline as maxWidth:'var(--app-max-w)' by every screen.",
+   "lines": "produccion.html:51-54, 215, 241, 752"
+  },
+  {
+   "kind": "localStorage",
+   "key": "(none)",
+   "usage": "This section uses no localStorage and no URL parameters: nothing is remembered between visits (encargado name, area, last view, last tab, filters).",
+   "lines": "produccion.html:1-800"
+  }
+ ],
+ "external": [
+  {
+   "service": "Cloud Firestore (Firebase project sersale-produccion), SDK 10.7.0 from www.gstatic.com",
+   "usage": "Only backend. firebase-app.js and firebase-firestore.js imported as ES modules; default in-memory cache (no offline persistence), no Firebase Auth.",
+   "lines": "produccion.html:27-45"
+  },
+  {
+   "service": "unpkg.com",
+   "usage": "react@18 and react-dom@18 UMD production builds (floating version, resolved through a redirect) and @babel/standalone@7.26.4, which compiles the whole text/babel script (about 1,500 lines, default presets react + env) on every page load.",
+   "lines": "produccion.html:24-26, 96"
+  },
+  {
+   "service": "cdnjs.cloudflare.com",
+   "usage": "jsPDF 2.5.1 UMD, loaded synchronously in the head although only the PDF export (line 1118) uses it.",
+   "lines": "produccion.html:56"
+  },
+  {
+   "service": "Google Fonts",
+   "usage": "Barlow Condensed, IBM Plex Mono, IBM Plex Sans stylesheet (render-blocking) + preconnect to fonts.gstatic.com.",
+   "lines": "produccion.html:18-19"
+  },
+  {
+   "service": "CallMeBot WhatsApp API",
+   "usage": "GET https://api.callmebot.com/whatsapp.php?phone=..&apikey=..&text=.. via fetch (default CORS mode; the response is not readable cross-origin, so the promise is expected to reject into the catch while the request is still delivered). Sends low-stock alerts to the configured number. The setup instructions hard-code the activation contact '+34 644 44 74 12' and the phrase 'I allow callmebot to send me messages' (CallMeBot has changed that number over time; I could not verify it is still current).",
+   "lines": "produccion.html:589-594, 610-621"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "Stock +/- stepper writes absolute values from stale render state: rapid taps, cross-item taps and concurrent changes lose updates",
+   "lines": "produccion.html:524-536",
+   "severity": "high",
+   "category": "persistence-integrity / react-stale-closure",
+   "evidence": "`const nueva = Math.max(0, (parseFloat(item.cantidad)||0) + delta);` then `await updateDoc(doc(db,\"stock_produccion\",item.id), {cantidad: nueva, ...})` and only afterwards `const updated = stockItems.map(s=>s.id===item.id?{...s,cantidad:nueva}:s); setStockItems(updated);`. `item` and `stockItems` are the values captured by the render that drew the button; no state changes before the await, there is no in-flight guard, and no transaction/increment (increment and runTransaction are not even imported at line 29). The list itself is only refreshed when the tab is entered (414).",
+   "failureScenario": "(a) 'Jamon Cocido' shows 40. The director taps '-' three times quickly (each write takes 150-500 ms on 4G): all three handlers compute 40-1 and write 39, so stock ends at 39 instead of 37. (b) Tap '+' on item A and right away '+' on item B: B's setStockItems uses the pre-A array, A's number reverts on screen, and the next tap on A writes that stale number to Firestore. (c) Stock tab opened at 9:00 shows 40; at 10:00 a production report adds 30 (Firestore = 70); at 10:05 the director taps '-' once and Firestore becomes 39 - 30 pieces disappear.",
+   "suggestedFix": "Import `increment` (and `runTransaction`) and expose them in window.__firebase. Update optimistically with a functional setState (`setStockItems(prev=>...)`), accumulate rapid taps per item (short debounce) into a single `updateDoc(ref,{cantidad: increment(delta)})` or a transaction that clamps at 0, roll back on error, and log an 'ajuste' movement.",
+   "confidence": "high"
+  },
+  {
+   "title": "Editing or deleting a production report never adjusts the stock and the movement it generated",
+   "lines": "produccion.html:379-404",
+   "severity": "high",
+   "category": "persistence-integrity / derived-balance",
+   "evidence": "enviar() (150-169) adds each 'piezas' row to stock_produccion.cantidad and writes stock_movimientos with `ref: repRef.id`. guardarEdit() only does `updateDoc(doc(db,\"reportes\",editando.id), { encargado, items: val, obs, editadoEn })` (385-390) and eliminarReporte() only `deleteDoc(doc(db,\"reportes\",id))` (400). Neither reads or writes stock_produccion or the movements whose ref equals the report id.",
+   "failureScenario": "A report is sent with 'Salamin Picado Fino 200 piezas' (typo for 20): stock +200, movement '+200'. The director corrects it to 20 with 'Editar' (or deletes the report). Reportes now shows 20 (or nothing), but Stock still carries the extra 180/200 and Movimientos keeps an 'ENTRADA +200' pointing at an edited/deleted report. The low-stock alert will not fire when it should.",
+   "suggestedFix": "On edit/delete compute, per product, the difference between the old and new 'piezas' rows and apply it atomically (writeBatch/transaction with increment(-diff)), and add a compensating movement (or update/delete the ones where ref == report id). At minimum warn the user that stock must be corrected by hand.",
+   "confidence": "high"
+  },
+  {
+   "title": "Editing a stock item rewrites `cantidad` with the value loaded when the list was fetched",
+   "lines": "produccion.html:480-507",
+   "severity": "medium",
+   "category": "persistence-integrity / lost-update",
+   "evidence": "abrirModalStock copies `cantidad:item.cantidad` from the in-memory list (483); guardarStock always builds `data = { nombre, categoria, cantidad: parseFloat(stockForm.cantidad)||0, unidad, minimo, obs, updatedAt }` and runs `updateDoc(doc(db,\"stock_produccion\",editStock), data)` (496-506) even when the user did not touch the quantity. The list is only reloaded on entering the tab (414), there is no listener.",
+   "failureScenario": "Stock tab open since the morning shows 'Panceta Ahumada 12'. During the day two reports add 20 piezas (Firestore = 32). The director taps 'Editar' only to raise 'Minimo alerta' from 5 to 10 and saves: cantidad is written back as 12 and the 20 produced pieces are lost.",
+   "suggestedFix": "When editing, send only the fields that changed (omit cantidad unless the user changed it); if it changed, apply it as a delta with increment() or inside a transaction and log an 'ajuste' movement. Re-read the document when opening the modal or keep the list live with onSnapshot.",
+   "confidence": "high"
+  },
+  {
+   "title": "Default dates are computed in UTC: after 21:00 (ART) the report filter, movement dates and form defaults are tomorrow",
+   "lines": "produccion.html:167, 302, 426, 639",
+   "severity": "medium",
+   "category": "dates-timezone",
+   "evidence": "302: `useState(new Date().toISOString().slice(0,10))` for filtroFecha. 167: movement `fecha: new Date().toISOString().split(\"T\")[0]`. 426: `const hoy = new Date().toISOString().split(\"T\")[0]` for the salida form. 639: same for the faena form (681 has the same pattern as an unused fallback). toISOString() is UTC, Buenos Aires is UTC-3 (checked with node: 2026-11-10 21:30 ART -> '2026-11-11'). The month filters at 326/333 correctly use local getters, so they disagree with these defaults.",
+   "failureScenario": "At 21:30 on 10/11 the director opens the panel: the date filter is 11/11 and the screen says 'No hay reportes para este filtro' although the day's batches exist. A report sent at 21:30 logs its stock movement as 11/11. 'Registrar salida' and 'Registrar faena' default to tomorrow; on the last evening of a month the new faena is saved in the next month and does not appear under the current month filter.",
+   "suggestedFix": "Add one helper that builds YYYY-MM-DD from local getters (getFullYear/getMonth/getDate) or `new Date().toLocaleDateString('sv-SE',{timeZone:'America/Argentina/Buenos_Aires'})` and use it at 167, 302, 426, 639 and 681.",
+   "confidence": "high"
+  },
+  {
+   "title": "ConfigWhatsApp is declared inside VistaDirector, so it is unmounted and remounted on every parent render",
+   "lines": "produccion.html:540-607",
+   "severity": "medium",
+   "category": "react-correctness",
+   "evidence": "`function ConfigWhatsApp()` (540) sits inside the body of `function VistaDirector` (opened at 297, closed at 1599) and is rendered as `<ConfigWhatsApp />` at 1334. Each VistaDirector render creates a new function identity, which React treats as a different component type: the old instance is destroyed and a new one starts with `useState(null)`, returns null (`if(cfg===null) return null`, 570) and its effect (547-557) runs `getDoc(doc(db,\"config\",\"whatsapp\"))` again.",
+   "failureScenario": "On Stock > Stock, every re-render of VistaDirector (each +/- tap, a category filter change, and every keystroke in the 'Nuevo item de stock' or 'Registrar salida' modals, whose form state lives in VistaDirector) removes the WhatsApp banner, re-reads Firestore and re-inserts it: the list jumps about 60px each time and typing a 28-character product name costs 28 document reads. If the director has the config panel open with a half-typed phone/API key and anything re-renders the parent (stock finishing loading, a +/- tap), the panel closes and the typed values are gone.",
+   "suggestedFix": "Move ConfigWhatsApp (and sendStockAlert) to module scope, above VistaDirector. Load config/whatsapp once (state in the parent or a small module cache) and pass it down as props so sendStockAlert can reuse it.",
+   "confidence": "high"
+  },
+  {
+   "title": "Stock impact ignores units: only report rows in 'piezas' move stock, and quantities are added/subtracted without comparing with the stock item's unit",
+   "lines": "produccion.html:150-165, 443-460",
+   "severity": "medium",
+   "category": "quantities / logic",
+   "evidence": "150: `val.filter(it=>it.unidad===\"piezas\"&&...)`. 159-160: `actual = parseFloat(stockDoc.data().cantidad)||0; updateDoc(..., { cantidad: actual+cant })` with no look at `stockDoc.data().unidad`; the movement hard-codes `unidad: \"piezas\"` (165). guardarSalida subtracts `cant` (453-454) whatever `it.unidad` was chosen and only stores that unit in the log (460). New stock items default to unidad 'kg' (311, 486) and report rows default to 'kg' (129).",
+   "failureScenario": "Stock item 'Salamin Picado Fino' is tracked in kg with 50. A report of 30 piezas turns it into 80 'kg'. A report of 30 kg of the same product (the default unit) does not change stock at all and gives no warning. A salida of 5 'kg' against an item tracked in piezas subtracts 5 pieces.",
+   "suggestedFix": "Resolve the stock item first and compare units: impact only when they match (or convert with a per-product kg-per-piece factor), otherwise tell the user. For salidas let the user pick the item from the loaded stock list and lock the unit to the item's unit. Default the report row unit to the stock item's unit.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Report, stock update and movement are separate sequential writes: a failure midway says 'Error' although part was saved, and a retry duplicates it",
+   "lines": "produccion.html:144-178, 439-477",
+   "severity": "medium",
+   "category": "persistence-integrity / async-errors",
+   "evidence": "enviar(): `await addDoc(collection(db,\"reportes\"), rep)` (147) first, then per row `getDocs(where nombre==)` -> `updateDoc({cantidad: actual+cant})` -> `addDoc(stock_movimientos)` (156-169), all in one try whose catch is `alert(\"Error al enviar.\")` (177) with the form left intact. guardarSalida(): the same pattern per line (445-463), catch `alert(\"Error al guardar\")` (476) with the modal left open. Each stock change is read-then-write with no transaction.",
+   "failureScenario": "Any rejection after the first write (quota exhausted, a transient UNAVAILABLE, a rules change) shows 'Error al enviar.' while the report document already exists and the first product's stock was already increased; tapping 'Enviar reporte' again creates a second report and increases that stock again. In a salida the lines processed before the error are subtracted twice on retry. Two phones writing the same product at the same moment both read 40 and write 40+10 and 40+25: one of them is lost.",
+   "suggestedFix": "Resolve all stock documents first, then commit report + increments + movements in a single writeBatch/runTransaction using increment(). Pre-generate the report id (`doc(collection(db,'reportes'))` + setDoc) so a retry is idempotent.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Salida with an unmatched product name: the message says 'correct and register again' but the modal closes, the form is discarded and the matched lines were already subtracted",
+   "lines": "produccion.html:446-451, 465, 475",
+   "severity": "medium",
+   "category": "logic / data-loss",
+   "evidence": "Unmatched lines are pushed to `sinStock` and skipped (446-451) while matched lines are written immediately (454-463). After the loop: `alert(\"NO se registro la salida de: ... corregi el nombre y volve a registrar la salida.\")` (465) and then, unconditionally, `setModalSalida(false)` (475). Reopening calls abrirModalSalida, which resets the form (427).",
+   "failureScenario": "A salida with 4 lines has one typed 'Panceta ahumada' (stock name is 'Panceta Ahumada'). The alert appears, the modal closes and everything typed is gone; 3 lines were already subtracted. Following the message, the user re-enters the whole salida: those 3 products are subtracted a second time.",
+   "suggestedFix": "Validate every line against the stock list before writing anything and abort if one is missing, keeping the modal open with the failing rows marked. Better: replace the free-text name with a picker over stockItems so a mismatch cannot happen.",
+   "confidence": "high"
+  },
+  {
+   "title": "Low-stock WhatsApp alert is re-sent on every salida and on every '-' tap instead of when an item crosses its minimum",
+   "lines": "produccion.html:469-474, 531-534",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "After any salida: `const bajos = allItems.filter(s=>s.minimo>0&&s.cantidad<=s.minimo); if(bajos.length>0) sendStockAlert(bajos);` - every low item in the whole stock, whether or not it was part of this salida or changed at all (it also runs when all lines failed to match). Stepper: the comment says 'Notify if crossed minimum threshold going down' but the condition is `delta<0 && item.minimo>0 && nueva<=item.minimo`.",
+   "failureScenario": "Three items are already under their minimum. Each of the day's 8 salidas (of any other product) sends the same three-item WhatsApp again. An item with minimum 10 standing at 10: tapping '-' five times sends five messages. CallMeBot throttles or blocks numbers that send bursts, so real alerts can be dropped.",
+   "suggestedFix": "Notify only for items that cross the threshold (before > minimo && after <= minimo) and, in a salida, only for the items it touched; store a lastAlertAt per item (or per day) to deduplicate.",
+   "confidence": "high"
+  },
+  {
+   "title": "Stock, faena and lot data are only loaded when their tab is opened, so the PDF/Excel export and the low-stock badge are empty until then (cross-section)",
+   "lines": "produccion.html:414, 631, 692 (shows up at 745, 1136-1198, 1233)",
+   "severity": "medium",
+   "category": "logic / async",
+   "evidence": "stockItems, faenas and lotes start as null (308, 321, 329) and are loaded only by effects gated on `tab===\"stock\"` (414), `tab===\"faena\"` (631) and `tab===\"trazabilidad\"` (692). The export includes a section only if `getChk(...)&&stockItems`, `&&faenas`, `&&lotes` (1136, 1148, 1154, 1172, 1182, 1187) and stockAlerta derives from stockItems (745).",
+   "failureScenario": "The director opens Vista Director (tab Reportes) and taps the document button: the four sections are ticked, but the PDF contains only the header and the CSV only 'sep=;' because nothing was loaded. The red low-stock counter on the Stock tab does not appear until the Stock tab has been opened once.",
+   "suggestedFix": "Load stock on mount (for the badge) and make the export await the missing loads (have cargarStock/cargarFaenas/cargarLotes return their data) before building the file, showing a 'Generando...' state.",
+   "confidence": "high"
+  },
+  {
+   "title": "Failed or offline reads are shown as 'no data', and an offline stock lookup is reported as 'product not in stock'",
+   "lines": "produccion.html:353-356, 410-412, 419-421, 627-629, 688-690, 156-175, 445-450",
+   "severity": "medium",
+   "category": "async-errors",
+   "evidence": "Every loader ends with `catch(e) { console.error(e); setReportes([]); }` (356; same shape at 412, 421, 629, 690). In addition, with the SDK's default memory cache getDocs() does not reject when offline: it resolves with an empty cached snapshot (only getDoc rejects with 'client is offline' - confirmed in the SDK source). So 353/410 yield [] and the name lookups at 156/445 yield `snap.empty`, which the code reports as 'Esos productos no figuran en Stock de Produccion con ese nombre exacto' (175, 465).",
+   "failureScenario": "With no signal inside the plant, Reportes shows 'No hay reportes para este filtro', Stock shows 'No hay items de stock' with a '+ Agregar primero' button (inviting duplicate items), and 'Registrar salida' says the products are not in stock. The director concludes nothing was produced or re-creates items.",
+   "suggestedFix": "Keep an error state per list and render 'No se pudo cargar - Reintentar' without discarding data already on screen; treat `snap.metadata.fromCache` (or navigator.onLine === false) on an empty result as 'sin conexion', not as 'vacio'.",
+   "confidence": "medium"
+  },
+  {
+   "title": "sendStockAlert double-encodes the line breaks and does not encode phone/apikey",
+   "lines": "produccion.html:617-619",
+   "severity": "low",
+   "category": "url-building",
+   "evidence": "`const lista = items.map(...).join(\"%0A\");` then `encodeURIComponent(`STOCK BAJO ... Sersale%0A${lista}%0AFecha: ...`)`: the literal '%0A' is encoded again to '%250A' (checked with node). `phone=${phone}&apikey=${apikey}` are interpolated raw.",
+   "failureScenario": "With CallMeBot decoding the query once (standard behaviour), the message arrives as a single line with visible '%0A' between items, e.g. 'STOCK BAJO - Frigorifico Sersale%0A Panceta: 3 piezas (min. 5)%0AFecha: 10/11/2026'. A phone saved as '+54 9 11 ...' is sent with a raw '+' and spaces.",
+   "suggestedFix": "Build the text with real '\\n' and call encodeURIComponent once; wrap phone and apikey in encodeURIComponent; normalise the phone to digits when saving; call fetch with {mode:'no-cors'}.",
+   "confidence": "medium"
+  },
+  {
+   "title": "A salida larger than the available stock is clamped to 0 silently while the movement records the full amount",
+   "lines": "produccion.html:453-460",
+   "severity": "low",
+   "category": "quantities",
+   "evidence": "`updateDoc(..., { cantidad: Math.max(0, actual-cant) })` followed by a movement with `cantidad: cant`; there is no comparison of cant with actual and no message.",
+   "failureScenario": "Stock says 4, the user registers a salida of 10: stock becomes 0, Movimientos shows '-10', and nobody is told that the stock count was 6 short. The movement log no longer reconciles with the stock.",
+   "suggestedFix": "If cant > actual, warn and ask for confirmation (or block), and record the shortfall explicitly.",
+   "confidence": "high"
+  },
+  {
+   "title": "Rows with a product but no quantity are dropped without warning; zero and negative quantities are accepted",
+   "lines": "produccion.html:141, 150-154, 380, 435, 443-444",
+   "severity": "low",
+   "category": "validation",
+   "evidence": "`items.filter(it=>it.producto&&it.cantidad)` (141, 380) and `salidaForm.items.filter(it=>it.nombre&&it.cantidad)` (435) only require a non-empty string; the error appears only when no row survives. `parseFloat(it.cantidad)||0` with `if(!cant) continue` (153-154, 443-444) silently skips 0 and accepts negatives. 'Otro' is a selectable product and is looked up in stock like any other name.",
+   "failureScenario": "An encargado lists three products and forgets the quantity of the second: the report is sent with two products and no message. Typing -5 piezas in a report subtracts 5 from stock as an 'entrada'; a salida of -5 adds 5. A row 'Otro' in piezas triggers the alert 'NO se pudo impactar el stock de: Otro'.",
+   "suggestedFix": "Validate row by row (highlight incomplete rows, require cantidad > 0), skip the stock lookup for 'Otro', and add min/step to the inputs.",
+   "confidence": "high"
+  },
+  {
+   "title": "Going back and choosing another area keeps the products picked for the previous area, hidden behind an empty-looking select",
+   "lines": "produccion.html:228, 243, 261-266",
+   "severity": "low",
+   "category": "react-derived-state",
+   "evidence": "The back arrow only does `setStep(\"area\")` (243) and picking an area only `setArea(key);setStep(\"form\")` (228); `items` is untouched. The select is `value={item.producto}` with options from the new area (261-266); when no option matches, the browser shows the first one ('- Selecciona un producto -') while state still holds the old product.",
+   "failureScenario": "The encargado taps 'Cocidos' by mistake, picks 'Jamon Cocido Natural Sublime' with 10, goes back and picks 'Secos'. Row 1 looks unselected with 10 in it; they add their salamis in new rows and send. The report for area 'secos' includes 'Jamon Cocido Natural Sublime 10', and if the unit was piezas that stock is increased.",
+   "suggestedFix": "When the area changes, clear the rows (or drop rows whose producto is not in the new area's list), asking first if there is typed data.",
+   "confidence": "high"
+  },
+  {
+   "title": "Lot number is derived from a count without a transaction: two simultaneous saves get the same nroLote",
+   "lines": "produccion.html:709-716",
+   "severity": "low",
+   "category": "persistence-integrity",
+   "evidence": "`const snap = await getDocs(query(collection(db,\"trazabilidad_lotes\"), orderBy(\"nroLote\",\"desc\")));` (the whole collection), `existing = ...filter(n=>n.startsWith(hoy)); const seq = existing.length + 1;` and then addDoc. Nothing enforces uniqueness.",
+   "failureScenario": "Two people register lots with the same elaboration date at the same moment: both count 2 existing lots and both save '20261110-003'. If a lot is ever removed from the console, the next count-based number collides with an existing one. Duplicate lot numbers defeat traceability.",
+   "suggestedFix": "Use a per-day counter document inside a transaction (config/contador_lotes_YYYYMMDD) or use the lot number as the document id with a create-only transaction; at least query only `where('fechaElab','==',fecha)`.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Editing a faena overwrites createdAt; a new faena is prepended regardless of its date",
+   "lines": "produccion.html:650-664",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`data` always contains `createdAt: new Date().toISOString()` (657) and the edit path does `updateDoc(doc(db,\"faenas\",editFaena), data)` (660). The create path does `setFaenas([{id:ref.id,...data},...(faenas||[])])` (664) although the list is ordered by fecha desc.",
+   "failureScenario": "Correcting the weight of last month's faena changes its creation timestamp to today (the original is lost for any audit/backup). Registering a faena dated three days ago shows it at the top of the list until the tab is reloaded.",
+   "suggestedFix": "Write createdAt only on create and updatedAt on edit; insert the new record in fecha order (or re-sort).",
+   "confidence": "high"
+  },
+  {
+   "title": "cargar() has no request ordering: a slow earlier response can overwrite the list for the current filter",
+   "lines": "produccion.html:342-359",
+   "severity": "low",
+   "category": "async-race",
+   "evidence": "The effect at 359 calls cargar() on every filtroFecha/filtroArea change; each call ends in `setReportes(...)` with the filters captured by its closure, with no cancellation or sequence check, and reportes is not reset to null when the filter changes (no loading state).",
+   "failureScenario": "On a slow connection the director changes the date and then the area: if the first query answers last, the list and 'Resumen del dia' show the previous filter's data while the controls show the new one.",
+   "suggestedFix": "Keep a request counter in a ref (or an `ignore` flag in the effect cleanup) and discard stale responses; set reportes to null when the filter changes; filter by area in memory instead of re-querying.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Stock quantities are stored with floating-point noise (never rounded)",
+   "lines": "produccion.html:160, 454, 528",
+   "severity": "low",
+   "category": "quantities / rounding",
+   "evidence": "`cantidad: actual+cant` (160) and `Math.max(0, actual-cant)` (454) persist raw float results; only the stock card uses fmtN. The low-stock banner (1340) and the WhatsApp text (617) print `s.cantidad` raw.",
+   "failureScenario": "Stock 3.3 kg and a salida of 1.1 kg store 2.1999999999999997 (checked with node); the low-stock banner and the WhatsApp alert then read '2.1999999999999997 kg'.",
+   "suggestedFix": "Round to 2-3 decimals before writing (Math.round(x*1000)/1000) and format with fmtN wherever cantidad is displayed or sent.",
+   "confidence": "high"
+  },
+  {
+   "title": "Duplicate stock names are allowed while every lookup takes snap.docs[0]",
+   "lines": "produccion.html:156-158, 445-452, 491-509",
+   "severity": "low",
+   "category": "persistence-integrity",
+   "evidence": "guardarStock only checks that nombre is not empty (491) before addDoc/updateDoc; reports and salidas find the item with `where(\"nombre\",\"==\",...)` and use `snap.docs[0]` (158, 452).",
+   "failureScenario": "'Panceta Ahumada' is created twice (by mistake, or after an offline 'No hay items de stock' screen). Production and salidas hit only one of the two documents (whichever id sorts first); the list shows two cards with different quantities and the alert logic evaluates each separately.",
+   "suggestedFix": "Reject a new/renamed item whose normalised name (trim, lower-case, no accents) already exists; link movements and reports by stock id rather than by name.",
+   "confidence": "high"
+  }
+ ],
+ "security": [
+  {
+   "title": "Access control is a client-side sessionStorage check",
+   "detail": "The gate only reads sessionStorage: sersale_role==='director' passes, and a session with no role but sersale_auth==='ok' also passes ('legacy'). Anyone can set either value from the browser console, and the page continues to parse and run while the redirect is pending. It is a UX gate, not a security boundary.",
+   "lines": "produccion.html:4-13"
+  },
+  {
+   "title": "Firestore is used without Firebase Authentication",
+   "detail": "The page imports only firebase-app and firebase-firestore; there is no sign-in, so Firestore security rules cannot tell a director from an operario or from an outsider. With the public config in the page source, whoever can reach the project can read and write reportes, stock_produccion, stock_movimientos, faenas, trazabilidad_lotes and config/* directly, unless the rules (not present in this repository) restrict it some other way. The web apiKey itself is not a secret; the missing auth is the issue.",
+   "lines": "produccion.html:27-45"
+  },
+  {
+   "title": "CallMeBot API key stored and transmitted in clear",
+   "detail": "phone and apikey are saved as plain fields in config/whatsapp, readable by any client of the project, and sent in the query string of a GET to api.callmebot.com from the browser. Anyone with the key can send WhatsApp messages to that number through CallMeBot. setDoc is used without merge, so any client can also replace the destination number.",
+   "lines": "produccion.html:551-563, 613-619"
+  },
+  {
+   "title": "Unencoded values in the CallMeBot URL",
+   "detail": "phone and apikey are interpolated without encodeURIComponent; a value containing '&', '#' or spaces changes the request parameters. Product names are inside the encoded text, so they are safe. No innerHTML/document.write exists in this section; all user text is rendered through React and is escaped.",
+   "lines": "produccion.html:617-619"
+  },
+  {
+   "title": "Third-party scripts without integrity and with a floating version",
+   "detail": "react@18 and react-dom@18 are loaded from unpkg by major version (resolved by redirect at request time), Babel and jsPDF by exact version, all without Subresource Integrity or crossorigin. A compromised or changed CDN file runs with full access to the page and Firestore. In-browser Babel also makes a strict Content-Security-Policy impossible.",
+   "lines": "produccion.html:24-26, 56"
+  },
+  {
+   "title": "No identity or audit trail on writes; destructive actions are hard deletes",
+   "detail": "The author of a report is the free text typed in 'Tu nombre'; edits store only editadoEn (no user), stock edits and +/- adjustments store only updatedAt, and deleteDoc removes reports, stock items and faenas permanently. The session's sersale_usuario/sersale_nombre (set by index.html) are not recorded. The switch between Vista Encargado and Vista Director has no additional check, so anyone who passes the gate can edit/delete everything.",
+   "lines": "produccion.html:146, 222, 248, 385-400, 506-528, 660-674"
+  }
+ ],
+ "ux": [
+  {
+   "title": "Session lives in sessionStorage: reopening the home-screen app sends the user back to login and loses the report being typed",
+   "problem": "The gate depends on sessionStorage, which iOS clears when the home-screen web app is closed or evicted from memory. Nothing of the form (area, name, rows) is persisted, so a half-typed batch report is lost after a phone call or app switch.",
+   "suggestion": "Keep the session in localStorage with an expiry (decided in index.html) and save the report draft (area, encargado, items, obs) to localStorage on every change, restoring it on mount.",
+   "impact": "high",
+   "lines": "produccion.html:4-13, 126-133"
+  },
+  {
+   "title": "The encargado retypes the name and re-picks the area for every batch",
+   "problem": "nuevo() clears area, encargado and rows after each report, and nothing is remembered between visits. Several batches a day means typing the same name and tapping the same area every time.",
+   "suggestion": "Remember the last encargado and area in localStorage; '+ Nueva tanda' should keep both and return directly to the form with an empty row (with a small 'Cambiar area' link).",
+   "impact": "high",
+   "lines": "produccion.html:181-185, 206-208, 251-253"
+  },
+  {
+   "title": "No feedback when there is no connection: buttons stay on 'Enviando...' / 'Guardando...' forever",
+   "problem": "Writes are awaited with no timeout; offline, addDoc/updateDoc never settle, so the button remains disabled with no explanation. If the user reloads, the queued write is lost (memory cache only) with no notice.",
+   "suggestion": "Show an offline banner (navigator.onLine + online/offline events), add a timeout that explains 'Sin conexion, se enviara al recuperar senal' or lets the user retry, and enable Firestore persistent local cache so queued writes survive a reload.",
+   "impact": "high",
+   "lines": "produccion.html:143-178, 382-394, 438-477, 493-514, 647-668, 707-728"
+  },
+  {
+   "title": "Registering a salida requires typing the exact stock name",
+   "problem": "guardarSalida matches by `where('nombre','==',it.nombre)`: any difference in case, accent or spacing fails, and the failure is only reported after saving (and the form is then discarded).",
+   "suggestion": "Pick the product from the loaded stock list (searchable list or select showing current quantity and unit) and store the stock id.",
+   "impact": "high",
+   "lines": "produccion.html:445-451"
+  },
+  {
+   "title": "Blocking alert()/confirm() for every validation, error and confirmation",
+   "problem": "Native dialogs freeze the page, show the site URL as title in Safari, cannot be styled, and long texts (the stock-mismatch message) are hard to read. Deletes use confirm() with no undo.",
+   "suggestion": "Inline field errors, a non-blocking toast for results, a bottom-sheet confirmation for destructive actions and an 'Deshacer' toast after deletes.",
+   "impact": "medium",
+   "lines": "produccion.html:140, 142, 175, 177, 381, 393, 397, 403, 436-437, 465, 476, 491-492, 513, 517, 522, 535, 566, 645-646, 667, 671, 676, 702-706, 727"
+  },
+  {
+   "title": "Quantity and phone fields open the wrong keyboard",
+   "problem": "Quantities use type='number' without inputMode, which on iPhone shows the full numbers-and-symbols keyboard instead of the decimal pad. The WhatsApp phone field is a plain text input, the API key field allows autocapitalise/autocorrect, and 'Tu nombre' has no autoCapitalize='words'/autoComplete.",
+   "suggestion": "inputMode='decimal' (plus min/step) on quantities, inputMode='numeric' or type='tel' on the phone, autoCapitalize='off' autoCorrect='off' spellCheck={false} on the API key, autoCapitalize='words' autoComplete='name' on the name.",
+   "impact": "medium",
+   "lines": "produccion.html:252-253, 268-269, 595-598, 780-781"
+  },
+  {
+   "title": "Tap targets well under 44px",
+   "problem": "Back arrow buttons have padding 0 and a 20px glyph; the row remove button is padding '2px 8px' at 12px font (about 20px high); the 'Vista Director' / 'Director' switch and the WhatsApp 'Config' button are about 27-28px high.",
+   "suggestion": "Give every interactive control at least 44x44px of hit area (min-width/min-height or padding), and keep the remove button away from the row's inputs.",
+   "impact": "medium",
+   "lines": "produccion.html:222, 243, 248, 259, 583, 754, 766"
+  },
+  {
+   "title": "Stock stepper: one unit and one network round trip per tap, number changes only after the server answers",
+   "problem": "ajustarCantidad awaits the write before updating the screen, so each tap feels laggy, there is no pressed/disabled state, the step is always 1 (adjusting 50 units or 2.5 kg is impractical) and an error shows just 'Error'.",
+   "suggestion": "Optimistic update with rollback, batched taps, long-press or tap on the number to type a quantity or a delta, haptic/visual feedback.",
+   "impact": "medium",
+   "lines": "produccion.html:524-536"
+  },
+  {
+   "title": "Director lands on the encargado wizard and the chosen view/tab is never remembered",
+   "problem": "The page always opens on 'Selecciona tu area'; the director must hit the small 'Vista Director' button each time, and every switch or bottom-nav tap resets tab, filters and expanded cards (state is lost and data re-fetched).",
+   "suggestion": "Persist the last view and tab (sessionStorage/localStorage), default role 'director' to the director panel, and keep both views mounted or cache their data.",
+   "impact": "medium",
+   "lines": "produccion.html:222, 248, 298-303"
+  },
+  {
+   "title": "Data is a snapshot: no live updates, no loading state on filter change",
+   "problem": "Lists load once per tab entry or filter change; new reports from the plant do not appear until the director taps the reload button. When the date/area changes, the old list stays on screen with no spinner until the new one arrives.",
+   "suggestion": "Use onSnapshot for the day's reports and the stock list (unsubscribing on cleanup), show a skeleton or dimmed state while loading, and add pull-to-refresh.",
+   "impact": "medium",
+   "lines": "produccion.html:342-359, 407-423"
+  },
+  {
+   "title": "Hidden rule: only rows in 'piezas' update stock, but the default unit is 'kg'",
+   "problem": "Nothing in the form tells the encargado that choosing 'kg' (the default) means stock is not touched, or which unit the stock item uses.",
+   "suggestion": "Default the unit per product from the stock item, and show a small note under the row ('Suma al stock: +20 piezas' / 'No impacta stock').",
+   "impact": "medium",
+   "lines": "produccion.html:129, 135, 150, 270-273"
+  },
+  {
+   "title": "Blank white screen during cold start",
+   "problem": "#root is empty until React, ReactDOM, Babel (about 3 MB), Firebase and jsPDF have downloaded and Babel has compiled the script; on mobile data this is seconds of white page with no indication.",
+   "suggestion": "Put a static splash/skeleton inside #root (logo + 'Cargando...') that React replaces, and reduce the blocking scripts (see perf).",
+   "impact": "medium",
+   "lines": "produccion.html:24-26, 56, 94"
+  },
+  {
+   "title": "Editing a report replaces the whole screen and discards changes silently on back",
+   "problem": "The edit form is an early return of VistaDirector: the list is unmounted, scroll position is lost on return, and the back arrow drops all changes without asking. Saving gives no confirmation other than returning to the list.",
+   "suggestion": "Use a bottom sheet/modal over the list (keeping scroll), ask before discarding modified data, and show a 'Reporte actualizado' toast.",
+   "impact": "low",
+   "lines": "produccion.html:748-803"
+  },
+  {
+   "title": "Inputs with 13-14px text",
+   "problem": "All inputs/selects/textareas in this section use fontSize 13 or 14. The page currently avoids iOS focus zoom only because the viewport sets maximum-scale=1.0; the text is small to read and the zoom would return if that restriction were removed for accessibility.",
+   "suggestion": "Use 16px for all form controls.",
+   "impact": "low",
+   "lines": "produccion.html:21, 252, 261, 268, 270, 275, 283, 595, 597, 759, 769, 776, 780, 782, 787, 795"
+  },
+  {
+   "title": "Generic error messages and silent success",
+   "problem": "Errors read 'Error', 'Error al guardar' or 'Error al enviar.' with no cause or retry; several catches do not even log (403, 522, 535, 566, 676). Successful director actions (edit, stock save, WhatsApp config save) just close the form.",
+   "suggestion": "Say what failed and offer 'Reintentar'; confirm success with a short toast.",
+   "impact": "low",
+   "lines": "produccion.html:177, 393, 403, 476, 513, 522, 535, 566, 667, 676, 727"
+  },
+  {
+   "title": "Clearing the date shows the whole history under 'Resumen del dia'",
+   "problem": "With an empty date (iOS date picker 'Borrar'/'Restablecer') cargar() loads every report ever made and the per-area totals add all of them, still titled 'Resumen del dia'.",
+   "suggestion": "Do not allow an empty date (fall back to today), or offer explicit ranges (Hoy / Ayer / Semana) with a matching title and a row limit.",
+   "impact": "low",
+   "lines": "produccion.html:346-352, 732-741"
+  },
+  {
+   "title": "100vh containers plus double bottom padding",
+   "problem": "Every screen uses minHeight:'100vh' and both html and body get padding-bottom:64px, so even short screens (area picker, success card) scroll by 64-128px, and in Safari 100vh is taller than the visible area.",
+   "suggestion": "Use 100dvh (with a 100vh fallback), apply the nav padding once (on body, with env(safe-area-inset-bottom)).",
+   "impact": "low",
+   "lines": "produccion.html:54, 58, 192, 215, 241, 752"
+  },
+  {
+   "title": "WhatsApp setup has no validation or test",
+   "problem": "The phone and key are saved as typed (no format check), there is no 'send test message' action, and the activation number and phrase are hard-coded text.",
+   "suggestion": "Validate digits-only phone with country code, add an 'Enviar prueba' button that reports the result, and keep the instructions in one editable place.",
+   "impact": "low",
+   "lines": "produccion.html:559-568, 589-598"
+  }
+ ],
+ "perf": [
+  {
+   "title": "Whole app is compiled in the browser on every load, behind several blocking CDN scripts",
+   "problem": "@babel/standalone (about 3 MB) is downloaded, parsed and used to transform about 1,500 lines of JSX with the default react + env presets (ES5 output, async functions rewritten) each time the page opens; React comes from unpkg through a version redirect; jsPDF is loaded synchronously in the head although only the PDF export uses it; the Google Fonts stylesheet blocks rendering; the no-cache meta tags discourage reuse of the HTML.",
+   "suggestion": "Precompile the JSX once (the repo already has node tooling; a one-off Babel step can emit a plain .js file or inline script) and drop Babel from the page; pin exact React URLs (react@18.3.1) or self-host under assets/; load jsPDF on demand when the export is requested; add font-display swap/preload.",
+   "impact": "high",
+   "lines": "produccion.html:15-26, 56, 96"
+  },
+  {
+   "title": "ConfigWhatsApp remount triggers a Firestore read on every VistaDirector render",
+   "problem": "Because the component is declared inside VistaDirector, each parent render (every keystroke in the stock/salida modals, every +/- tap) remounts it and runs getDoc(config/whatsapp) again, plus a DOM remove/insert of the banner.",
+   "suggestion": "Hoist the component to module scope and read the config once (pass it as props / cache it for sendStockAlert too).",
+   "impact": "medium",
+   "lines": "produccion.html:540-557, 613"
+  },
+  {
+   "title": "stock_movimientos is loaded and rendered in full, with no limit",
+   "problem": "cargarMovimientos reads the entire collection ordered by createdAt on every visit to the sub-tab and after refresh; the collection grows with every production row and every salida line, so reads, memory and render time grow without bound.",
+   "suggestion": "Add limit(50) with 'Cargar mas' (startAfter) or a date-range filter; import `limit`/`startAfter`.",
+   "impact": "medium",
+   "lines": "produccion.html:416-423"
+  },
+  {
+   "title": "Saving a lot reads the entire trazabilidad_lotes collection just to number it",
+   "problem": "guardarLote downloads every lot ever created (orderBy nroLote) and filters by date prefix in memory to compute the sequence; cargarLotes then downloads the whole collection again.",
+   "suggestion": "Query only `where('fechaElab','==',fecha)` (or use a per-day counter document in a transaction) and append the new lot to state instead of reloading everything.",
+   "impact": "medium",
+   "lines": "produccion.html:709-715, 724"
+  },
+  {
+   "title": "guardarSalida: sequential query + two writes per line, then the full stock collection is read twice",
+   "problem": "Each line awaits a name query, an update and an add one after another; afterwards cargarStock() reads the whole collection and lines 470-472 immediately read the same collection again only to compute the low-stock list.",
+   "suggestion": "Resolve items from the already loaded stockItems (by id), commit everything in one batch, update state locally, and compute `bajos` from that state.",
+   "impact": "medium",
+   "lines": "produccion.html:442-474"
+  },
+  {
+   "title": "Full collections are re-fetched on every tab switch and view switch, with no cache",
+   "problem": "Entering Stock, Faena or Lotes re-reads the whole collection each time (effects keyed on `tab`); toggling to Vista Encargado unmounts VistaDirector and discards everything. faenas and lotes are downloaded in full and filtered by month in memory.",
+   "suggestion": "Load once and keep (or use onSnapshot listeners with cleanup); query faenas/lotes by month range on the 'YYYY-MM-DD' string (>= 'YYYY-MM-01' and <= 'YYYY-MM-31').",
+   "impact": "medium",
+   "lines": "produccion.html:414, 423, 627, 631, 688, 692"
+  },
+  {
+   "title": "Reports are re-queried when only the area filter changes; an empty date reads the whole collection",
+   "problem": "The area filter is applied in memory after the query, yet filtroArea is an effect dependency, so each area change costs a new Firestore query for the same day. With no date the query has no bound at all.",
+   "suggestion": "Keep the day's reports in state and derive the area-filtered list with useMemo; always bound the query by date or limit.",
+   "impact": "low",
+   "lines": "produccion.html:346-359"
+  },
+  {
+   "title": "enviar(): N+1 sequential round trips for rows in piezas",
+   "problem": "For each 'piezas' row the code awaits a query, an update and an add in series before showing the success screen, so a 5-row report waits for about 16 round trips on mobile data.",
+   "suggestion": "Look up all stock items in parallel (or from a cached list) and commit report + increments + movements in a single batch.",
+   "impact": "low",
+   "lines": "produccion.html:147-174"
+  },
+  {
+   "title": "sendStockAlert re-reads config/whatsapp on every call",
+   "problem": "Each alert (every '-' tap at or below minimum, every salida) performs a getDoc before the HTTP call.",
+   "suggestion": "Reuse the config already loaded for the banner.",
+   "impact": "low",
+   "lines": "produccion.html:610-616"
+  },
+  {
+   "title": "One 1,300-line component: every keystroke re-renders all tabs' logic and recomputes derived data",
+   "problem": "All forms, lists and modals share VistaDirector's state, so typing in any modal re-runs the whole function, rebuilds totalesDia (with a find inside a loop), stockFiltrado and stockAlerta, and re-renders the visible list without memoisation.",
+   "suggestion": "Split into per-tab components with their own form state, wrap derived values in useMemo, and memoise list rows.",
+   "impact": "low",
+   "lines": "produccion.html:297-339, 732-745"
+  }
+ ]
+}

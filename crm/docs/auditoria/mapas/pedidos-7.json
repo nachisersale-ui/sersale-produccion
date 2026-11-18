@@ -1,0 +1,498 @@
+{
+ "summary": "Section audited: /home/user/sersale-produccion/crm/src/pedidos.html lines 4214-4724 (read in full). It contains three React components used only inside the director view (VistaDirector). (1) ResumenRecontactos: a card on the \"Resumen\" tab that summarises re-contact alerts (how many clients are overdue vs. about to be overdue, top 3, button to jump to the Alertas tab). (2) TabAlertas: the \"Alertas\" tab listing every registered client whose days-since-last-activity is at or near its threshold, with actions \"Avisar por WA\" (pre-filled WhatsApp memo to the company's own number), \"Contactado\" (resets the inactivity counter) and a per-client \"Dias\" threshold input; it also shows when the last automatic alert e-mail went out. (3) HojaRuta: the delivery route sheet for one delivery date (orders tipo=envio, not despachado/cancelado): looks up each client's address, geocodes with Nominatim, orders stops with a nearest-neighbour heuristic starting at the plant, lets the user reorder/remove stops, opens the route in Google Maps and sends the sheet as WhatsApp text. All three are presentational over data computed by the parent (calcularAlertas, lines 4768-5006); the only direct Firestore I/O in the section is a getDoc of config/ultima_alerta_email and a full getDocs of clientes. Main findings: the route sheet sent by WhatsApp can silently lose stops (un-encoded URL, failed geocodes dropped, address cleaner mangles \"Caballito\"), weighed kilos are printed with the ordered unit, the \"Dias\" input is silently overwritten by the auto-frequency recalculation, the WA memo always prints \"Invalid Date\", and the in-place address editor is dead code. Nothing in this section persists money amounts.",
+ "components": [
+  {
+   "name": "ResumenRecontactos({ alertasData, contactados, onVerTodos })",
+   "lines": "pedidos.html:4219-4273",
+   "purpose": "Summary card on the director 'Resumen' tab. Filters alertasData.alertas by the in-memory contactados list, counts vencidos (enAlerta) and proximos, shows the first 3 (overdue first) with 'Nd sin pedir', frequency/limit and a +Nd / 'faltan Nd' pill, plus a button that switches to the Alertas tab. Shows 'Calculando recontactos...' while alertasData is null and 'Todos los clientes al dia' when nothing is pending. No hooks, no I/O."
+  },
+  {
+   "name": "TabAlertas({ alertasData, alertaEnviando, setAlertaEnviando, actualizarDiasAlerta, contactados, onContactado })",
+   "lines": "pedidos.html:4275-4391",
+   "purpose": "Alertas tab. On mount reads config/ultima_alerta_email to show the 'last e-mail' banner. Renders two counters, an info banner with the number of clients with auto-calculated frequency, then a card per overdue client (last order date and products, 'Avisar por WA', 'Contactado', 'Dias' number input saved on blur) and a compact card per soon-to-be-overdue client ('Contactado', 'Dias')."
+  },
+  {
+   "name": "TabAlertas > fmtF",
+   "lines": "pedidos.html:4286",
+   "purpose": "Formats a 'YYYY-MM-DD' string as dd/mm/yyyy using local midnight (f+'T00:00:00'); returns '-' for falsy input. Not safe for non-string input (Timestamp)."
+  },
+  {
+   "name": "TabAlertas > avisarWA(a)",
+   "lines": "pedidos.html:4287-4296",
+   "purpose": "Builds an internal memo (client, days without ordering, last order date/products, amount) and opens https://wa.me/5491167637860?text=... (hard-coded company number, not the client's phone). Sets alertaEnviando for 2 s as a fake 'Enviando...' state."
+  },
+  {
+   "name": "HojaRuta({ fecha, pedidos, onBack })",
+   "lines": "pedidos.html:4394-4722",
+   "purpose": "Full-screen route sheet for one delivery date. State: clientesDB (nombre -> direccion), clientesIDs (never filled), estado ('idle'|'geocodificando'|'listo'|'error'), rutaOptimizada (array|null), errores (client names that failed geocoding), modoEdicion, editandoDir/nuevaDir (never opened). Renders header, optimise button, progress/error panels, 'Sin direccion' notice, Maps/WA buttons (only when estado==='listo'), stop list with 'Ver' map link or reorder/remove controls, an unreachable edit-address bottom sheet, and a footer."
+  },
+  {
+   "name": "HojaRuta > clientes loader (useEffect)",
+   "lines": "pedidos.html:4406-4416",
+   "purpose": "On mount, getDocs of the whole clientes collection to build a map nombre -> direccion (exact name key). Errors swallowed."
+  },
+  {
+   "name": "HojaRuta > moverParada / quitarParada",
+   "lines": "pedidos.html:4423-4436",
+   "purpose": "Swap a stop with its neighbour / remove a stop from rutaOptimizada (in-memory only, no undo)."
+  },
+  {
+   "name": "HojaRuta > optimizarRuta (with limpiarDireccion, distancia, tsp)",
+   "lines": "pedidos.html:4438-4494",
+   "purpose": "For each order with an address: cleans the address (strips CPA postal code, 'Cdad./Ciudad Autonoma de Buenos Aires', 'CABA'), queries Nominatim (fallback query with only the first comma-separated part), waits 1.1 s per stop, then orders the geocoded stops with nearest-neighbour from the plant coordinates (-34.6262,-58.4058) using plain Euclidean distance in degrees. Stops that fail geocoding go to errores and are excluded from rutaOptimizada."
+  },
+  {
+   "name": "HojaRuta > guardarDireccion(nombreCliente)",
+   "lines": "pedidos.html:4496-4511",
+   "purpose": "Intended to update clientes/{id}.direccion from the bottom sheet. Dead code: setEditandoDir is never called with a name and clientesIDs is never populated, so it can neither be reached nor find an id."
+  },
+  {
+   "name": "HojaRuta > abrirMaps",
+   "lines": "pedidos.html:4513-4519",
+   "purpose": "Opens a Google Maps directions URL: origin and destination = plant address, waypoints = each stop's raw address + ', Buenos Aires', joined by '|'."
+  },
+  {
+   "name": "HojaRuta > enviarWA",
+   "lines": "pedidos.html:4521-4535",
+   "purpose": "Builds the route sheet as text (date, numbered stops with client, address, items 'producto: kgReal||cantidad unidad', then 'Sin direccion: ...') and opens https://wa.me/?text=... so the user picks the recipient."
+  }
+ ],
+ "firestore": [
+  {
+   "collection": "config/ultima_alerta_email",
+   "docId": "Fixed document id 'ultima_alerta_email' in collection 'config'.",
+   "ops": "getDoc(doc(db,'config','ultima_alerta_email')) once per TabAlertas mount (line 4281). Not written in this section; written with setDoc (no merge) by verificarYEnviarAlertas at line 815.",
+   "fields": "updatedAt: string, ISO-8601 UTC from new Date().toISOString() (read; shown with new Date(updatedAt).toLocaleDateString('es-AR')). cantidad: number, count of clients in alert when the e-mail was sent (read). fecha: string 'YYYY-MM-DD' built from toISOString() so it is the UTC date, not the Buenos Aires date (not read here; used at 812 as the once-per-day guard).",
+   "lines": "pedidos.html:4277-4285, 4304-4308",
+   "notes": "Errors are swallowed (empty catch). The banner is not refreshed if the e-mail is sent after the tab mounted."
+  },
+  {
+   "collection": "clientes",
+   "docId": "Firestore auto-id (addDoc at 635 and 842). The section keys clients by the nombre field, not by id.",
+   "ops": "getDocs(collection(db,'clientes')) with no query, whole collection, once per HojaRuta mount (4410). updateDoc(doc(db,'clientes',id),{direccion}) at 4502 but unreachable (dead code). Indirect writes triggered from this section through props: actualizarDiasAlerta (5015-5022) -> updateDoc {diasAlerta}; onContactado -> marcarContacto (822-854) -> getDocs(clientes) + updateDoc {ultimoContacto, ultimoPedidoRegistrado} or addDoc of a new client.",
+   "fields": "nombre: string (trimmed on creation; used as exact, case-sensitive map key in HojaRuta). direccion: string, free text, '' when missing (read at 4412; would be written trimmed at 4502). diasAlerta: number, integer days, default 14 when missing/0/NaN; written as parseInt(input.value) from the 'Dias' input, so it can be NaN, 0 or negative; auto-overwritten on every load with freqCalculada+3 for clients with 2+ distinct order dates. freqCalculada: number (days), freqActualizado: ISO string (written by parent only). telefono: string (loaded into alert objects as a.telefono but never used in this section). ultimoContacto: ISO-8601 UTC string. ultimoPedidoRegistrado: string 'YYYY-MM-DD' taken from toISOString(), i.e. UTC date (after 21:00 local it is tomorrow). cuentaCorriente: boolean. creadoEn: Firestore Timestamp when created from the client form (635) but ISO string when created by marcarContacto (849): mixed types.",
+   "lines": "pedidos.html:4406-4416, 4496-4511; triggers at 4351, 4358, 4372, 4379",
+   "notes": "Duplicate nombre values: last document wins in HojaRuta's map (4412), first wins in calcularAlertas (4840)."
+  },
+  {
+   "collection": "pedidos (consumed through props, not queried in this section)",
+   "docId": "Firestore auto-id. The parent also injects virtual orders with id 'cc_'+<cc_movimientos id> (4820) that exist only in memory.",
+   "ops": "No SDK call in the section. Parent loads getDocs(collection(db,'pedidos')) with no query (4762) and passes: to HojaRuta the orders with fechaEntrega===fecha && tipo==='envio' && estado not in [cancelado, despachado] (5029); to the alert components the derived alertasData.",
+   "fields": "id: string. cliente: string (rewritten in memory by normCliente to the first-seen spelling of the lower-cased name). tipo: 'envio'|'retiro'. estado: 'pendiente'|'preparando'|'listo'|'despachado'|'cancelado'. fechaEntrega: string 'YYYY-MM-DD' (local date from input type=date; venta rapida uses the UTC date). fechaPedido: Firestore Timestamp (Timestamp.now(), 1159/2818) - the section wrongly treats it as a date string at 4293. fechaPedidoISO: ISO-8601 UTC string. obs: string. items: array of { producto: string (free text for 'Articulos Varios'), cantidad: numeric string from input type=number in the order form (e.g. '2.5') or number in venta rapida, unidad: one of 'kg'|'piezas'|'ganchos'|'bolsas'|'unidades', kgReal: number in kilograms or null/absent (set when the order goes to 'preparando' or edited in 'listo'), precio: number per kg, often absent, categoria/obs: strings }. Derived in memory: _fechaNorm (ISO string), _fechaDisplay ('YYYY-MM-DD').",
+   "lines": "pedidos.html:4290-4293, 4342-4344, 4384, 4418-4420, 4527-4530, 4652-4657",
+   "notes": "alertasData contract (built at 4991-5003): { alertas:[{ cliente:string, diasSinPedir:number (days since the latest of: last order date, last cc_movimientos date incl. payments, ultimoContacto, ultimoPedidoRegistrado), enAlerta:boolean, diasAlerta:number, freqCalc:number|null, telefono:string, clienteId:string, ultimoPedido: order object or {items:[], _fechaDisplay}, diasRestantes:number, totalPedidos:number, totalCC:number, sinActividad:false }], configCli:{[nombre]:{diasAlerta, telefono, id, ultimoContacto, ultimoPedidoRegistrado, _freqCalc?, _totalPedidos?}}, historialClientes, ccFechasPorCliente }. Sorted: enAlerta first, then diasSinPedir descending."
+  },
+  {
+   "collection": "cc_movimientos (indirect only)",
+   "docId": "Firestore auto-id.",
+   "ops": "Not touched in the section. Every 'Contactado' tap and every blur of a 'Dias' input makes the parent re-read the whole collection (getDocs at 4786).",
+   "fields": "As consumed by the parent for the alert data: cliente: string; tipo: 'pedido' or payment types; fecha: string 'YYYY-MM-DD' (or Timestamp in legacy rows); createdAt: ISO string; items?: array like order items without kgReal; detalle: string; origen: string.",
+   "lines": "pedidos.html:4351, 4358, 4372, 4379 (triggers)",
+   "notes": "Listed only because actions in this section cause full re-reads."
+  }
+ ],
+ "clientState": [
+  {
+   "kind": "windowGlobal",
+   "key": "window.__db / window.__fb (through fb())",
+   "usage": "Firestore instance and SDK functions exposed by the module script (lines 47-48); the section destructures db, doc, getDoc, collection, getDocs, updateDoc from fb().",
+   "lines": "pedidos.html:4280, 4409, 4499"
+  },
+  {
+   "kind": "component prop / in-memory state",
+   "key": "contactados (array of client names, VistaDirector state)",
+   "usage": "Optimistic hide list shared by ResumenRecontactos, TabAlertas and the tab badge. Never persisted and never cleared; lost on reload. A client stays hidden for the session even if the Firestore write failed.",
+   "lines": "pedidos.html:4224, 4298-4299"
+  },
+  {
+   "kind": "component prop / in-memory state",
+   "key": "alertasData",
+   "usage": "null while loading (and forever if calcularAlertas throws, since its catch only logs). Shape described in the firestore notes for pedidos.",
+   "lines": "pedidos.html:4220, 4297"
+  },
+  {
+   "kind": "component prop / in-memory state",
+   "key": "hojaRutaFecha -> HojaRuta fecha ('YYYY-MM-DD') and filtered pedidos snapshot",
+   "usage": "HojaRuta works on the orders the director view loaded earlier; there is no refresh or listener, and rutaOptimizada is a copy taken at optimisation time. All route state (order, removed stops) is lost on back.",
+   "lines": "pedidos.html:4394-4402"
+  },
+  {
+   "kind": "domId",
+   "key": "btn-venta-rapida",
+   "usage": "Floating fixed button appended to document.body by VistaDirector (4741-4757, bottom:90px right:24px z-index 9990). It stays on screen over HojaRuta and overlaps the right-hand 'Ver' / reorder / remove controls; tapping it there sets ventaRapidaOpen but the modal is only rendered in the main director return (5195), so nothing shows until the user goes back.",
+   "lines": "pedidos.html:4661-4682 (overlapped controls)"
+  },
+  {
+   "kind": "localStorage / sessionStorage / urlParam",
+   "key": "(none)",
+   "usage": "The section reads or writes no storage keys and no URL parameters."
+  }
+ ],
+ "external": [
+  {
+   "service": "WhatsApp click-to-chat (wa.me)",
+   "usage": "avisarWA opens https://wa.me/5491167637860?text=<memo> (hard-coded company number 011 6763-7860; a.telefono of the client is not used). enviarWA opens https://wa.me/?text=<route sheet> so the user chooses the recipient. Both build the text by string concatenation with '%0A' newlines and no encodeURIComponent. Both window.open calls are synchronous inside the tap handler, so iOS does not block them.",
+   "lines": "pedidos.html:4292-4294, 4524-4534"
+  },
+  {
+   "service": "Nominatim (nominatim.openstreetmap.org/search)",
+   "usage": "Free OSM geocoder called from the browser, one request per stop (plus an immediate second fallback request when the first returns nothing), q=<cleaned address>, Buenos Aires, Argentina&format=json&limit=1&countrycodes=ar, headers Accept-Language: es and User-Agent: SersaleApp/1.0. 1.1 s sleep after each stop. No viewbox/bounding, no res.ok check, no caching of results, no cancellation. Customer delivery addresses are sent to this third party.",
+   "lines": "pedidos.html:4460, 4466, 4475"
+  },
+  {
+   "service": "Google Maps URLs",
+   "usage": "Directions: https://www.google.com/maps/dir/?api=1&origin=<plant>&destination=<plant>&waypoints=<addr1>|<addr2>...&travelmode=driving (addresses encoded with encodeURIComponent). Per-stop link: https://maps.google.com/?q=<address, Buenos Aires> with target=_blank. Google documents a limit of 9 waypoints (3 in mobile browsers) for these URLs.",
+   "lines": "pedidos.html:4516-4518, 4677"
+  },
+  {
+   "service": "EmailJS (indirect)",
+   "usage": "Not called in the section; TabAlertas only displays the record of the last automatic alert e-mail (config/ultima_alerta_email) written by verificarYEnviarAlertas (805-817).",
+   "lines": "pedidos.html:4304-4308"
+  },
+  {
+   "service": "Google Fonts (indirect)",
+   "usage": "Inline styles reference 'IBM Plex Mono' and 'Barlow Condensed', loaded in the page head (line 21).",
+   "lines": "pedidos.html:4239, 4243, 4247"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "Route sheet sent by WhatsApp is built without URL encoding: '&', '#', '+', '%' truncate or corrupt it",
+   "lines": "pedidos.html:4521-4534",
+   "severity": "high",
+   "category": "dom-safety / url-building",
+   "evidence": "enviarWA concatenates raw values into the query string: txt+=(i+1)+\". \"+p.cliente+nl+(p.direccion||\"Sin direccion\")+nl; ... txt+=\"  - \"+it.producto+\": \"+(it.kgReal||it.cantidad)+\" \"+it.unidad+nl; then window.open(\"https://wa.me/?text=\"+txt,\"_blank\"). No encodeURIComponent. Client names, addresses and 'Articulos Varios' product descriptions are free text. Reproduced with new URL(): for 'Carnes & Fiambres SRL' the text parameter ends at 'Carnes ', and '#2' in an address turns the rest into the URL fragment.",
+   "failureScenario": "Route with 8 stops where stop 2 is client 'Carnes & Fiambres SRL' (or an address like 'Av. Mitre 100 #2', or a product 'Queso 50% descremado'). The driver receives a WhatsApp message that ends at '2. Carnes ': stops 2 to 8, their items and the 'Sin direccion' list are missing, with no error on the sender's side.",
+   "suggestedFix": "Build the message with real '\\n' newlines and pass it through encodeURIComponent once: window.open('https://wa.me/?text='+encodeURIComponent(txt)). Apply the same helper to every wa.me call in the file (3332, 4294, 5294).",
+   "confidence": "high"
+  },
+  {
+   "title": "Stops whose geocoding fails are dropped from the optimised route, from Maps and from the WhatsApp sheet",
+   "lines": "pedidos.html:4454-4479, 4492, 4514, 4522-4532",
+   "severity": "high",
+   "category": "logic",
+   "evidence": "In optimizarRuta a stop is pushed to paradas only when Nominatim returns a result; otherwise fallidas.push(p.cliente), including on any exception (catch(e) { fallidas.push(p.cliente); }). Then setRutaOptimizada(tsp(paradas, FRIGORIFICO)). abrirMaps and enviarWA use const lista = rutaOptimizada || conDir, and the WA text only adds 'Sin direccion: '+sinDir (clients with no address); errores is never included. On screen only a small yellow line 'No se pudo ubicar: X' is shown next to a green 'Ruta optimizada - N paradas'.",
+   "failureScenario": "12 deliveries; for one client Nominatim returns [] (unusual address format), a 429, or the fetch fails because the iPhone briefly lost signal or the user switched apps during the 13+ seconds of geocoding. That order disappears from the numbered list, from the Maps route and from the WhatsApp message; the driver never sees that delivery.",
+   "suggestedFix": "Never drop a stop: keep failed ones in the route (appended at the end, flagged 'sin ubicar', still reorderable) and always include them in the Maps waypoints (Google geocodes the text itself) and in the WA text. Distinguish 'no result' from network errors and offer a retry for the failed ones only.",
+   "confidence": "high"
+  },
+  {
+   "title": "limpiarDireccion removes 'CABA' inside words: any address in Caballito is mangled and fails geocoding",
+   "lines": "pedidos.html:4445-4452 (regex at 4450), 4465",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": ".replace(/,?\\s*CABA/gi, \"\") has no word boundary and is case-insensitive. Verified in Node: 'Av. Rivadavia 5000, Caballito' -> 'Av. Rivadavia 5000llito'; 'Yerbal 1234, Caballito, CABA' -> 'Yerbal 1234llito'; 'Cabañas 120, Wilde' -> 'ñas 120, Wilde'. Because the regex also eats the preceding comma, the fallback dirLimpia.split(\",\")[0] is the same mangled string.",
+   "failureScenario": "Client with direccion 'Yerbal 1234, Caballito' (a neighbourhood about 4 km from the plant). Both Nominatim queries search for 'Yerbal 1234llito, Buenos Aires, Argentina', return nothing, the client lands in 'No se pudo ubicar' and, per the previous bug, is dropped from the route sheet every time.",
+   "suggestedFix": "Use word boundaries and anchor to a separator: .replace(/,?\\s*\\bC\\.?A\\.?B\\.?A\\.?\\b/gi, ''), and add \\b to the CPA regex too. Better: stop destroying the address and pass structured hints (viewbox for AMBA, bounded=1) instead.",
+   "confidence": "high"
+  },
+  {
+   "title": "Weighed kilos (kgReal) are printed with the ordered unit: '9.4 piezas'",
+   "lines": "pedidos.html:4529, 4655, 4290",
+   "severity": "medium",
+   "category": "quantities / units",
+   "evidence": "HojaRuta renders {it.kgReal||it.cantidad} {it.unidad} (4655) and the WA text uses (it.kgReal||it.cantidad)+\" \"+it.unidad (4529); avisarWA does the same (4290). kgReal is always kilograms (the order card shows it as '{it.kgReal} kg real' at 1328 and the input is labelled 'kg' at 1360-1363), while unidad can be 'piezas', 'ganchos', 'bolsas' or 'unidades' (UNIDADES, 772).",
+   "failureScenario": "Order: 'Jamon Crudo c/ Hueso 12 Meses', cantidad 2, unidad 'piezas'; the warehouse records kgReal 9.4 when preparing it. The route sheet on screen and the WhatsApp text sent to the driver read 'Jamon Crudo c/ Hueso 12 Meses: 9.4 piezas' instead of '2 piezas (9,4 kg)'.",
+   "suggestedFix": "Format with one shared helper: if unidad==='kg' show (kgReal ?? cantidad)+' kg'; otherwise show cantidad+' '+unidad and append ' ('+kgReal+' kg)' when kgReal != null. Use != null instead of || so a real 0 is not replaced.",
+   "confidence": "high"
+  },
+  {
+   "title": "The 'Dias' threshold input is silently overwritten for every client with order history, and keeps showing the typed value",
+   "lines": "pedidos.html:4357-4359, 4378-4380",
+   "severity": "medium",
+   "category": "logic / derived state",
+   "evidence": "The input is uncontrolled (defaultValue={a.diasAlerta}) and calls actualizarDiasAlerta(a.clienteId,e.target.value) on blur. That function (5015-5021) writes diasAlerta and immediately runs calcularAlertas(pedidos), which for every client with 2+ distinct order dates does configCli[cliente].diasAlerta = diasAlertaCalc inside 'if(true) { // Always recalculate from actual data' (4933-4937) and writes freqCalc+3 back to Firestore (4947-4951). Since defaultValue is only applied on mount and the key (a.cliente) does not change, the input keeps the typed number while the card text shows the recalculated limit.",
+   "failureScenario": "Client that orders about every 7 days shows 'limite: 10d'. The director types 30 in 'Dias' to stop being alerted and taps elsewhere. Firestore briefly gets 30, then 10 again; the card still says '(limite: 10d)' and the client stays in 'Requieren recontacto', but the input shows 30. No message explains why. The setting only sticks for clients with fewer than 2 order dates.",
+   "suggestedFix": "Decide one rule: either store a manual override (e.g. diasAlertaManual: true plus the value) that calcularAlertas respects, or hide/disable the input when a.freqCalc exists and show 'auto'. Make the input controlled (or key it with a.diasAlerta) so it reflects the stored value, and stop writing the auto-calculated value to Firestore on every load.",
+   "confidence": "high"
+  },
+  {
+   "title": "WhatsApp re-contact memo always prints 'Ultimo pedido (Invalid Date)' (or '-')",
+   "lines": "pedidos.html:4286, 4293",
+   "severity": "medium",
+   "category": "dates",
+   "evidence": "avisarWA uses fmtF(up.fechaPedido), and fmtF is f => f ? new Date(f+\"T00:00:00\").toLocaleDateString(...) : \"-\". fechaPedido is a Firestore Timestamp (fechaPedido: Timestamp.now() at 1159, tsNow || new Date() at 2818), so f+\"T00:00:00\" is 'Timestamp(seconds=..., nanoseconds=...)T00:00:00' -> Invalid Date. Virtual CC orders and the fallback {items:[], _fechaDisplay} have no fechaPedido -> '-'. The card itself correctly uses a.ultimoPedido._fechaDisplay||fechaEntrega (4342).",
+   "failureScenario": "Tap 'Avisar por WA' on any client whose last order was created in the app: the message reads 'Ultimo pedido (Invalid Date): Salamin Picado Fino (10 kg)'. For a client whose last activity is a CC movement it reads 'Ultimo pedido (-)'. The date is never right.",
+   "suggestedFix": "Use the same source as the card: fmtF(up._fechaDisplay || up.fechaEntrega || ''). The identical mistake exists in enviarEmailAlertas at line 794.",
+   "confidence": "high"
+  },
+  {
+   "title": "Re-contact memo URL is not encoded either",
+   "lines": "pedidos.html:4290-4294",
+   "severity": "low",
+   "category": "dom-safety / url-building",
+   "evidence": "let msg=\"Recontacto cliente\"+nl+nl+\"Cliente: \"+a.cliente+nl+...+prods+nl+...; window.open(\"https://wa.me/5491167637860?text=\"+msg,\"_blank\") with no encodeURIComponent; a.cliente and product names are free text.",
+   "failureScenario": "Client 'Lopez & Hijos': the memo arrives as 'Recontacto cliente / Cliente: Lopez ' and everything after the ampersand (days, last order, amount) is lost.",
+   "suggestedFix": "Same helper as for the route sheet: build with '\\n' and encodeURIComponent the whole text.",
+   "confidence": "high"
+  },
+  {
+   "title": "'Abrir en Maps' sends every stop as a waypoint; Google Maps URLs accept at most 9 (3 in a mobile browser)",
+   "lines": "pedidos.html:4513-4518",
+   "severity": "medium",
+   "category": "external limits",
+   "evidence": "const wps = lista.map(p=>encodeURIComponent(p.direccion+\", Buenos Aires\")).join(\"|\"); window.open(\"https://www.google.com/maps/dir/?api=1&origin=\"+frig+\"&destination=\"+frig+\"&waypoints=\"+wps+...). No cap or chunking. Google's Maps URLs documentation limits waypoints to 9, and to 3 when the link opens in a mobile browser instead of the Maps app.",
+   "failureScenario": "A delivery day with 12 stops: Maps opens with only part of the route (or an error), so the last stops are not in the navigation although the app said 'Ruta optimizada - 12 paradas'. On an iPhone without the Google Maps app only 3 stops are kept. What would have to be true: more than 9 deliveries on one date (or more than 3 without the app).",
+   "suggestedFix": "Split the route into legs of at most 9 waypoints (button per leg: 'Tramo 1', 'Tramo 2', each starting where the previous ended), and show how many stops each link covers.",
+   "confidence": "medium"
+  },
+  {
+   "title": "In-place address editing is dead code: the bottom sheet can never open and clientesIDs is never filled",
+   "lines": "pedidos.html:4396, 4401-4402, 4496-4511, 4690-4713",
+   "severity": "low",
+   "category": "dead code / unreachable state",
+   "evidence": "setEditandoDir is only ever called with null (4510, 4692, 4702) and setClientesIDs is never called anywhere in the file (grep), so {editandoDir && (...)} never renders. If it were opened, guardarDireccion would read const id = clientesIDs[nombreCliente] (always undefined), skip the update and close the sheet without any message.",
+   "failureScenario": "The sheet shows 'Sin direccion: Almacen Central'. There is nothing to tap to add the address; the user has to leave the route sheet (losing the optimised order), go to Clientes, edit, come back and geocode everything again.",
+   "suggestedFix": "Either remove the dead state/modal or finish it: store id together with direccion in the loader (map[nombre]={id,direccion}), make each 'Sin direccion' client and each stop address tappable to open the sheet, and report failures.",
+   "confidence": "high"
+  },
+  {
+   "title": "'Dias' input saves on every blur with no validation: NaN, 0 or negative values are written to clientes.diasAlerta",
+   "lines": "pedidos.html:4357-4359, 4378-4380",
+   "severity": "low",
+   "category": "persistence integrity",
+   "evidence": "onBlur={e=>actualizarDiasAlerta(a.clienteId,e.target.value)} fires even when the value did not change; the parent does updateDoc(..., { diasAlerta: parseInt(dias) }) (5019). min/max attributes are not enforced on blur. parseInt('') is NaN; parseInt('-3') is -3 and survives 'data.diasAlerta || 14' (4842).",
+   "failureScenario": "The user clears the field to retype and taps another card: Firestore stores diasAlerta: NaN for that client. Typing -3 for a client without auto-frequency makes enAlerta = diasSinPedir >= -3 always true, so the client is permanently 'overdue' with an inflated '+Nd'. Simply tapping in and out of the field triggers a write plus a full recalculation.",
+   "suggestedFix": "Validate (integer 1..365) and compare with a.diasAlerta before saving; ignore empty/unchanged values; show a saved/failed indicator.",
+   "confidence": "high"
+  },
+  {
+   "title": "Address lookup uses exact client name while the parent rewrites order names to another spelling",
+   "lines": "pedidos.html:4412, 4418-4420",
+   "severity": "low",
+   "category": "data contract",
+   "evidence": "HojaRuta builds map[data.nombre]=data.direccion||\"\" and reads clientesDB[p.cliente] (exact, case-sensitive, untrimmed; last duplicate wins). The orders it receives were mutated by calcularAlertas: p.cliente = normCliente(p.cliente) (4866), whose canonical spelling is the first one seen, and cc_movimientos are processed before clientes (4786-4791 vs 4835-4839).",
+   "failureScenario": "Client renamed in Clientes from 'la esquina' to 'La Esquina' (old CC movements still say 'la esquina'), or an order typed through 'Otro' with different capitalisation or a trailing space. The order's name becomes 'la esquina' in memory, clientesDB['la esquina'] is undefined, and the client is listed under 'Sin direccion' and excluded from the route although the address is loaded. What would have to be true: the same client spelled with different case/whitespace across cc_movimientos, clientes and pedidos, or two clientes docs with the same nombre where the later one has no address.",
+   "suggestedFix": "Key the map by a normalised name (trim + toLowerCase, ideally accent-insensitive) and prefer a non-empty address when duplicates exist; long term store clienteId on the order.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Client addresses not loaded (yet, or on error) are indistinguishable from 'no address'",
+   "lines": "pedidos.html:4406-4420, 4561-4566, 4594-4598",
+   "severity": "low",
+   "category": "async / error handling",
+   "evidence": "clientesDB starts as {} and is filled asynchronously; the loader's catch is empty (catch(e){}). Until it resolves, pConDir gives every order direccion:'' so all clients render under 'Sin direccion' and the button reads 'Optimizar ruta (0 paradas)' and is disabled (without a disabled style). If getDocs fails or resolves empty from cache while offline, that state is permanent with no message or retry.",
+   "failureScenario": "Opening 'Ruta' with weak signal in the warehouse: the screen says every client has no address and the optimise button does nothing; the user concludes the addresses were lost.",
+   "suggestedFix": "Track a loading/error state: show a skeleton while loading, an error with 'Reintentar' on failure, and reuse client data the parent already loaded instead of re-fetching.",
+   "confidence": "high"
+  },
+  {
+   "title": "Alert views have no error state and TabAlertas shows a blank list after everything is marked as contacted",
+   "lines": "pedidos.html:4220-4223, 4297, 4324-4326",
+   "severity": "low",
+   "category": "async / empty states",
+   "evidence": "Both components render a loading text while alertasData is null; calcularAlertas wraps everything in try/catch that only logs (5005), so a failed clientes read leaves alertasData null forever. In TabAlertas the empty state checks alertasData.alertas.length===0 (unfiltered) while the lists use the contactados-filtered arrays; ResumenRecontactos correctly uses pendientes.length.",
+   "failureScenario": "(a) The clientes read fails once: 'Calculando recontactos...' and 'Cargando...' stay forever. (b) The user marks the last pending client as 'Contactado': the tab shows two zero counters and nothing else until the background reload finishes, and permanently if that reload or the write failed (the client stays hidden for the session although nothing was saved).",
+   "suggestedFix": "Use enAlerta.length+proximas.length===0 for the empty state; give alertasData an explicit error state with retry; on a failed marcarContacto remove the client from contactados and tell the user.",
+   "confidence": "high"
+  },
+  {
+   "title": "'Nd sin pedir' is computed from last activity (payments, contact marks), contradicting the 'Ultimo pedido' date on the same card",
+   "lines": "pedidos.html:4257, 4335, 4342, 4370, 4293",
+   "severity": "low",
+   "category": "labels vs data",
+   "evidence": "The cards print {a.diasSinPedir}d sin pedir and, next to it, 'Ultimo pedido: '+fmtF(a.ultimoPedido._fechaDisplay...). diasSinPedir is derived from fechaStr = the latest of last order, any cc_movimientos date including payments, ultimoContacto and ultimoPedidoRegistrado (4965-4979, 4987).",
+   "failureScenario": "Client last ordered on 01/09 and paid on 29/10. On 10/11 the card says '12d sin pedir (limite: 10d) +2d' and 'Ultimo pedido: 01/09/2026'; the real gap is 70 days. The WA memo repeats 'Dias sin pedir: 12d'. What would have to be true for this to be intended: the business wants any payment to count as contact, in which case the label should say 'sin actividad'.",
+   "suggestedFix": "Expose both numbers from calcularAlertas (diasSinPedir from orders only, diasSinActividad) and label them accordingly, or rename the label.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Geocoding fallback and lack of bounding can place a stop far away without warning",
+   "lines": "pedidos.html:4459-4469, 4481-4492",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "Queries use limit=1 and countrycodes=ar with ', Buenos Aires, Argentina' appended but no viewbox/bounded parameter; the fallback keeps only dirLimpia.split(\",\")[0] (street and number), discarding the locality. Any result is accepted as ok:true and fed to the nearest-neighbour ordering; distancia() uses raw degree differences.",
+   "failureScenario": "'San Martin 450, Avellaneda' returns nothing on the first query; the fallback 'San Martin 450, Buenos Aires, Argentina' matches a homonymous street elsewhere in the province. The stop is ordered as if it were there (typically last), and nothing on screen indicates a doubtful location. Only the order is affected because Maps receives the text address. What would have to be true: the first query fails or matches a same-named street in another locality.",
+   "suggestedFix": "Restrict to the AMBA with viewbox+bounded=1, reject results farther than a sane radius from the plant (flag them as 'ubicacion dudosa'), and scale longitude by cos(latitude) in the distance.",
+   "confidence": "low"
+  },
+  {
+   "title": "Nominatim request etiquette: custom User-Agent header and back-to-back fallback request",
+   "lines": "pedidos.html:4460, 4466, 4475",
+   "severity": "low",
+   "category": "external / iOS Safari",
+   "evidence": "fetch(..., { headers:{\"Accept-Language\":\"es\",\"User-Agent\":\"SersaleApp/1.0\"} }). User-Agent is not a CORS-safelisted header; a browser that honours it turns the request into a preflighted one, which only works if Nominatim's OPTIONS response allows that header (Chrome silently drops the header). The fallback request at 4466 is issued immediately after the first one, so two requests go out within the same second although the public policy is 1 request/second; res.ok is never checked.",
+   "failureScenario": "If the preflight is rejected on the device's Safari, or the service answers 429 for exceeding the rate, every affected stop is counted as 'No se pudo ubicar' and dropped (see the dropped-stops bug); with all stops failing the screen shows 'No se pudo geocodificar ninguna direccion'. I could not verify the service's preflight response from this environment (outbound request blocked), hence low confidence.",
+   "suggestedFix": "Remove the User-Agent header (the browser's Referer identifies the app), wait 1.1 s before the fallback request too, check res.ok, and cache coordinates so repeat requests are rare.",
+   "confidence": "low"
+  }
+ ],
+ "security": [
+  {
+   "title": "Client-side-only access control over Firestore reads and writes",
+   "detail": "These director-only screens are gated only by the sessionStorage role check at the top of the page (lines 5-11). The section reads the whole clientes collection (names, addresses) and, through its callbacks, writes clientes.diasAlerta / ultimoContacto / direccion straight from the browser with the public Firebase config and no Firebase Auth. No firestore.rules file is in the repository, so protection depends entirely on rules I cannot see; if they are open, anyone with the project id can read every client's name, phone and address or change them.",
+   "lines": "pedidos.html:4280-4281, 4409-4410, 4499-4502"
+  },
+  {
+   "title": "Customer delivery addresses are sent to third parties from the browser",
+   "detail": "Each delivery address goes to nominatim.openstreetmap.org (a public, shared service) and to Google Maps URLs. Low risk, but worth knowing; caching coordinates in the clientes document would reduce exposure and traffic.",
+   "lines": "pedidos.html:4460, 4466, 4517-4518, 4677"
+  },
+  {
+   "title": "Unencoded text in wa.me URLs allows parameter/fragment injection",
+   "detail": "Because client names, addresses and product descriptions are concatenated raw into the query string, a value containing '&' or '#' changes the URL structure (extra query parameters, fragment). The values are typed by staff, so this is an integrity problem (see bugs) more than an attack vector. Rendering itself is safe: all values go through React text nodes, there is no innerHTML in the section.",
+   "lines": "pedidos.html:4293-4294, 4525-4534"
+  },
+  {
+   "title": "Hard-coded company phone number in source",
+   "detail": "The re-contact memo is addressed to the fixed number 5491167637860. Not a secret (it is printed on the PDFs), but it means the feature cannot be pointed at another person without a code change. No credentials or hashes are handled in this section.",
+   "lines": "pedidos.html:4294"
+  },
+  {
+   "title": "External link opened with target=_blank without rel",
+   "detail": "The per-stop 'Ver' link uses target=\"_blank\" without rel=\"noopener noreferrer\". Current Safari implies noopener, so the practical risk is negligible.",
+   "lines": "pedidos.html:4677-4681"
+  }
+ ],
+ "ux": [
+  {
+   "title": "No way to contact the client from the alert card",
+   "problem": "The whole purpose of the tab is to re-contact clients, but the card has no call or WhatsApp link to the client even though a.telefono is already loaded. 'Avisar por WA' opens a chat with the company's own fixed number carrying an internal memo, which is not what the label suggests.",
+   "suggestion": "Primary action: 'WhatsApp al cliente' (wa.me/<telefono normalised to 549...> with a friendly editable template) plus a tel: link; keep the internal memo as a secondary action. After returning from WhatsApp, offer 'Marcar como contactado?'.",
+   "impact": "high",
+   "lines": "pedidos.html:4287-4296, 4346-4354"
+  },
+  {
+   "title": "Route sheet cannot be sent or opened in Maps until the slow geocoding succeeds",
+   "problem": "'Abrir en Maps' and 'Enviar por WA' are rendered only when estado==='listo' (4601-4621), although both functions already support the non-optimised list. Sending the sheet does not need coordinates at all. The user must wait at least 1.1 s per stop (15 stops: 17 s or more) with no progress count and no cancel; if Nominatim is down or blocked ('error' state) there is no way to share the route, and if no client has an address the screen is a dead end.",
+   "suggestion": "Show both buttons immediately with the current order; make optimisation optional and in the background with 'Ubicando 4 de 12' progress and a cancel button; always allow manual reordering.",
+   "impact": "high",
+   "lines": "pedidos.html:4561-4575, 4601-4621"
+  },
+  {
+   "title": "All route work is lost on back, and optimisation is repeated from scratch every time",
+   "problem": "rutaOptimizada, manual reordering and removed stops live only in component state. Pressing back (or iOS reloading the home-screen app after visiting Maps/WhatsApp) discards them; reopening the same date means geocoding everything again. 'Recalcular desde cero' and a mistaken tap on the remove button have the same cost, and there is no undo.",
+   "suggestion": "Persist the route per date (Firestore document rutas/{fecha} or at least sessionStorage) and cache coordinates per client; add undo for remove (toast 'Parada quitada - Deshacer').",
+   "impact": "high",
+   "lines": "pedidos.html:4395-4402, 4432-4436, 4622-4625"
+  },
+  {
+   "title": "Route sheet is built from a stale snapshot of orders",
+   "problem": "HojaRuta receives the orders the director view loaded when it was opened (possibly hours earlier in a home-screen app) and has no refresh button or listener. Orders created, cancelled or weighed from another phone since then are missing or wrong in the sheet.",
+   "suggestion": "Reload the date's orders when entering the screen (query by fechaEntrega) or subscribe with onSnapshot; show 'Actualizado hh:mm' and pull-to-refresh.",
+   "impact": "high",
+   "lines": "pedidos.html:4394, 4418"
+  },
+  {
+   "title": "'Contactado' acts instantly with no confirmation, feedback or undo",
+   "problem": "One tap hides the card and resets the client's inactivity date to today. The button sits right next to 'Avisar por WA' and the tiny 'Dias' field, so mis-taps are easy; there is no toast, no undo, and if the write fails the card stays hidden for the session.",
+   "suggestion": "Optimistic removal with a toast 'Marcado como contactado - Deshacer' (delay the write a few seconds or store the previous values to restore), and surface failures.",
+   "impact": "medium",
+   "lines": "pedidos.html:4351-4354, 4372-4375"
+  },
+  {
+   "title": "Alert list is unbounded, unsearchable and led by long-lost clients",
+   "problem": "Every registered client past its threshold is listed, sorted by days descending, so clients inactive for many months permanently occupy the top while the ones that just became overdue (the actionable ones) are at the bottom. There is no search, filter, sort choice or 'archive/pause alerts for this client'; the Resumen card's top 3 has the same bias.",
+   "suggestion": "Default sort by 'recently overdue' (smallest positive excess first) or by client value; add search and chips (Vencidos / Proximos / Mas de 60 dias); add 'Pausar alertas' per client.",
+   "impact": "medium",
+   "lines": "pedidos.html:4234, 4298-4299, 4329, 4367"
+  },
+  {
+   "title": "Tap targets well under 44 px throughout",
+   "problem": "Alert buttons are about 33 px high (padding 9px, font 12px) and 26 px in the 'Proximos' cards (padding 6px, font 11px); the 'Dias' input is 44x26 px; HojaRuta's back arrow is a bare 20 px glyph with padding 0; 'Ver' is about 26 px high; reorder arrows and the destructive remove button are 30x30 px stacked with a 4 px gap; 'Recalcular desde cero' is an 11 px underlined text link.",
+   "suggestion": "Minimum 44x44 px hit areas, separate the destructive action from the arrows, and use a real secondary button for 'Recalcular'.",
+   "impact": "medium",
+   "lines": "pedidos.html:4347-4359, 4372-4380, 4544, 4622-4625, 4663-4674, 4677-4681"
+  },
+  {
+   "title": "'Dias' field saves on blur with no feedback and a 12 px font",
+   "problem": "The field writes when focus leaves, with no saved/failed indication, no explanation that the value is auto-calculated, and (see bugs) usually no effect. Font is 12 px in a 44 px wide box (the page viewport sets maximum-scale=1.0, which suppresses the iOS focus zoom, but the text is still hard to read and hit); type=number without inputMode/pattern shows the keyboard with punctuation.",
+   "suggestion": "Replace with a small stepper or a sheet ('Avisar cada N dias', with 'Automatico (cada 7 d)' as an option), inputMode=\"numeric\" pattern=\"[0-9]*\", 16 px font, explicit save feedback.",
+   "impact": "medium",
+   "lines": "pedidos.html:4355-4360, 4376-4381"
+  },
+  {
+   "title": "No in-place fix for missing or wrong addresses",
+   "problem": "'Sin direccion: ...' and 'No se pudo ubicar: ...' are plain text lines; the bottom sheet written for editing an address is unreachable. Clients without address are also left out of the stop list entirely (their items are not shown) and appear in the WhatsApp text only as names.",
+   "suggestion": "Make those clients cards in the list with an 'Agregar direccion' button that opens the sheet (16 px input, positioned above the keyboard using visualViewport/safe-area), saves to clientes and re-geocodes only that stop.",
+   "impact": "medium",
+   "lines": "pedidos.html:4587-4598, 4690-4713"
+  },
+  {
+   "title": "Misleading first paint and no disabled styling on the optimise button",
+   "problem": "While the clientes read is in flight the screen claims every client has no address and shows 'Optimizar ruta (0 paradas)'; the button is disabled but looks identical to the enabled state. The alert() at 4439 is unreachable for the same reason.",
+   "suggestion": "Skeleton while loading; visible disabled style and a helper text explaining why.",
+   "impact": "medium",
+   "lines": "pedidos.html:4418-4420, 4561-4566, 4594-4598"
+  },
+  {
+   "title": "Floating quick-sale button overlaps the route sheet controls",
+   "problem": "The fixed button appended to body by VistaDirector (4741-4757) stays visible over HojaRuta, covering the right column where 'Ver', the reorder arrows and remove sit. Tapping it there does nothing visible, and the quick-sale modal then pops up unexpectedly when the user goes back.",
+   "suggestion": "Hide the floating button while HojaRuta (and HistorialCliente) is shown, or render the modal at a level that is always mounted.",
+   "impact": "medium",
+   "lines": "pedidos.html:4661-4682"
+  },
+  {
+   "title": "Reordering only by one-step arrows, and only after geocoding",
+   "problem": "Edit mode exists only when estado==='listo'; moving a stop from position 10 to 2 takes eight taps on a 30 px button. Several orders for the same client on the same date become separate stops (duplicate waypoints, double geocoding).",
+   "suggestion": "Drag-and-drop handle (touch) or 'mover a posicion...' picker; allow manual order without optimising; merge orders of the same client into one stop.",
+   "impact": "medium",
+   "lines": "pedidos.html:4423-4429, 4550-4555, 4661-4675"
+  },
+  {
+   "title": "WhatsApp route text omits what the driver needs",
+   "problem": "The text has client, address and items but not the order notes (obs is shown on screen only), the client's phone, whether to collect payment, or a per-stop Maps link; decimals are printed with a dot ('12.5 kg') and the stops that failed geocoding are not mentioned.",
+   "suggestion": "Add obs, phone and a short maps link per stop, format numbers with es-AR, list unlocated stops explicitly; consider a PDF with the existing jsPDF setup.",
+   "impact": "medium",
+   "lines": "pedidos.html:4525-4533"
+  },
+  {
+   "title": "Native alert() dialogs and plain-text loading states",
+   "problem": "alert() is used for 'No hay paradas con direccion.' (4515), 'Error al guardar' (4509) and 'Ningun cliente tiene direccion cargada.' (4439). Loading is a grey line of text ('Cargando...', 'Calculando recontactos...') with no retry; the fake 'Enviando...' state on the WA button lasts a fixed 2 s regardless of what happened.",
+   "suggestion": "Inline toasts/snackbars and skeleton loaders shared across the app; drop the fake sending state.",
+   "impact": "low",
+   "lines": "pedidos.html:4222, 4295, 4297, 4439, 4509, 4515"
+  },
+  {
+   "title": "Inconsistent copy and missing accents",
+   "problem": "'Ultimo', 'Proximos', 'Dias', 'Todos al dia', 'Ningun cliente tiene direccion' are written without accents while other strings in the same components have them; the header says 'N envios' while the green panel counts 'N paradas' (different numbers when some clients have no address).",
+   "suggestion": "Normalise the Spanish copy and show one consistent count ('12 envios - 10 en ruta, 2 sin direccion').",
+   "impact": "low",
+   "lines": "pedidos.html:4306, 4316, 4325, 4342, 4356, 4366, 4547, 4609"
+  }
+ ],
+ "perf": [
+  {
+   "title": "Each 'Contactado' tap reloads three whole collections and rewrites many client documents",
+   "problem": "onContactado -> marcarComoContactado (5009-5013): marcarContacto does getDocs(clientes) to find the client by name, then cargar() re-reads all pedidos, all cc_movimientos and all clientes again, and calcularAlertas issues one sequential updateDoc per client with order history (4945-4953) and re-runs the e-mail check. Marking five clients in a row launches five overlapping full reloads whose results can land out of order.",
+   "suggestion": "Update the single client document by id (a.clienteId is already in the alert object) and patch local state; never write auto-calculated frequency on read paths; debounce/serialise reloads.",
+   "impact": "high",
+   "lines": "pedidos.html:4351, 4372"
+  },
+  {
+   "title": "Every blur of a 'Dias' input triggers a write plus a full recalculation",
+   "problem": "onBlur always calls actualizarDiasAlerta, even when the value is unchanged: one updateDoc, then calcularAlertas re-reads all cc_movimientos and all clientes and performs the N sequential frequency writes again.",
+   "suggestion": "Skip when unchanged or invalid; update the single alert in local state instead of recomputing everything from the network.",
+   "impact": "high",
+   "lines": "pedidos.html:4358, 4379"
+  },
+  {
+   "title": "Geocoding is sequential, throttled and never cached",
+   "problem": "One Nominatim request per stop with a 1.1 s sleep (plus a second request on fallback) on every optimisation, every time the screen is opened and on every 'Recalcular'. Client addresses rarely change, yet coordinates are thrown away. The loop also keeps running (and fetching) after the user leaves the screen because there is no abort.",
+   "suggestion": "Store lat/lon (and the address they were computed for) in the clientes document or localStorage and geocode only new/changed addresses; use AbortController on unmount; then optimisation becomes instant.",
+   "impact": "high",
+   "lines": "pedidos.html:4456-4476"
+  },
+  {
+   "title": "HojaRuta downloads the entire clientes collection on every open",
+   "problem": "getDocs(collection(db,'clientes')) with no query just to obtain the addresses of the handful of clients on that date; the parent already fetched the same collection in calcularAlertas (4835) but only kept diasAlerta/telefono/id.",
+   "suggestion": "Keep direccion (and id) in the parent's client map and pass it down, or share one cached clients store across the app.",
+   "impact": "medium",
+   "lines": "pedidos.html:4406-4416"
+  },
+  {
+   "title": "TabAlertas re-reads config/ultima_alerta_email on every tab switch",
+   "problem": "Tabs are conditionally rendered, so the component remounts and repeats the getDoc each time the user returns to Alertas.",
+   "suggestion": "Load it once in the parent (it already reads this document in verificarYEnviarAlertas) and pass it as a prop.",
+   "impact": "low",
+   "lines": "pedidos.html:4277-4285"
+  },
+  {
+   "title": "Derived lists recomputed on every render",
+   "problem": "contactados.includes inside filters (O(alerts x contacted)), pConDir/sinDir/conDir rebuilt on each render, and helper closures (fmtF, limpiarDireccion, tsp) re-created per call. Negligible at current sizes but there is no memoisation, and the alert list is not virtualised if it grows to hundreds of clients.",
+   "suggestion": "useMemo for the filtered lists (Set for contactados) and for pConDir keyed on pedidos/clientesDB.",
+   "impact": "low",
+   "lines": "pedidos.html:4224-4226, 4298-4301, 4418-4420"
+  }
+ ]
+}

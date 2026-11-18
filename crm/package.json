@@ -1,0 +1,26 @@
+{
+  "name": "sersale-crm",
+  "version": "2.0.0",
+  "private": true,
+  "description": "CRM del Frigorífico Sersale: sitio estático (src → dist) y pruebas de punta a punta",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node tests/lib/server.mjs",
+    "emulator": "node tests/lib/emulator.mjs",
+    "test": "node build.mjs && node tests/run.mjs"
+  },
+  "devDependencies": {
+    "@babel/standalone": "7.26.4",
+    "@emailjs/browser": "4.4.1",
+    "@fontsource/barlow-condensed": "5.1.1",
+    "@fontsource/ibm-plex-mono": "5.1.1",
+    "@fontsource/ibm-plex-sans": "5.1.1",
+    "chart.js": "4.4.1",
+    "firebase": "10.14.1",
+    "jspdf": "2.5.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "xlsx": "0.18.5"
+  }
+}

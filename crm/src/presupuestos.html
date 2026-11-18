@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<script src="js/sesion.js"></script>
+<script>
+  (function(){
+    var role = sessionStorage.getItem("sersale_role");
+    if (role === "director") return;
+    if (role === "operario") { window.location.href = "pedidos.html"; return; }
+    if (sessionStorage.getItem("sersale_auth") === "ok") return;
+    window.location.href = "index.html";
+  })();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/base.js"></script>
+<script src="js/shell.js"></script>
+<title>Presupuestos — Frigorífico Sersale</title>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="assets/logo-pdf-jpeg.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'IBM Plex Sans','Inter',sans-serif}
+body{background:#F2F3F5;min-height:100vh}
+.hdr{background:#12161A;border-bottom:2px solid #A4232A;color:#EFEAE1;padding:18px 20px;position:sticky;top:0;z-index:10000;box-shadow:0 6px 22px rgba(18,22,26,.28)}
+.hdr-t{font-size:20px;font-weight:800}.hdr-s{font-size:12px;opacity:.75;margin-top:2px}
+.con{max-width:680px;margin:0 auto;padding:20px 16px 80px}
+.card{background:#fff;border-radius:16px;border:1px solid #D8DCE0;box-shadow:0 2px 10px rgba(0,0,0,.05);padding:20px;margin-bottom:14px}
+.ct{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#A4232A;margin-bottom:14px}
+label{display:block;font-size:12px;font-weight:700;color:#555;margin-bottom:5px}
+input[type=text]{width:100%;padding:11px 14px;border-radius:10px;border:1.5px solid #D8DCE0;font-size:14px;font-family:'IBM Plex Sans','Inter',sans-serif;transition:border .15s}
+input[type=text]:focus{outline:none;border-color:#A4232A}
+.m-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mbtn{padding:14px 10px;border-radius:12px;border:2px solid #D8DCE0;background:#fff;cursor:pointer;text-align:center;font-family:'IBM Plex Sans','Inter',sans-serif;transition:all .15s}
+.mbtn.on{border-color:#A4232A;background:#F7EAEA}
+.mbtn h3{font-size:13px;font-weight:800;color:#111;margin-bottom:3px}.mbtn.on h3{color:#A4232A}
+.mbtn p{font-size:11px;color:#8A929A}.mbtn.on p{color:#A4232A}
+.sec{margin-bottom:4px}
+.sec-hdr{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#F7F8F9;border-radius:8px;cursor:pointer;border:1px solid #E4E7EA}
+.sec-nombre{font-size:13px;font-weight:800;color:#191E23}
+.sec-count{font-size:11px;color:#A4232A;font-weight:700;background:#F7EAEA;padding:2px 8px;border-radius:20px;margin-left:8px}
+.sec-arrow{font-size:11px;color:#A3ABB3;transition:transform .2s}.sec-arrow.open{transform:rotate(180deg)}
+.sec-body{display:none;border:1px solid #EDEEF0;border-top:none;border-radius:0 0 8px 8px;overflow:hidden;margin-bottom:2px}
+.sec-body.open{display:block}
+.prod-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #F7F8F9;background:#fff}
+.prod-row:last-child{border-bottom:none}
+.prod-cb{width:17px;height:17px;accent-color:#A4232A;flex-shrink:0;cursor:pointer}
+.prod-info{flex:1;min-width:0}
+.prod-n{font-size:13px;font-weight:600;color:#111}
+.prod-d{font-size:11px;color:#A3ABB3}
+.prod-precio{width:110px;flex-shrink:0}
+.prod-precio input{width:100%;padding:7px 10px;border-radius:8px;border:1.5px solid #E4E7EA;font-size:13px;font-weight:700;color:#A4232A;text-align:right;font-family:'IBM Plex Sans','Inter',sans-serif}
+.prod-precio input:focus{outline:none;border-color:#A4232A}
+.info-bar{background:#F7EAEA;border-radius:10px;padding:10px 16px;font-size:12px;color:#7E1A20;font-weight:600;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+.btn-gen{width:100%;padding:16px;border-radius:12px;border:none;font-weight:800;font-size:15px;cursor:pointer;font-family:'IBM Plex Sans','Inter',sans-serif;background:#A4232A;color:#fff;box-shadow:0 4px 16px rgba(192,57,43,.4)}
+.btn-gen:active{transform:scale(.98)}.btn-gen:disabled{background:#B9BFC5;box-shadow:none}
+.ld{text-align:center;padding:12px;color:#79828B;font-size:13px;display:none;margin-top:8px}
+.ld.show{display:block}
+.custom-items{background:#fff;border-radius:16px;border:1px solid #D8DCE0;box-shadow:0 2px 10px rgba(0,0,0,.05);padding:20px;margin-bottom:14px}
+.custom-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;padding:8px 0;border-bottom:1px solid #EDEEF0}
+.custom-row:last-child{border-bottom:none}
+.custom-row input{padding:10px;border-radius:8px;border:1.5px solid #E4E7EA;font-size:16px;font-family:'IBM Plex Sans','Inter',sans-serif}
+.custom-row input:focus{outline:none;border-color:#A4232A}
+.custom-row .ci-desc{flex:1 1 100%;min-width:0}
+.custom-row .ci-peso{flex:1 1 0;min-width:0;width:auto}
+.custom-row .ci-precio{flex:0 0 120px;width:120px;text-align:right;font-weight:700;color:#A4232A}
+.custom-row .ci-del{width:44px;height:44px;border-radius:8px;border:none;background:#F7EAEA;color:#A4232A;font-size:18px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+/* Modo selección en el teléfono: el nombre ocupa su renglón; abajo van el ajuste y el precio */
+#lista.modo-sel .prod-row{flex-wrap:wrap}
+#lista.modo-sel .prod-info{flex:1 1 calc(100% - 30px) !important;cursor:pointer}
+#lista.modo-sel .prod-ajuste{margin-left:auto}
+.btn-add-custom{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:10px;border-radius:10px;border:2px dashed #A4232A;background:#F7EAEA;color:#A4232A;font-weight:700;font-size:13px;cursor:pointer;font-family:'IBM Plex Sans','Inter',sans-serif;margin-top:8px}
+.btn-add-custom:hover{background:#F7EAEA}
+.sel-all-btn{font-size:11px;color:#A4232A;background:none;border:none;cursor:pointer;font-weight:700;font-family:'IBM Plex Sans','Inter',sans-serif;padding:0;display:none}
+
+    :root { --app-max-w: 480px; }
+    @media (min-width: 768px) { :root { --app-max-w: 860px; } }
+    @media (min-width: 1200px) { :root { --app-max-w: 960px; } }
+    .crm-page { min-height:100vh; background:#F2F3F5; max-width:var(--app-max-w); margin:0 auto; }
+</style>
+
+<style>
+/* ── Capa visual compartida — Sersale ─────────────────────── */
+:root{
+  --carbon:#12161A; --lacre:#A4232A; --lacre-cl:#C33039;
+  --hueso:#EFEAE1;  --tinta:#191E23; --acero:#79828B; --linea:#D8DCE0;
+}
+body{ font-family:'IBM Plex Sans','Inter',system-ui,-apple-system,sans-serif;
+      -webkit-font-smoothing:antialiased; color:var(--tinta) }
+button,input,select,textarea{ font-family:inherit }
+
+/* Cartelería: la familia condensada solo en las chapas de cabecera */
+.chapa,.hdr-t,.header-sub,.card-title,.hdr-left h1{
+  font-family:'Barlow Condensed','IBM Plex Sans',sans-serif;
+  letter-spacing:.035em; font-size:1.06em;
+}
+.hdr-t,.hdr-left h1,.card-title{ text-transform:uppercase }
+
+/* Datos duros en monoespaciada tabular */
+.hdr-s,.mono,.dato{ font-family:'IBM Plex Mono',ui-monospace,monospace;
+      font-variant-numeric:tabular-nums; letter-spacing:.04em }
+
+/* Foco visible para teclado */
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+  outline:2px solid var(--lacre-cl); outline-offset:2px }
+::selection{ background:var(--lacre); color:var(--hueso) }
+
+/* Barras de desplazamiento discretas */
+*::-webkit-scrollbar{ width:9px; height:9px }
+*::-webkit-scrollbar-thumb{ background:#C4CAD1; border-radius:6px }
+*::-webkit-scrollbar-track{ background:transparent }
+
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important } }
+</style>
+</head>
+<body>
+<div class="hdr" style="display:flex;align-items:center;justify-content:space-between">
+  <div style="display:flex;align-items:center">
+    <img src="assets/logo.png" alt="Sersale" style="height:46px;width:auto;filter:drop-shadow(0 1px 4px rgba(0,0,0,0.5));margin-right:12px" />
+    <div>
+    <div class="hdr-t">Presupuestos</div>
+    <div class="hdr-s">Frigorífico Sersale SRL · CUIT 30-70227633-7</div>
+    </div>
+  </div>
+  <button onclick="exportarPresupuesto()" style="background:rgba(255,255,255,0.3);color:#fff;border:1px solid rgba(255,255,255,0.4);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;font-weight:700">📄 Exportar CSV</button>
+</div>
+<div class="con">
+  <div class="card">
+    <div class="ct">👤 Cliente</div>
+    <label>Nombre del cliente *</label>
+    <input type="text" id="cli" placeholder="Nombre del cliente" oninput="upd()">
+  </div>
+  <div class="card">
+    <div class="ct">📦 Tipo de presupuesto</div>
+    <div class="m-grid">
+      <div class="mbtn on" id="b-comp" onclick="setModo('comp')"><h3>Catálogo completo</h3><p>Todos los productos</p></div>
+      <div class="mbtn" id="b-sel" onclick="setModo('sel')"><h3>Selección de ítems</h3><p>Solo los que elegís</p></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <span>🥩 Productos y precios</span>
+      <button class="sel-all-btn" id="btnAll" onclick="selAll()">Seleccionar todos</button>
+    </div>
+    <p id="modo-txt" style="font-size:12px;color:#8A929A;margin-bottom:10px">Catálogo completo — editá los precios si querés cambiarlos</p>
+    <div id="lista"></div>
+  </div>
+  <!-- Ajuste de precios -->
+  <div class="card">
+    <div class="ct">💲 Ajuste de precios</div>
+    <p id="ajuste-desc" style="font-size:12px;color:#8A929A;margin-bottom:12px">Aplicá un aumento o bonificación sobre todos los precios. En modo <b>selección</b>, podés ajustar por categoría o por producto individualmente desde la lista.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="mbtn on" id="b-aumento" onclick="setAjuste('aumento')">
+        <h3>📈 Aumento</h3><p>Subir precios un %</p>
+      </div>
+      <div class="mbtn" id="b-bonif" onclick="setAjuste('bonif')">
+        <h3>📉 Bonificación</h3><p>Bajar precios un %</p>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="flex:1">
+        <label>Porcentaje</label>
+        <div style="display:flex;align-items:center;border:1.5px solid #D8DCE0;border-radius:10px;overflow:hidden">
+          <input type="number" inputmode="decimal" id="ajuste-pct" min="0" max="100" step="0.5" value="0"
+            style="flex:1;padding:10px 14px;border:none;font-size:18px;font-weight:800;color:#A4232A;text-align:center;outline:none;font-family:'IBM Plex Sans','Inter',sans-serif"
+            oninput="upd()">
+          <span style="padding:0 14px;font-size:16px;font-weight:700;color:#A3ABB3;background:#F7F8F9">%</span>
+        </div>
+      </div>
+      <div style="padding-top:20px">
+        <button onclick="resetAjuste()" style="padding:10px 14px;border-radius:10px;border:1.5px solid #D8DCE0;background:#fff;font-size:12px;font-weight:700;color:#79828B;cursor:pointer;font-family:'IBM Plex Sans','Inter',sans-serif">Quitar</button>
+      </div>
+    </div>
+    <div id="ajuste-preview" style="display:none;margin-top:10px;background:#EDF3EF;border:1px solid #DDE9E2;border-radius:10px;padding:10px 14px;font-size:12px;color:#24523D;font-weight:600"></div>
+  </div>
+
+  <!-- Artículos Varios -->
+  <div class="custom-items">
+    <div class="ct" style="display:flex;justify-content:space-between;align-items:center">
+      <span>✏️ ARTÍCULOS VARIOS</span>
+      <span id="custom-count" style="font-size:11px;color:#79828B;font-weight:600"></span>
+    </div>
+    <div style="font-size:11px;color:#8A929A;margin-bottom:10px">Agregá productos que no están en el catálogo</div>
+    <div id="custom-list"></div>
+    <button class="btn-add-custom" onclick="addCustomItem()">+ Agregar artículo</button>
+  </div>
+
+  <div class="info-bar"><span id="inf-txt">—</span><span id="inf-c" style="font-weight:900;font-size:14px;color:#A4232A"></span></div>
+  <button class="btn-gen" id="btnGen" onclick="gen()">📄 Generar y descargar PDF</button>
+  <div class="ld" id="ld">⏳ Generando PDF...</div>
+</div>
+<script>
+const CATS=[
+  {cat:"JAMONES COCIDOS",prods:[
+    {n:'JAMÓN COCIDO NATURAL "SUBLIME"',art:"Art. 304",peso:"6 KG",p:11590},
+    {n:"JAMÓN COCIDO ESPECIAL BAJO SODIO",art:"Art. 303",peso:"6 KG",p:8990},
+    {n:"JAMÓN COCIDO DE PATA",art:"Art. 301",peso:"6 KG",p:6990},
+  ]},
+  {cat:"PALETAS COCIDAS",prods:[
+    {n:"FIAMBRE COCIDO DE PALETA DE CERDO",art:"Art. 401",peso:"6 KG",p:5990},
+    {n:"FIAMBRE DE CERDO P/EMPAREDADOS",art:"Art. 403",peso:"6 KG",p:4990},
+  ]},
+  {cat:"JAMONES CRUDOS",prods:[
+    {n:"JAMÓN CRUDO C/HUESO 12 MESES",art:"Art. 102",peso:"9 KG",p:20990},
+    {n:"JAMÓN CRUDO ENTERO LISTO S/HUESO",art:"Art. 105",peso:"6 KG",p:23990},
+    {n:"JAMÓN CRUDO LISTO 1/2 PUNTA",art:"Art. 107",peso:"3 KG",p:22990},
+    {n:"JAMÓN CRUDO LISTO 1/2 GARRÓN",art:"Art. 107",peso:"3 KG",p:25590},
+    {n:"BONDIOLA SECA AL PAPEL",art:"Art. 202",peso:"1,5 KG",p:19990},
+    {n:"BONDIOLA SECA SERRANA",art:"Art. 203",peso:"1,5 KG",p:21990},
+  ]},
+  {cat:"PANCETAS Y AHUMADOS",prods:[
+    {n:"PANCETA AHUMADA",art:"Art. 501",peso:"1,5 KG",p:14990},
+    {n:"PANCETA SALADA",art:"Art. 505",peso:"2 KG",p:12990},
+    {n:"LOMO AHUMADO",art:"Art. 601",peso:"1,5 KG",p:14990},
+    {n:"LOMO TIPO SUIZO",art:"Art. 616",peso:"1,5 KG",p:18990},
+    {n:"SALCHICHAS DE VIENA",art:"Art. 510",peso:"a granel x 5kg",p:9990},
+    {n:"SALCHICHAS DE COPETIN",art:"Art. 511",peso:"a granel x 5kg",p:11990},
+  ]},
+  {cat:"EMBUTIDOS SECOS",prods:[
+    {n:"SALAMÍN PICADO FINO",art:"Art. 602",peso:"300grs",p:14990},
+    {n:"SALAMÍN PICADO GRUESO",art:"Art. 602",peso:"300grs",p:14990},
+    {n:"SOPRESATTA DE CERDO",art:"Art. 603",peso:"300grs",p:15990},
+    {n:"CHORIZO TIPO CANDELARIO",art:"Art. 604",peso:"300grs",p:14990},
+    {n:"CHORIZO TIPO CANTIMPALO",art:"Art. 605",peso:"400grs",p:15990},
+    {n:"LONGANIZA TIPO ESPAÑOLA",art:"Art. 606",peso:"500grs",p:15990},
+    {n:"LONGANIZA TIPO CALABRESA",art:"Art. 609",peso:"500grs",p:14990},
+    {n:"LONGANIZA CALABRESA BASTÓN",art:"Art. 617",peso:"1 KG",p:14990},
+    {n:"SALAME TIPO MILÁN",art:"Art. 610",peso:"3 KG",p:14990},
+    {n:"SALAME TIPO ESPAÑOL",art:"Art. 607",peso:"3 KG",p:14990},
+    {n:"SALAME CHACARERO DE CAMPO",art:"Art. 621",peso:"800grs",p:15990},
+  ]},
+  {cat:"PASTAS FINAS",prods:[
+    {n:"MORTADELA BOCHA",art:"Art. 621",peso:"2,5 KG",p:5890},
+    {n:"MORTADELA BOLOGNA",art:"Art. 621",peso:"3 KG",p:5490},
+    {n:"SALCHICHÓN C/JAMÓN",art:"Art. 612",peso:"3 KG",p:4900},
+    {n:"SALCHICHÓN PRIMAVERA",art:"Art. 613",peso:"3 KG",p:4900},
+  ]},
+  {cat:"EMBUTIDOS FRESCOS",prods:[
+    {n:"CHORIZO PURO CERDO",art:"Art. 900",peso:"10kg x gancho",p:5990},
+    {n:"CHORIZO ESPECIAL VACUNO/CERDO",art:"Art. 901",peso:"10kg x gancho",p:5190},
+    {n:"CHORIZO BOMBÓN",art:"Art. 902",peso:"5kg x gancho",p:7990},
+    {n:"MORCILLA CRIOLLA",art:"Art. 905",peso:"7kg x gancho",p:4590},
+    {n:"MORCILLA CRIOLLA ROSCA",art:"Art. 905",peso:"4kg x gancho",p:4590},
+    {n:"MORCILLA CRIOLLA BOMBÓN",art:"Art. 906",peso:"5kg x gancho",p:4990},
+    {n:"MORCILLA VASCA",art:"Art. 907",peso:"6kg x gancho",p:5990},
+    {n:"SALCHICHA FRESCA PARRILLERA",art:"Art. 908",peso:"4kg x gancho",p:6590},
+  ]},
+  {cat:"CORTES FRESCOS DE CERDO",prods:[
+    {n:"PECHO C/MANTA",art:"Art. 709",peso:"6 KG",p:null},
+    {n:"CARRÉ C/HUESO",art:"Art. 710",peso:"5 KG",p:null},
+    {n:"BONDIOLA FRESCA",art:"Art. 707",peso:"2 KG",p:null},
+    {n:"PERNIL FRESCO",art:"Art. 711",peso:"10 KG",p:null},
+    {n:"PALETA FRESCA",art:"Art. 712",peso:"6 KG",p:null},
+  ]},
+];
+let uid=0; CATS.forEach(c=>c.prods.forEach(p=>p.uid=uid++));
+
+// ESCAPE para interpolar texto del usuario en innerHTML / atributos
+function esc(s){
+  return String(s===null||s===undefined?'':s).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+// ─── Artículos Varios ───
+let customItems = [];
+let customIdCounter = 0;
+
+function addCustomItem() {
+  const id = 'ci_' + (customIdCounter++);
+  // precio null = sin precio todavía (sale "Consultar", igual que en el catálogo)
+  customItems.push({ id, desc: '', peso: '', precio: null });
+  renderCustomItems();
+  const nuevo = document.querySelector('#custom-list .custom-row:last-child .ci-desc');
+  if (nuevo) nuevo.focus();
+}
+
+function removeCustomItem(id) {
+  customItems = customItems.filter(ci => ci.id !== id);
+  renderCustomItems();
+  upd();
+}
+
+function updateCustomItem(id, field, value) {
+  const item = customItems.find(ci => ci.id === id);
+  if (item) {
+    if (field === 'precio') {
+      // "8.990" es ocho mil novecientos noventa (parseFloat lo leía como 8,99).
+      const n = SersaleBase.numero(value);
+      item.precio = n > 0 ? n : null;
+    } else {
+      item[field] = value;
+    }
+    contarCustomItems();
+    upd();
+  }
+}
+
+function contarCustomItems() {
+  const countEl = document.getElementById('custom-count');
+  if (!countEl) return;
+  const active = customItems.filter(ci => ci.desc.trim()).length;
+  countEl.textContent = active > 0 ? active + ' agregado' + (active !== 1 ? 's' : '') : '';
+}
+
+function renderCustomItems() {
+  const container = document.getElementById('custom-list');
+  if (!container) return;
+
+  // Se guarda en cada tecla (oninput): en el iPhone tocar un botón no saca el
+  // cursor del campo, y con onchange lo último escrito no llegaba al PDF.
+  container.innerHTML = customItems.map(ci => `
+    <div class="custom-row">
+      <input class="ci-desc" type="text" placeholder="Descripción del producto"
+        value="${esc(ci.desc)}" oninput="updateCustomItem('${ci.id}','desc',this.value)" />
+      <input class="ci-peso" type="text" placeholder="Peso/Unidad"
+        value="${esc(ci.peso)}" oninput="updateCustomItem('${ci.id}','peso',this.value)" />
+      <input class="ci-precio monto" type="text" inputmode="decimal" placeholder="Precio x kilo"
+        value="${esc(ci.precio ? fmtMilesTxt(String(ci.precio)) : '')}" oninput="updateCustomItem('${ci.id}','precio',this.value)" />
+      <button class="ci-del" type="button" onclick="removeCustomItem('${ci.id}')" title="Eliminar" aria-label="Eliminar artículo">×</button>
+    </div>
+  `).join('');
+
+  contarCustomItems();
+}
+let modo='comp';
+let tipoAjuste='aumento';
+
+function setAjuste(t){
+  tipoAjuste=t;
+  document.getElementById('b-aumento').classList.toggle('on',t==='aumento');
+  document.getElementById('b-bonif').classList.toggle('on',t==='bonif');
+  upd();
+}
+function resetAjuste(){
+  document.getElementById('ajuste-pct').value=0; upd();
+}
+function getAjusteFactor(){
+  const v=parseFloat(document.getElementById('ajuste-pct').value)||0;
+  if(v===0) return 1;
+  return tipoAjuste==='aumento'?(1+v/100):(1-v/100);
+}
+function leerPct(id){
+  const el=document.getElementById(id);
+  return el?(parseFloat(el.value)||0):0;
+}
+// Un porcentaje vale entre 0 y 100; una bonificación, menos de 100 (si no, el precio queda en cero o negativo).
+function pctFueraDeRango(id,tipo){
+  const el=document.getElementById(id);
+  if(!el) return false;
+  if(el.validity&&el.validity.badInput) return true;
+  const v=parseFloat(el.value);
+  if(isNaN(v)) return false;
+  return v<0||v>100||(tipo==='bonif'&&v>=100);
+}
+function hayPctInvalido(){
+  if(pctFueraDeRango('ajuste-pct',tipoAjuste)) return true;
+  if(modo!=='sel') return false;
+  // Solo cuentan los productos marcados: un porcentaje mal escrito en uno que no entra al PDF no frena nada.
+  return CATS.some((c,ci)=>{
+    const marcados=c.prods.filter(p=>document.getElementById('cb-'+p.uid)?.checked);
+    if(!marcados.length) return false;
+    return pctFueraDeRango('cat-pct-'+ci,document.getElementById('cat-tipo-'+ci)?.value)
+      ||marcados.some(p=>pctFueraDeRango('prod-pct-'+p.uid,document.getElementById('prod-tipo-'+p.uid)?.value));
+  });
+}
+const MSJ_PCT='Revisá los porcentajes de ajuste: van de 0 a 100 (una bonificación, menos de 100).';
+// Modo selección: cuántas categorías y productos marcados tienen un porcentaje propio.
+function ajustesPropios(){
+  let cats=0,prods=0;
+  if(modo!=='sel') return {cats,prods};
+  CATS.forEach((c,ci)=>{
+    const marcados=c.prods.filter(p=>{const cb=document.getElementById('cb-'+p.uid);return cb&&cb.checked;});
+    if(!marcados.length) return;
+    if(leerPct('cat-pct-'+ci)>0) cats++;
+    marcados.forEach(p=>{ if(leerPct('prod-pct-'+p.uid)>0) prods++; });
+  });
+  return {cats,prods};
+}
+function aplicarAjuste(precio){
+  if(precio==null) return null;
+  return Math.round(precio * getAjusteFactor());
+}
+
+function setModo(m){
+  modo=m;
+  document.getElementById('b-comp').classList.toggle('on',m==='comp');
+  document.getElementById('b-sel').classList.toggle('on',m==='sel');
+  document.getElementById('btnAll').style.display=m==='sel'?'inline':'none';
+  document.getElementById('modo-txt').textContent=m==='comp'
+    ?'Catálogo completo — editá los precios si querés cambiarlos'
+    :'Selección — marcá los productos a incluir en el presupuesto';
+  document.querySelectorAll('.prod-cb').forEach(c=>c.style.display=m==='sel'?'':'none');
+  document.getElementById('lista').classList.toggle('modo-sel',m==='sel');
+  toggleAjusteFields(m);
+  upd();
+}
+// En modo selección, tocar el nombre marca o desmarca el producto (la casilla sola es muy chica para el dedo).
+function tocarProd(uid){
+  if(modo!=='sel') return;
+  const cb=document.getElementById('cb-'+uid);
+  if(cb){ cb.checked=!cb.checked; upd(); }
+}
+function selAll(){
+  const all=[...document.querySelectorAll('.prod-cb')];
+  const on=all.every(c=>c.checked); all.forEach(c=>c.checked=!on); upd();
+}
+// ── FORMATO DE MONTOS (separador de miles) ────────────────
+function desfmtMiles(txt){
+  if(txt===null||txt===undefined) return '';
+  let s=String(txt).replace(/\s/g,'').replace(/\./g,'').replace(/,/g,'.');
+  s=s.replace(/[^0-9.]/g,'');
+  const p=s.split('.');
+  if(p.length>2) s=p[0]+'.'+p.slice(1).join('');
+  if(s.charAt(0)==='.') s='0'+s;
+  const q=s.split('.');
+  if(q.length===2) s=q[0]+'.'+q[1].slice(0,2);
+  return s;
+}
+function fmtMilesTxt(raw){
+  if(raw===null||raw===undefined) return '';
+  let s=String(raw).trim();
+  if(s==='') return '';
+  const partes=s.split('.');
+  let ent=(partes[0]||'').replace(/\D/g,'');
+  const dec=partes.length>1?partes[1].replace(/\D/g,''):undefined;
+  ent=ent.replace(/^0+(?=\d)/,'');
+  const entF=ent===''?(dec!==undefined?'0':''):ent.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  return entF+(dec!==undefined?','+dec:'');
+}
+function blurPrecio(el){
+  if(!el.value||el.value==='Consultar'){ el.value='Consultar'; return; }
+  const n=parseFloat(desfmtMiles(el.value));
+  el.value=(isNaN(n)||n<=0)?'Consultar':fmtP(n);
+}
+document.addEventListener('input',function(e){
+  const el=e.target;
+  if(!el||!el.classList||!el.classList.contains('monto')) return;
+  const cs=el.selectionStart||0;
+  const digitos=(el.value.slice(0,cs).match(/[0-9,]/g)||[]).length;
+  const nuevo=fmtMilesTxt(desfmtMiles(el.value));
+  if(nuevo!==el.value){
+    el.value=nuevo;
+    let cnt=0,pos=nuevo.length;
+    if(digitos===0) pos=0;
+    else for(let i=0;i<nuevo.length;i++){ if(/[0-9,]/.test(nuevo[i])) cnt++; if(cnt===digitos){pos=i+1;break;} }
+    try{ el.setSelectionRange(pos,pos); }catch(err){}
+  }
+},true);
+
+function fmtP(n){return n==null?'Consultar':'$ '+Math.round(n).toLocaleString('es-AR');}
+
+// Mostrar/ocultar campos de ajuste según modo
+function toggleAjusteFields(m){
+  CATS.forEach((cat,ci)=>{
+    const catDiv=document.getElementById('cat-ajuste-'+ci);
+    if(catDiv) catDiv.style.display=m==='sel'?'flex':'none';
+    cat.prods.forEach(p=>{
+      const prodDiv=document.getElementById('prod-ajuste-'+p.uid);
+      if(prodDiv) prodDiv.style.display=m==='sel'?'flex':'none';
+    });
+  });
+}
+
+// El ajuste por categoría se aplica en getPrecioFinal() como fallback del ajuste
+// individual de cada producto: acá sólo hace falta recalcular la vista.
+function aplicarCat(ci){
+  upd();
+}
+
+// Obtener precio final de un producto con ajuste aplicado
+function getPrecioFinal(uid, precioBase){
+  if(precioBase==null) return null;
+  // Buscar la categoría de este uid
+  let ci=-1;
+  CATS.forEach((cat,i)=>{ if(cat.prods.some(p=>p.uid===uid)) ci=i; });
+
+  // Los ajustes por categoría y por producto son del modo selección: en
+  // "Catálogo completo" esos campos están ocultos y no tienen que aplicarse.
+  const conPropios=modo==='sel';
+
+  // Factor individual del producto (prioridad máxima)
+  const prodPctEl=document.getElementById('prod-pct-'+uid);
+  const prodPct=conPropios&&prodPctEl?parseFloat(prodPctEl.value)||0:0;
+  if(prodPct>0){
+    const prodTipo=document.getElementById('prod-tipo-'+uid)?.value||'aumento';
+    const factor=prodTipo==='aumento'?(1+prodPct/100):(1-prodPct/100);
+    return Math.round(precioBase*factor);
+  }
+
+  // Factor de categoría (segunda prioridad)
+  if(conPropios&&ci>=0){
+    const catPctEl=document.getElementById('cat-pct-'+ci);
+    const catPct=catPctEl?parseFloat(catPctEl.value)||0:0;
+    if(catPct>0){
+      const catTipo=document.getElementById('cat-tipo-'+ci)?.value||'aumento';
+      const factor=catTipo==='aumento'?(1+catPct/100):(1-catPct/100);
+      return Math.round(precioBase*factor);
+    }
+  }
+
+  // Factor global (tercera prioridad)
+  return aplicarAjuste(precioBase);
+}
+
+function getP(uid){
+  const inp=document.getElementById('p-'+uid); if(!inp)return null;
+  const v=parseFloat(inp.value.replace(/[$. ]/g,'').replace(',','.'));
+  if(isNaN(v)||v<=0) return null;
+  return getPrecioFinal(uid, v);
+}
+function upd(){
+  let total=0,cats=0;
+  CATS.forEach(c=>{
+    const en=c.prods.filter(p=>{
+      if(modo==='comp')return true;
+      const cb=document.getElementById('cb-'+p.uid); return cb&&cb.checked;
+    });
+    if(en.length){cats++;total+=en.length;}
+  });
+  const customActive = customItems.filter(ci => ci.desc.trim()).length;
+  if(customActive > 0) { cats++; total += customActive; }
+  const cli=document.getElementById('cli').value.trim();
+  document.getElementById('inf-txt').textContent=total===0?'Seleccioná al menos un producto'
+    :`${cats} categoría${cats!==1?'s':''} · ${total} producto${total!==1?'s':''}`;
+  document.getElementById('inf-c').textContent=cli||'';
+
+  // Preview ajuste
+  const pct=parseFloat(document.getElementById('ajuste-pct').value)||0;
+  const prev=document.getElementById('ajuste-preview');
+  const propios=ajustesPropios();
+  const partes=[];
+  if(propios.cats) partes.push(propios.cats+' categoría'+(propios.cats!==1?'s':''));
+  if(propios.prods) partes.push(propios.prods+' producto'+(propios.prods!==1?'s':''));
+  const txtPropios=partes.length?'Ajuste propio en '+partes.join(' y ')+' (tiene prioridad sobre el general).':'';
+  if(hayPctInvalido()){
+    prev.style.display='block';
+    prev.textContent='⚠ '+MSJ_PCT;
+    prev.style.background='#F7EAEA';
+    prev.style.borderColor='#E3B5B8';
+    prev.style.color='#7E1A20';
+  } else if(pct>0){
+    prev.style.display='block';
+    const tipo=tipoAjuste==='aumento'?'un aumento':'una bonificación';
+    const signo=tipoAjuste==='aumento'?'+':'-';
+    prev.textContent=`✓ Se aplicará ${tipo} del ${signo}${pct}% a ${txtPropios?'los demás precios':'todos los precios'} al generar el PDF`+(txtPropios?'. '+txtPropios:'');
+    prev.style.background=tipoAjuste==='aumento'?'#F3EEE2':'#EDF3EF';
+    prev.style.borderColor=tipoAjuste==='aumento'?'#C9A24B':'#DDE9E2';
+    prev.style.color=tipoAjuste==='aumento'?'#96601F':'#24523D';
+  } else if(txtPropios){
+    prev.style.display='block';
+    prev.textContent='✓ '+txtPropios;
+    prev.style.background='#F3EEE2';
+    prev.style.borderColor='#C9A24B';
+    prev.style.color='#96601F';
+  } else {
+    prev.style.display='none';
+  }
+}
+function render(){
+  const lista=document.getElementById('lista'); lista.innerHTML='';
+  CATS.forEach((c,ci)=>{
+    const sec=document.createElement('div'); sec.className='sec';
+
+    // Header de sección — con campo de ajuste por categoría (solo en modo sel)
+    sec.innerHTML=`<div class="sec-hdr" onclick="toggleSec(${ci})">
+      <div style="display:flex;align-items:center">
+        <span class="sec-nombre">${c.cat}</span>
+        <span class="sec-count">${c.prods.length}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="cat-ajuste" id="cat-ajuste-${ci}" style="display:none;align-items:center;gap:4px" onclick="event.stopPropagation()">
+          <select id="cat-tipo-${ci}" onchange="aplicarCat(${ci})"
+            style="padding:4px 6px;border-radius:6px;border:1.5px solid #D8DCE0;font-size:11px;font-family:'IBM Plex Sans','Inter',sans-serif;color:#555">
+            <option value="aumento">▲</option>
+            <option value="bonif">▼</option>
+          </select>
+          <input type="number" inputmode="decimal" id="cat-pct-${ci}" min="0" max="100" step="0.5" placeholder="%" 
+            style="width:52px;padding:4px 6px;border-radius:6px;border:1.5px solid #D8DCE0;font-size:12px;font-weight:700;color:#A4232A;text-align:center;font-family:'IBM Plex Sans','Inter',sans-serif"
+            oninput="aplicarCat(${ci})">
+          <span style="font-size:11px;color:#A3ABB3">%</span>
+        </div>
+        <span class="sec-arrow" id="arr-${ci}">▼</span>
+      </div>
+    </div>
+    <div class="sec-body" id="sec-${ci}"></div>`;
+
+    const body=sec.querySelector('.sec-body');
+    c.prods.forEach(p=>{
+      const row=document.createElement('div'); row.className='prod-row';
+      row.style.cssText='display:flex;align-items:center;gap:6px;padding:7px 12px;border-bottom:1px solid #F7F8F9;background:#fff';
+      row.innerHTML=`
+        <input type="checkbox" class="prod-cb" id="cb-${p.uid}" onchange="upd()" style="display:none;width:17px;height:17px;accent-color:#A4232A;flex-shrink:0;cursor:pointer">
+        <div class="prod-info" style="flex:1;min-width:0" onclick="tocarProd(${p.uid})">
+          <div class="prod-n" style="font-size:13px;font-weight:600;color:#111">${p.n}</div>
+          <div class="prod-d" style="font-size:11px;color:#A3ABB3">${p.art} · ${p.peso}</div>
+        </div>
+        <div class="prod-ajuste" id="prod-ajuste-${p.uid}" style="display:none;align-items:center;gap:3px;flex-shrink:0">
+          <select id="prod-tipo-${p.uid}" onchange="upd()"
+            style="padding:3px 5px;border-radius:6px;border:1.5px solid #D8DCE0;font-size:10px;font-family:'IBM Plex Sans','Inter',sans-serif;color:#555">
+            <option value="aumento">▲</option>
+            <option value="bonif">▼</option>
+          </select>
+          <input type="number" inputmode="decimal" id="prod-pct-${p.uid}" min="0" max="100" step="0.5" placeholder="%" oninput="upd()"
+            style="width:46px;padding:3px 5px;border-radius:6px;border:1.5px solid #D8DCE0;font-size:11px;font-weight:700;color:#A4232A;text-align:center;font-family:'IBM Plex Sans','Inter',sans-serif"
+            title="Sobreescribe el ajuste de categoría para este producto">
+          <span style="font-size:10px;color:#B9BFC5" title="Ajuste individual">✎</span>
+        </div>
+        <div class="prod-precio" style="width:105px;flex-shrink:0">
+          <input type="text" inputmode="decimal" class="monto" id="p-${p.uid}" value="${fmtP(p.p)}"
+            onfocus="if(this.value==='Consultar')this.value=''"
+            onblur="blurPrecio(this)"
+            style="width:100%;padding:7px 10px;border-radius:8px;border:1.5px solid #E4E7EA;font-size:13px;font-weight:700;color:#A4232A;text-align:right;font-family:'IBM Plex Sans','Inter',sans-serif">
+        </div>`;
+      body.appendChild(row);
+    });
+    lista.appendChild(sec);
+    if(ci===0)toggleSec(0);
+  });
+  upd();
+}
+function toggleSec(i){
+  document.getElementById('sec-'+i).classList.toggle('open');
+  document.getElementById('arr-'+i).classList.toggle('open');
+}
+
+// ═══════════════════════════════════════
+// GENERADOR PDF — fondo blanco, prolijo
+// ═══════════════════════════════════════
+let generando=false;
+async function gen(){
+  if(generando) return; // un doble toque no arma dos PDF
+  generando=true;
+  const btn=document.getElementById('btnGen');
+  btn.disabled=true;
+  try{
+    await generarPDF();
+  }catch(e){
+    console.error(e);
+    SersaleUI.toast('No se pudo generar el PDF. Probá de nuevo.',{tipo:'error'});
+  }finally{
+    document.getElementById('ld').classList.remove('show');
+    btn.disabled=false;
+    generando=false;
+  }
+}
+async function generarPDF(){
+  // En el iPhone tocar el botón no saca el cursor del campo: se cierra el teclado antes de leer la pantalla.
+  if(document.activeElement&&document.activeElement.blur) document.activeElement.blur();
+  const cliTxt=document.getElementById('cli').value.trim();
+  const items=[];
+  CATS.forEach(c=>{
+    c.prods.forEach(p=>{
+      if(modo==='sel'){const cb=document.getElementById('cb-'+p.uid);if(!cb||!cb.checked)return;}
+      // Sin precio en pantalla ("Consultar") = sin precio en el PDF: no se vuelve al precio de lista.
+      items.push({cat:c.cat,n:p.n,art:p.art,peso:p.peso,precio:getP(p.uid)});
+    });
+  });
+  // Add custom items
+  customItems.forEach(ci => {
+    if(ci.desc.trim()) {
+      items.push({cat:"ARTÍCULOS VARIOS", n:ci.desc.trim(), art:"", peso:ci.peso, precio: ci.precio>0 ? aplicarAjuste(ci.precio) : null});
+    }
+  });
+  if(!items.length){SersaleUI.toast('Seleccioná al menos un producto',{tipo:'error'});return;}
+  if(hayPctInvalido()){SersaleUI.toast(MSJ_PCT,{tipo:'error'});return;}
+  if(!window.jspdf||typeof LOGO_B64==='undefined'){
+    SersaleUI.toast('La página no terminó de cargar. Recargala y probá de nuevo.',{tipo:'error'});
+    return;
+  }
+  if(!cliTxt){
+    const seguir=await SersaleUI.confirmar({
+      titulo:'Falta el nombre del cliente',
+      cuerpo:'El PDF va a salir con la palabra "Cliente" en la portada.',
+      aceptar:'Generar igual',cancelar:'Volver'
+    });
+    if(!seguir) return;
+  }
+  const cli=cliTxt||'Cliente';
+  const tituloDoc=modo==='comp'?'LISTA DE PRECIOS':'PRESUPUESTO';
+
+  document.getElementById('ld').classList.add('show');
+  await new Promise(r=>setTimeout(r,50));
+
+  {
+    const {jsPDF}=window.jspdf;
+    const pdf=new jsPDF({orientation:'portrait',unit:'pt',format:'a4'});
+    const PW=pdf.internal.pageSize.getWidth();
+    const PH=pdf.internal.pageSize.getHeight();
+    const M=40, W=PW-M*2;
+
+    // Cargar logo
+    const logoImg=await new Promise((r,rej)=>{const img=new Image();img.onload=()=>r(img);img.onerror=()=>rej(new Error('No se pudo cargar el logo'));img.src='data:image/jpeg;base64,'+LOGO_B64;});
+    const cv=document.createElement('canvas'); cv.width=380; cv.height=380;
+    cv.getContext('2d').drawImage(logoImg,0,0,380,380);
+    const logoData=cv.toDataURL('image/jpeg',0.95);
+
+    // ─── PORTADA ────────────────────────────────────────────
+    // Fondo blanco puro
+    pdf.setFillColor(255,255,255);
+    pdf.rect(0,0,PW,PH,'F');
+
+    // Franja roja izquierda
+    pdf.setFillColor(192,57,43);
+    pdf.rect(0,0,8,PH,'F');
+
+    // Franja roja superior
+    pdf.setFillColor(192,57,43);
+    pdf.rect(8,0,PW-8,6,'F');
+
+    // Logo centrado en mitad superior
+    const LS=180;
+    pdf.addImage(logoData,'JPEG',PW/2-LS/2,PH*0.08,LS,LS);
+
+    // Línea roja bajo el logo
+    pdf.setDrawColor(192,57,43);
+    pdf.setLineWidth(1.5);
+    pdf.line(M,PH*0.43,PW-M,PH*0.43);
+
+    // Tipo doc
+    pdf.setFont('helvetica','bold');
+    pdf.setFontSize(11);
+    pdf.setTextColor(192,57,43);
+    pdf.text(tituloDoc,PW/2,PH*0.48,{align:'center'});
+
+    // Nombre cliente: si no entra en el ancho se achica la letra y, si hace falta, va en más de un renglón
+    pdf.setFont('helvetica','bold');
+    let tamCli=30;
+    pdf.setFontSize(tamCli);
+    while(tamCli>16&&pdf.getTextWidth(cli)>W){ tamCli-=2; pdf.setFontSize(tamCli); }
+    const lineasCli=pdf.splitTextToSize(cli,W).slice(0,3);
+    pdf.setTextColor(30,30,30);
+    pdf.text(lineasCli,PW/2,PH*0.56,{align:'center'});
+
+    // Fecha (día de Buenos Aires)
+    const hoy=new Date().toLocaleDateString('es-AR',{day:'2-digit',month:'long',year:'numeric',timeZone:SersaleBase.ZONA});
+    pdf.setFont('helvetica','normal');
+    pdf.setFontSize(10);
+    pdf.setTextColor(150,150,150);
+    pdf.text(hoy,PW/2,PH*0.61+(lineasCli.length-1)*tamCli*1.15,{align:'center'});
+
+    // Caja datos empresa
+    const boxY=PH*0.68, boxH=80;
+    pdf.setFillColor(250,250,250);
+    pdf.rect(M,boxY,W,boxH,'F');
+    pdf.setDrawColor(225,225,225);
+    pdf.setLineWidth(0.5);
+    pdf.rect(M,boxY,W,boxH,'S');
+    // Acento rojo izquierdo
+    pdf.setFillColor(192,57,43);
+    pdf.rect(M,boxY,4,boxH,'F');
+
+    pdf.setFont('helvetica','bold');
+    pdf.setFontSize(11);
+    pdf.setTextColor(30,30,30);
+    pdf.text('Frigorífico Sersale SRL',M+16,boxY+22);
+
+    pdf.setFont('helvetica','normal');
+    pdf.setFontSize(9);
+    pdf.setTextColor(120,120,120);
+    pdf.text('CUIT 30-70227633-7  ·  24 de Noviembre 1926, Parque Patricios, CABA',M+16,boxY+38);
+    pdf.setTextColor(192,57,43);
+    pdf.text('(011) 6763-7860',M+16,boxY+54);
+    pdf.setTextColor(150,150,150);
+    pdf.text('@sersalefrigorifico  ·  Venta por Mayor y Menor',M+16,boxY+68);
+
+    // Franja roja inferior
+    pdf.setFillColor(192,57,43);
+    pdf.rect(8,PH-6,PW-8,6,'F');
+
+    // ─── PÁGINAS DE PRODUCTOS ────────────────────────────────
+    const HDR_H=50, COL_H=24, ROW_H=34, SEP_H=20, FTR_H=24;
+    const YMAX=PH-FTR_H;
+
+    function drawPageHdr(){
+      // Franja roja top
+      pdf.setFillColor(192,57,43); pdf.rect(0,0,PW,HDR_H,'F');
+      pdf.setFillColor(146,43,33); pdf.rect(0,0,8,HDR_H,'F');
+      // Título
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(15); pdf.setTextColor(255,255,255);
+      pdf.text(tituloDoc,M+8,HDR_H/2+6);
+      // Derecha: empresa
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(255,200,200);
+      pdf.text('Frigorífico Sersale  ·  precios por kilo',PW-M,HDR_H/2+4,{align:'right'});
+      // Fondo blanco resto de página
+      pdf.setFillColor(255,255,255); pdf.rect(0,HDR_H,PW,PH-HDR_H,'F');
+    }
+
+    function drawColHdr(y){
+      pdf.setFillColor(245,245,245); pdf.rect(M,y,W,COL_H,'F');
+      pdf.setDrawColor(220,220,220); pdf.setLineWidth(0.4);
+      pdf.line(M,y+COL_H,M+W,y+COL_H);
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(7.5); pdf.setTextColor(100,100,100);
+      pdf.text('PRODUCTO',         M+10,    y+COL_H/2+3);
+      pdf.text('ARTÍCULO',         M+W*0.53,y+COL_H/2+3);
+      pdf.text('PESO (APROX)',     M+W*0.69,y+COL_H/2+3);
+      pdf.setTextColor(192,57,43);
+      pdf.text('PRECIO (x KILO)', M+W*0.84,y+COL_H/2+3);
+    }
+
+    function drawSep(cat,y){
+      pdf.setFillColor(240,240,240); pdf.rect(M,y,W,SEP_H,'F');
+      pdf.setFillColor(192,57,43);   pdf.rect(M,y,4,SEP_H,'F');
+      pdf.setDrawColor(220,220,220); pdf.setLineWidth(0.3);
+      pdf.line(M,y+SEP_H,M+W,y+SEP_H);
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(60,60,60);
+      pdf.text(cat,M+12,y+SEP_H/2+3.5);
+    }
+
+    // Recorta un texto escrito a mano para que no pise la columna de al lado
+    function recortar(txt,maxW){
+      let t=String(txt==null?'':txt);
+      if(pdf.getTextWidth(t)<=maxW) return t;
+      while(t.length>1&&pdf.getTextWidth(t+'...')>maxW) t=t.slice(0,-1);
+      return t.trimEnd()+'...';
+    }
+
+    function drawRow(prod,y,idx){
+      // Fondo alternado muy sutil
+      if(idx%2===0){pdf.setFillColor(255,255,255);}
+      else{pdf.setFillColor(252,252,252);}
+      pdf.rect(M,y,W,ROW_H,'F');
+      // Acento izquierdo fino
+      pdf.setFillColor(220,220,220); pdf.rect(M,y,1,ROW_H,'F');
+      // Línea inferior
+      pdf.setDrawColor(240,240,240); pdf.setLineWidth(0.3);
+      pdf.line(M+1,y+ROW_H,M+W,y+ROW_H);
+      // Nombre
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(10); pdf.setTextColor(30,30,30);
+      pdf.text(recortar(prod.n,W*0.53-16),M+10,y+ROW_H/2+4);
+      // Artículo
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(8.5); pdf.setTextColor(140,140,140);
+      pdf.text(prod.art,M+W*0.53,y+ROW_H/2+4);
+      // Peso
+      pdf.text(recortar(prod.peso,W*0.15-6),M+W*0.69,y+ROW_H/2+4);
+      // Precio
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(12); pdf.setTextColor(192,57,43);
+      const pTxt=prod.precio!=null?'$'+Math.round(prod.precio).toLocaleString('es-AR'):'Consultar';
+      pdf.text(pTxt,M+W*0.84,y+ROW_H/2+5);
+    }
+
+    function drawFtr(pag,total){
+      pdf.setFillColor(248,248,248); pdf.rect(0,PH-FTR_H,PW,FTR_H,'F');
+      pdf.setDrawColor(225,225,225); pdf.setLineWidth(0.4);
+      pdf.line(0,PH-FTR_H,PW,PH-FTR_H);
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(7); pdf.setTextColor(160,160,160);
+      pdf.text('Frigorífico Sersale SRL  ·  CUIT 30-70227633-7  ·  (011) 6763-7860  ·  @sersalefrigorifico  ·  Precios por kilo, sujetos a cambio sin previo aviso.',
+        PW/2,PH-FTR_H/2+3,{align:'center'});
+    }
+
+    // Construir lista de elementos
+    const elements=[];
+    let lastCat=null, rowIdx=0;
+    items.forEach(item=>{
+      if(item.cat!==lastCat){
+        elements.push({type:'sep',cat:item.cat});
+        rowIdx=0; lastCat=item.cat;
+      }
+      elements.push({type:'row',prod:item,rowIdx});
+      rowIdx++;
+    });
+
+    // Renderizar
+    pdf.addPage();
+    drawPageHdr();
+    drawColHdr(HDR_H);
+    let y=HDR_H+COL_H;
+    let pageNum=1;
+
+    for(const el of elements){
+      const elH=el.type==='sep'?SEP_H:ROW_H;
+      if(y+elH>YMAX){
+        drawFtr(pageNum);
+        pdf.addPage(); pageNum++;
+        drawPageHdr();
+        drawColHdr(HDR_H);
+        y=HDR_H+COL_H;
+      }
+      if(el.type==='sep') drawSep(el.cat,y);
+      else drawRow(el.prod,y,el.rowIdx);
+      y+=elH;
+    }
+    drawFtr(pageNum);
+
+    // ─── CIERRE ─────────────────────────────────────────────
+    pdf.addPage();
+    // Fondo blanco
+    pdf.setFillColor(255,255,255); pdf.rect(0,0,PW,PH,'F');
+    // Franjas igual que portada
+    pdf.setFillColor(192,57,43); pdf.rect(0,0,8,PH,'F');
+    pdf.setFillColor(192,57,43); pdf.rect(8,0,PW-8,6,'F');
+    pdf.setFillColor(192,57,43); pdf.rect(8,PH-6,PW-8,6,'F');
+
+    // Logo
+    pdf.addImage(logoData,'JPEG',PW/2-LS/2,PH*0.10,LS,LS);
+
+    // Línea
+    pdf.setDrawColor(225,225,225); pdf.setLineWidth(0.8);
+    pdf.line(M+40,PH*0.46,PW-M-40,PH*0.46);
+
+    // Mensaje
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(22);
+    pdf.setTextColor(30,30,30);
+    pdf.text('¡Gracias por elegirnos!',PW/2,PH*0.53,{align:'center'});
+
+    pdf.setFont('helvetica','normal'); pdf.setFontSize(10);
+    pdf.setTextColor(160,160,160);
+    pdf.text('La más amplia variedad en fiambres y embutidos',PW/2,PH*0.58,{align:'center'});
+
+    // Línea
+    pdf.setDrawColor(225,225,225); pdf.line(M+40,PH*0.63,PW-M-40,PH*0.63);
+
+    // Caja datos
+    const cboxY=PH*0.67, cboxH=85;
+    pdf.setFillColor(250,250,250); pdf.rect(M,cboxY,W,cboxH,'F');
+    pdf.setDrawColor(225,225,225); pdf.setLineWidth(0.5); pdf.rect(M,cboxY,W,cboxH,'S');
+    pdf.setFillColor(192,57,43); pdf.rect(M,cboxY,4,cboxH,'F');
+
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(30,30,30);
+    pdf.text('Frigorífico Sersale SRL',M+16,cboxY+22);
+    pdf.setFont('helvetica','normal'); pdf.setFontSize(9); pdf.setTextColor(130,130,130);
+    pdf.text('CUIT 30-70227633-7',M+16,cboxY+38);
+    pdf.text('24 de Noviembre 1926, Parque Patricios, CABA',M+16,cboxY+52);
+    pdf.setTextColor(192,57,43);
+    pdf.text('(011) 6763-7860',M+16,cboxY+68);
+    pdf.setTextColor(160,160,160);
+    pdf.text('@sersalefrigorifico  ·  Atención por Mayor y Menor',M+16,cboxY+80);
+
+    const fecha=SersaleBase.fmtFecha(SersaleBase.hoy()).replace(/\//g,'-');
+    pdf.save(`Presupuesto_Sersale_${nombreArchivo(cli)}_${fecha}.pdf`);
+    SersaleUI.toast('PDF generado',{tipo:'ok'});
+  }
+}
+// El nombre del cliente va en el nombre del archivo: sin acentos, barras ni signos que
+// algunos navegadores no aceptan (con "Almacén" el archivo podía bajar sin nombre).
+function nombreArchivo(txt){
+  return String(txt).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,'_');
+}
+render();
+
+// Exporta a CSV el presupuesto que está armado en pantalla (no es un historial:
+// este módulo todavía no persiste presupuestos).
+function csvCell(v){
+  const t=String(v===null||v===undefined?'':v).replace(/[;\r\n]/g,' ').trim();
+  // Un texto que empieza con = + - @ Excel lo toma como fórmula: va con apóstrofo adelante.
+  return /^[=+\-@]/.test(t)?"'"+t:t;
+}
+function exportarPresupuesto(){
+  const cli = (document.getElementById('cli')?.value || '').trim() || 'Sin cliente';
+  if(hayPctInvalido()){ SersaleUI.toast(MSJ_PCT,{tipo:'error'}); return; }
+  const pct = parseFloat(document.getElementById('ajuste-pct').value)||0;
+  const tipoTxt = tipoAjuste==='aumento' ? 'Aumento' : 'Bonificación';
+
+  let csv = '\uFEFF' + 'sep=;\n';
+  csv += 'PRESUPUESTO — Frigorífico Sersale\n';
+  csv += 'Generado: ' + SersaleBase.fmtFecha(SersaleBase.hoy()) + '\n';
+  csv += 'Cliente: ' + csvCell(cli) + '\n';
+  csv += 'Modo: ' + (modo==='comp' ? 'Catálogo completo' : 'Selección de ítems') + '\n';
+  csv += 'Ajuste global: ' + (pct>0 ? tipoTxt + ' ' + pct + '%' : 'Sin ajuste') + '\n';
+
+  let filasTotales = 0;
+
+  CATS.forEach(c=>{
+    const prods = c.prods.filter(p=>{
+      if(modo==='comp') return true;
+      const cb = document.getElementById('cb-'+p.uid);
+      return cb && cb.checked;
+    });
+    if(!prods.length) return;
+    csv += '\n' + csvCell(c.cat) + '\n';
+    csv += 'Producto;Artículo;Peso;Precio final (x kilo)\n';
+    prods.forEach(p=>{
+      const precio = getP(p.uid);
+      csv += csvCell(p.n) + ';' + csvCell(p.art) + ';' + csvCell(p.peso) + ';'
+           + (precio==null ? 'Consultar' : Math.round(precio)) + '\n';
+      filasTotales++;
+    });
+  });
+
+  const varios = customItems.filter(ci => ci.desc.trim());
+  if(varios.length){
+    csv += '\nARTÍCULOS VARIOS\n';
+    csv += 'Producto;Artículo;Peso;Precio final (x kilo)\n';
+    varios.forEach(ci=>{
+      const precio = ci.precio>0 ? aplicarAjuste(ci.precio) : null;
+      csv += csvCell(ci.desc) + ';;' + csvCell(ci.peso) + ';' + (precio==null ? 'Consultar' : Math.round(precio)) + '\n';
+      filasTotales++;
+    });
+  }
+
+  if(!filasTotales){ SersaleUI.toast('No hay productos para exportar',{tipo:'error'}); return; }
+
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  // Fecha de Buenos Aires (toISOString da el día UTC: después de las 21 hs ya es "mañana").
+  a.download = 'Presupuesto_' + nombreArchivo(cli) + '_' + SersaleBase.hoy() + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Safari empieza la descarga un instante después del toque: si el enlace se libera ya, no baja nada.
+  setTimeout(()=>URL.revokeObjectURL(url),40000);
+  SersaleUI.toast('CSV exportado',{tipo:'ok'});
+}
+</script>
+
+
+
+
+  
+
+</body>
+</html>

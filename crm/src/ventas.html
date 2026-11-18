@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<script src="js/sesion.js"></script>
+<script>
+  (function(){
+    var role = sessionStorage.getItem("sersale_role");
+    if (role === "director") return;
+    if (role === "operario") { window.location.href = "pedidos.html"; return; }
+    if (sessionStorage.getItem("sersale_auth") === "ok") return;
+    window.location.href = "index.html";
+  })();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/base.js"></script>
+<script src="js/shell.js"></script>
+<title>Sersale — Ventas Diarias</title>
+<script src="vendor/firebase-app-compat.js"></script>
+<script src="vendor/firebase-firestore-compat.js"></script>
+<script src="js/fb-compat.js"></script>
+<style>
+:root{--bg:#F2F3F5;--bg2:#FFFFFF;--bg3:#F7F8F9;--border:#D8DCE0;--text:#2A333B;--muted:#79828B;--accent:#A4232A;--cab:#26536E;--red:#C33039;--green:#2F6B4F;--pp:#A4232A}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:15px}
+.header{background:#12161A;border-bottom:2px solid #A4232A;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10000}
+.logo{font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;font-size:13px;color:var(--accent);letter-spacing:2px;font-weight:600}
+.header-sub{font-size:13px;color:#fff;font-weight:600}
+.pin-badge{font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;font-size:11px;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);padding:4px 10px;border-radius:20px;color:#fff;cursor:default}
+.nav{display:flex;background:#fff;border-bottom:2px solid #D8DCE0;overflow-x:auto;scrollbar-width:none}
+.nav::-webkit-scrollbar{display:none}
+.nav-btn{flex:none;padding:12px 18px;font-size:13px;font-weight:500;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;transition:all 0.15s;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif}
+.nav-btn.active{color:var(--text);border-bottom-color:var(--accent)}
+.view{display:none;padding:20px;max-width:600px;margin:0 auto}
+.view.active{display:block}
+.suc-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+.suc-btn{padding:14px;border-radius:10px;border:2px solid var(--border);background:var(--bg3);color:var(--muted);font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s;text-align:center}
+.suc-btn.act-pp{border-color:var(--pp);color:var(--pp);background:rgba(232,184,75,.08)}
+.suc-btn.act-cab{border-color:var(--cab);color:var(--cab);background:rgba(91,156,246,.08)}
+.date-row{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.date-row label{font-size:12px;color:var(--muted);font-weight:500;min-width:40px}
+.date-row input{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:8px;font-size:14px;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;outline:none;transition:border-color .15s}
+.date-row input:focus{border-color:var(--accent)}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+.card-title{font-size:11px;font-weight:600;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block;flex-shrink:0}
+.dot.blue{background:var(--cab)}
+.dot.green{background:var(--green)}
+.dot.red{background:var(--red)}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;color:var(--muted);font-weight:500;margin-bottom:6px}
+.field input,.field textarea,.field select{width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:11px 14px;border-radius:8px;font-size:15px;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;outline:none;transition:border-color .15s}
+.field input:focus,.field textarea:focus{border-color:var(--accent)}
+.field textarea{resize:vertical;min-height:70px}
+.pfx{position:relative}
+.pfx span{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;font-size:13px;color:var(--muted);pointer-events:none}
+.pfx input{padding-left:26px;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif}
+.cobros-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.gastos-list{display:flex;flex-direction:column;gap:8px}
+.gasto-row{display:grid;grid-template-columns:1fr 110px 34px;gap:8px;align-items:center}
+.gasto-row input{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-size:14px;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;outline:none;width:100%}
+.gasto-row input:focus{border-color:var(--accent)}
+.gasto-row .mono{font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif}
+.btn-rm{width:34px;height:36px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
+.btn-rm:hover{border-color:var(--red);color:var(--red)}
+.btn-add{width:100%;padding:10px;margin-top:8px;border-radius:8px;border:1px dashed var(--border);background:transparent;color:var(--muted);font-size:13px;cursor:pointer;transition:all .15s;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif}
+.btn-add:hover{border-color:var(--accent);color:var(--accent)}
+.resumen{background:var(--bg3);border-radius:8px;padding:14px;margin-top:16px}
+.res-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:13px}
+.res-row .lbl{color:var(--muted)}
+.res-row .val{font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;font-weight:600}
+.res-row.total{border-top:1px solid var(--border);margin-top:6px;padding-top:10px}
+.res-row.total .lbl{color:var(--text);font-weight:600}
+.res-row.total .val{color:var(--accent);font-size:16px}
+.val.red{color:var(--red)}
+.val.green{color:var(--green)}
+.val.blue{color:var(--cab)}
+.btn-save{width:100%;padding:16px;background:#A4232A;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;cursor:pointer;margin-top:8px;letter-spacing:.5px;transition:all .15s}
+.btn-save:hover{opacity:0.9}
+.btn-save:disabled{background:var(--bg3);color:var(--muted);cursor:not-allowed}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--green);color:#0f0f0f;padding:12px 24px;border-radius:40px;font-weight:600;font-size:14px;z-index:999;transition:transform .3s cubic-bezier(.34,1.56,.64,1);white-space:nowrap}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.err{background:var(--red);color:#fff}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:10001;align-items:center;justify-content:center}
+.overlay.show{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:32px 28px;width:90%;max-width:340px;text-align:center}
+.modal h3{font-size:18px;margin-bottom:8px}
+.modal p{font-size:13px;color:var(--muted);margin-bottom:20px}
+.controls{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap}
+.controls select,.controls input[type=month],.controls input[type=date]{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:8px;font-size:14px;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;outline:none;min-width:100px}
+.kpi-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.kpi{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px}
+.kpi-lbl{font-size:11px;color:var(--muted);font-weight:500;letter-spacing:.5px;margin-bottom:6px}
+.kpi-val{font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;font-size:18px;font-weight:600}
+.kpi-val.accent{color:var(--accent)}
+.kpi-val.green{color:var(--green)}
+.kpi-val.red{color:var(--red)}
+.kpi-val.blue{color:var(--cab)}
+.kpi-sub{font-size:11px;color:var(--muted);margin-top:3px}
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-size:10px;font-weight:600;letter-spacing:1px;color:var(--muted);text-transform:uppercase;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+.tbl td{padding:10px 10px;font-size:13px;border-bottom:1px solid var(--bg3);vertical-align:middle;cursor:pointer}
+.tbl tr:last-child td{border-bottom:none}
+.tbl .mono{font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;font-size:12px}
+.stag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.stag.pp{background:rgba(232,184,75,.15);color:var(--pp)}
+.stag.cab{background:rgba(91,156,246,.15);color:var(--cab)}
+.exp-btn{background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;padding:0;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif}
+.det-row td{background:var(--bg3);font-size:12px;color:var(--muted);padding:8px 12px;border-bottom:1px solid var(--border)}
+.det-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px 0 8px}
+.loading{text-align:center;padding:40px;color:var(--muted);font-size:14px}
+.spinner{width:24px;height:24px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty{text-align:center;padding:40px 20px;color:var(--muted)}
+.empty-ico{font-size:32px;margin-bottom:12px}
+.cdate{display:none;gap:10px;margin-bottom:16px}
+.cdate input{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:8px;font-size:14px;font-family:'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif;outline:none}
+
+    :root { --app-max-w: 480px; }
+    @media (min-width: 768px) { :root { --app-max-w: 860px; } }
+    @media (min-width: 1200px) { :root { --app-max-w: 960px; } }
+    .crm-page { min-height:100vh; background:#F2F3F5; max-width:var(--app-max-w); margin:0 auto; }
+</style>
+
+<style>
+/* ── Capa visual compartida — Sersale ─────────────────────── */
+:root{
+  --carbon:#12161A; --lacre:#A4232A; --lacre-cl:#C33039;
+  --hueso:#EFEAE1;  --tinta:#191E23; --acero:#79828B; --linea:#D8DCE0;
+}
+body{ font-family:'IBM Plex Sans','Inter',system-ui,-apple-system,sans-serif;
+      -webkit-font-smoothing:antialiased; color:var(--tinta) }
+button,input,select,textarea{ font-family:inherit }
+
+/* Cartelería: la familia condensada solo en las chapas de cabecera */
+.chapa,.hdr-t,.header-sub,.card-title,.hdr-left h1{
+  font-family:'Barlow Condensed','IBM Plex Sans',sans-serif;
+  letter-spacing:.035em; font-size:1.06em;
+}
+.hdr-t,.hdr-left h1,.card-title{ text-transform:uppercase }
+
+/* Datos duros en monoespaciada tabular */
+.hdr-s,.mono,.dato{ font-family:'IBM Plex Mono',ui-monospace,monospace;
+      font-variant-numeric:tabular-nums; letter-spacing:.04em }
+
+/* Foco visible para teclado */
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+  outline:2px solid var(--lacre-cl); outline-offset:2px }
+::selection{ background:var(--lacre); color:var(--hueso) }
+
+/* Barras de desplazamiento discretas */
+*::-webkit-scrollbar{ width:9px; height:9px }
+*::-webkit-scrollbar-thumb{ background:#C4CAD1; border-radius:6px }
+*::-webkit-scrollbar-track{ background:transparent }
+
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important } }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <img src="assets/logo.png" alt="Sersale" class="logo" style="height:46px;width:auto;filter:drop-shadow(0 1px 4px rgba(0,0,0,0.5))" />
+  <div class="header-sub">Ventas Diarias</div>
+  <div class="pin-badge">🔒 Director</div>
+</header>
+
+<nav class="nav">
+  <button class="nav-btn active" id="nb-carga" onclick="nav('carga',this)">📥 Carga</button>
+  <button class="nav-btn" id="nb-hist" onclick="nav('hist',this)">📋 Historial</button>
+  <button class="nav-btn" id="nb-rep" onclick="nav('rep',this)">📊 Reportes</button>
+  <button class="nav-btn" id="nb-comp" onclick="nav('comp',this)">📈 Comparativa</button>
+</nav>
+
+<!-- CARGA -->
+<div class="view active" id="view-carga">
+  <div class="suc-grid">
+    <button class="suc-btn act-pp" id="sbPP" onclick="selSuc('PP')">📍 Parque Patricios</button>
+    <button class="suc-btn" id="sbCAB" onclick="selSuc('CAB')">📍 Caballito</button>
+  </div>
+  <div class="date-row">
+    <label>Fecha</label>
+    <input type="date" id="fFecha">
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot"></span> Ticket Z — Cierre de Caja</div>
+    <div class="field">
+      <label>Total Z (monto del ticket de cierre)</label>
+      <div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="fZ" placeholder="0" min="0" oninput="upRes()"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot blue"></span> Formas de Cobro</div>
+    <div class="cobros-grid">
+      <div class="field"><label>Efectivo</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="fEfec" placeholder="0" min="0" oninput="upRes()"></div></div>
+      <div class="field"><label>Tarjeta / Posnet</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="fTarj" placeholder="0" min="0" oninput="upRes()"></div></div>
+    </div>
+    <div class="cobros-grid">
+      <div class="field"><label>Transferencia</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="fMP" placeholder="0" min="0" oninput="upRes()"></div></div>
+      <div class="field"><label>Cheque / Otro</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="fOtro" placeholder="0" min="0" oninput="upRes()"></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot green"></span> Ingresos Extra-Z</div>
+    <div class="gastos-list" id="extrasList"></div>
+    <button class="btn-add" onclick="addExtra()">+ Agregar ingreso extra</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot red"></span> Gastos del Día</div>
+    <div class="gastos-list" id="gastosList"></div>
+    <button class="btn-add" onclick="addGasto()">+ Agregar gasto</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot"></span> Observaciones</div>
+    <div class="field">
+      <textarea id="fObs" placeholder="Notas del día, novedades..."></textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span><span class="dot" style="background:#B5872F"></span> Cotización del Dólar</span>
+      <button onclick="fetchDolar()" id="btnDolar" style="font-size:11px;padding:5px 10px;border-radius:8px;border:1px solid #B5872F;background:transparent;color:#B5872F;cursor:pointer;font-weight:700">↻ Actualizar</button>
+    </div>
+    <div id="dolarStatus" style="font-size:11px;color:var(--muted);margin-bottom:10px;min-height:14px"></div>
+    <div class="cobros-grid">
+      <div class="field">
+        <label>USD Oficial <span id="lblOf" style="font-weight:400;color:var(--muted)"></span></label>
+        <div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="fUsdOf" placeholder="0" min="0" oninput="upRes()"></div>
+      </div>
+      <div class="field">
+        <label>USD Blue <span id="lblBl" style="font-weight:400;color:#A8702A"></span></label>
+        <div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="fUsdBl" placeholder="0" min="0" oninput="upRes()"></div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px">Punta media = (compra + venta) / 2 · Podés editar los valores manualmente</div>
+  </div>
+
+  <div class="resumen">
+    <div class="res-row"><span class="lbl">Total Z</span><span class="val" id="rZ">$0</span></div>
+    <div class="res-row"><span class="lbl">+ Extra-Z</span><span class="val green" id="rExtra">$0</span></div>
+    <div class="res-row"><span class="lbl">— Gastos</span><span class="val red" id="rGastos">$0</span></div>
+    <div class="res-row total"><span class="lbl">Total Neto</span><span class="val" id="rNeto">$0</span></div>
+    <div id="rUsdBlock" style="display:none">
+      <div style="height:1px;background:rgba(255,255,255,0.15);margin:8px 0"></div>
+      <div class="res-row"><span class="lbl" style="color:#B5872F">USD Oficial</span><span class="val" id="rUsdOf" style="color:#B5872F">U$S 0</span></div>
+      <div class="res-row"><span class="lbl" style="color:#A8702A">USD Blue</span><span class="val" id="rUsdBl" style="color:#A8702A">U$S 0</span></div>
+    </div>
+  </div>
+
+  <button class="btn-save" id="btnSave" onclick="guardar()">Guardar Registro del Día</button>
+  <div style="height:32px"></div>
+</div>
+
+<!-- HISTORIAL -->
+<div class="view" id="view-hist">
+  <div class="controls">
+    <select id="hSuc" onchange="loadHist()">
+      <option value="TODAS">Todas las sucursales</option>
+      <option value="PP">Parque Patricios</option>
+      <option value="CAB">Caballito</option>
+    </select>
+    <input type="month" id="hMes" onchange="loadHist()">
+  </div>
+  <div id="histContent"><div class="loading"><div class="spinner"></div>Cargando...</div></div>
+</div>
+
+<!-- REPORTES -->
+<div class="view" id="view-rep">
+  <div class="controls">
+    <select id="rTipo" onchange="onTipoChange()">
+      <option value="semana">Esta semana</option>
+      <option value="semana-ant">Semana anterior</option>
+      <option value="mes" selected>Este mes</option>
+      <option value="mes-ant">Mes anterior</option>
+      <option value="custom">Personalizado</option>
+    </select>
+    <select id="rSuc" onchange="loadRep()">
+      <option value="TODAS">Ambas sucursales</option>
+      <option value="PP">Parque Patricios</option>
+      <option value="CAB">Caballito</option>
+    </select>
+  </div>
+  <div class="cdate" id="cdate">
+    <input type="date" id="rFrom" onchange="loadRep()">
+    <input type="date" id="rTo" onchange="loadRep()">
+  </div>
+  <div id="repContent"><div class="loading"><div class="spinner"></div>Cargando...</div></div>
+</div>
+
+<!-- COMPARATIVA MES A MES -->
+<div class="view" id="view-comp">
+  <div class="controls">
+    <select id="cSuc" onchange="loadComp()">
+      <option value="TODAS">Ambas sucursales</option>
+      <option value="PP">Parque Patricios</option>
+      <option value="CAB">Caballito</option>
+    </select>
+    <select id="cMeses" onchange="loadComp()">
+      <option value="6">Últimos 6 meses</option>
+      <option value="12">Últimos 12 meses</option>
+      <option value="3">Últimos 3 meses</option>
+    </select>
+  </div>
+  <div id="compContent"><div class="loading"><div class="spinner"></div>Cargando...</div></div>
+</div>
+
+<script>
+const db = window.sersaleDbCompat();
+// Sin PIN - director ya está autenticado al entrar (guard al inicio del archivo)
+let suc = 'PP', pendView = null, gc = 0, _editDocs = [];
+
+// ESCAPE HTML (datos cargados por usuarios -> innerHTML / ventana de impresión)
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function(c) {
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+  });
+}
+
+// INIT
+window.addEventListener('DOMContentLoaded', () => {
+  addGasto();
+  addExtra();
+  proponerHoy();
+  document.getElementById('hMes').value = SersaleBase.hoy().slice(0,7);
+  fetchDolar(true);
+});
+
+// FECHA PROPUESTA
+// Día de Buenos Aires: con toISOString() (UTC) después de las 21 hs proponía el día siguiente.
+// La app instalada puede quedar abierta de un día para el otro: al volver a ella, si cambió
+// el día y no hay una carga a medio hacer, la fecha se pone en hoy (si no, el cierre de hoy
+// se guardaba con la fecha de ayer).
+let _diaPropuesto = '';
+function proponerHoy() {
+  const hoy = SersaleBase.hoy();
+  if (hoy === _diaPropuesto) return;          // mismo día: no se toca la fecha que eligió la persona
+  if (_diaPropuesto && !formVacio()) return;  // carga a medio hacer: se respeta
+  document.getElementById('fFecha').value = hoy;
+  _diaPropuesto = hoy;
+}
+function alVolverALaApp() { proponerHoy(); fetchDolar(true); }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') alVolverALaApp(); });
+window.addEventListener('pageshow', (e) => { if (e.persisted) alVolverALaApp(); });
+
+// NAV
+function nav(v, btn) {
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(x=>x.classList.remove('active'));
+  document.getElementById('view-'+v).classList.add('active');
+  btn.classList.add('active');
+  if(v==='hist') loadHist();
+  if(v==='rep') loadRep();
+  if(v==='comp') loadComp();
+  if(v==='carga') fetchDolar(true);
+}
+
+// SUCURSAL
+function selSuc(s) {
+  suc = s;
+  document.getElementById('sbPP').className = 'suc-btn'+(s==='PP'?' act-pp':'');
+  document.getElementById('sbCAB').className = 'suc-btn'+(s==='CAB'?' act-cab':'');
+}
+
+// GASTOS
+function addGasto() {
+  const id = ++gc;
+  const el = document.createElement('div');
+  el.className = 'gasto-row'; el.id = 'gr'+id;
+  el.innerHTML = `<input type="text" placeholder="Descripción" id="gd${id}"><input type="text" inputmode="decimal" class="mono monto" placeholder="$0" id="gm${id}" oninput="upRes()"><button class="btn-rm" onclick="rmGasto(${id})">×</button>`;
+  document.getElementById('gastosList').appendChild(el);
+}
+function rmGasto(id) {
+  const el = document.getElementById('gr'+id);
+  if(el){ el.remove(); upRes(); }
+}
+function getGastos() {
+  const arr = [];
+  document.querySelectorAll('[id^="gd"]').forEach(el => {
+    const id = el.id.slice(2);
+    const m = parseFloat(desfmtMiles(document.getElementById('gm'+id)?.value))||0;
+    const d = el.value.trim();
+    if(d||m>0) arr.push({desc:d||'Sin descripción', monto:m});
+  });
+  return arr;
+}
+function totalGastos() {
+  let t=0;
+  document.querySelectorAll('[id^="gm"]').forEach(e=>t+=parseFloat(desfmtMiles(e.value))||0);
+  return t;
+}
+
+// INGRESOS EXTRA
+let ec=0;
+function addExtra() {
+  const id = ++ec;
+  const el = document.createElement('div');
+  el.className = 'gasto-row'; el.id = 'er'+id;
+  el.innerHTML = `<input type="text" placeholder="Descripción" id="exd${id}"><input type="text" inputmode="decimal" class="mono monto" placeholder="$0" id="exm${id}" oninput="upRes()"><button class="btn-rm" onclick="rmExtra(${id})">×</button>`;
+  document.getElementById('extrasList').appendChild(el);
+}
+function rmExtra(id) {
+  const el = document.getElementById('er'+id);
+  if(el){ el.remove(); upRes(); }
+}
+function getExtras() {
+  const arr = [];
+  document.querySelectorAll('[id^="exd"]').forEach(el => {
+    const id = el.id.slice(3);
+    const m = parseFloat(desfmtMiles(document.getElementById('exm'+id)?.value))||0;
+    const d = el.value.trim();
+    if(d||m>0) arr.push({desc:d||'Sin descripción', monto:m});
+  });
+  return arr;
+}
+function totalExtras() {
+  let t=0;
+  document.querySelectorAll('[id^="exm"]').forEach(e=>t+=parseFloat(desfmtMiles(e.value))||0);
+  return t;
+}
+
+// ── FORMATO DE MONTOS (separador de miles) ────────────────
+function fmtMilesTxt(raw) {
+  if (raw === null || raw === undefined) return '';
+  let s = String(raw).trim();
+  if (s === '') return '';
+  const neg = s.charAt(0) === '-';
+  s = s.replace(/-/g, '');
+  const partes = s.split('.');
+  let ent = (partes[0] || '').replace(/\D/g, '');
+  const dec = partes.length > 1 ? partes[1].replace(/\D/g, '') : undefined;
+  ent = ent.replace(/^0+(?=\d)/, '');
+  const entF = ent === '' ? (dec !== undefined ? '0' : '') : ent.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return (neg ? '-' : '') + entF + (dec !== undefined ? ',' + dec : '');
+}
+function desfmtMiles(txt) {
+  if (txt === null || txt === undefined) return '';
+  let s = String(txt).replace(/\s/g, '').replace(/\./g, '').replace(/,/g, '.');
+  const neg = s.charAt(0) === '-';
+  s = s.replace(/[^0-9.]/g, '');
+  const p = s.split('.');
+  if (p.length > 2) s = p[0] + '.' + p.slice(1).join('');
+  if (s.charAt(0) === '.') s = '0' + s;
+  const q = s.split('.');
+  if (q.length === 2) s = q[0] + '.' + q[1].slice(0, 2);
+  return (neg && s !== '' ? '-' : '') + s;
+}
+function setMonto(id, val) { const el = document.getElementById(id); if (typeof val === 'number') val = SersaleBase.redondear(val); if (el) el.value = (val === '' || val === null || val === undefined) ? '' : fmtMilesTxt(val); }
+function caretPorDigitos(el, digitos) {
+  const t = el.value;
+  let cnt = 0, pos = t.length;
+  if (digitos === 0) pos = 0;
+  else for (let i = 0; i < t.length; i++) { if (/[0-9,]/.test(t[i])) cnt++; if (cnt === digitos) { pos = i + 1; break; } }
+  try { el.setSelectionRange(pos, pos); } catch (e) {}
+}
+// Formateo en vivo de todo input con class="monto" (incluye los creados dinámicamente)
+document.addEventListener('input', function (e) {
+  const el = e.target;
+  if (!el || !el.classList || !el.classList.contains('monto')) return;
+  const cs = el.selectionStart || 0;
+  const digitos = (el.value.slice(0, cs).match(/[0-9,]/g) || []).length;
+  const nuevo = fmtMilesTxt(desfmtMiles(el.value));
+  if (nuevo !== el.value) { el.value = nuevo; caretPorDigitos(el, digitos); }
+}, true);
+// Backspace sobre un punto de miles borra el dígito anterior
+document.addEventListener('keydown', function (e) {
+  const el = e.target;
+  if (e.key !== 'Backspace' || !el || !el.classList || !el.classList.contains('monto')) return;
+  if (el.selectionStart !== el.selectionEnd) return;
+  const cs = el.selectionStart;
+  if (cs > 1 && el.value.charAt(cs - 1) === '.') {
+    e.preventDefault();
+    const digitos = (el.value.slice(0, cs - 2).match(/[0-9,]/g) || []).length;
+    el.value = fmtMilesTxt(desfmtMiles(el.value.slice(0, cs - 2) + el.value.slice(cs)));
+    caretPorDigitos(el, digitos);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+}, true);
+
+// RESUMEN
+function v(id){ return parseFloat(desfmtMiles(document.getElementById(id)?.value))||0; }
+function fmt(n){ return SersaleBase.fmtMonto(n); }
+function upRes() {
+  const z=v('fZ'), ex=totalExtras(), g=totalGastos();
+  const neto=z+ex-g;
+  document.getElementById('rZ').textContent=fmt(z);
+  document.getElementById('rExtra').textContent=fmt(ex);
+  document.getElementById('rGastos').textContent=fmt(g);
+  document.getElementById('rNeto').textContent=fmt(neto);
+  const usdOf=v('fUsdOf'), usdBl=v('fUsdBl');
+  const block=document.getElementById('rUsdBlock');
+  if(usdOf>0||usdBl>0){
+    block.style.display='block';
+    document.getElementById('rUsdOf').textContent=usdOf>0?'U$S '+(neto/usdOf).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0}):'—';
+    document.getElementById('rUsdBl').textContent=usdBl>0?'U$S '+(neto/usdBl).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0}):'—';
+  } else { block.style.display='none'; }
+}
+
+// FETCH DOLAR
+// auto=true (al abrir la página o volver a Carga): no pisa una cotización ya escrita.
+// Con el botón "Actualizar" se reemplaza siempre.
+let _dolarEnCurso = false;
+async function fetchDolar(auto) {
+  if (_dolarEnCurso) return;
+  _dolarEnCurso = true;
+  const btn = document.getElementById('btnDolar');
+  const status = document.getElementById('dolarStatus');
+  btn.textContent = '⏳ Cargando...'; btn.disabled = true;
+  status.textContent = 'Consultando DolarAPI...';
+  // Si el servicio no contesta, se corta a los 10 segundos (antes el botón quedaba en "Cargando" para siempre)
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  const corte = ctl ? setTimeout(() => ctl.abort(), 10000) : null;
+  try {
+    const op = ctl ? { signal: ctl.signal } : undefined;
+    const [resOf, resBl] = await Promise.all([
+      fetch('https://dolarapi.com/v1/dolares/oficial', op),
+      fetch('https://dolarapi.com/v1/dolares/blue', op)
+    ]);
+    if (!resOf.ok || !resBl.ok) throw new Error('DolarAPI respondió ' + resOf.status + ' / ' + resBl.status);
+    const [dOf, dBl] = await Promise.all([resOf.json(), resBl.json()]);
+
+    const mediaOf = Math.round((Number(dOf.compra) + Number(dOf.venta)) / 2);
+    const mediaBl = Math.round((Number(dBl.compra) + Number(dBl.venta)) / 2);
+    if (!(mediaOf > 0) || !(mediaBl > 0)) throw new Error('DolarAPI devolvió una cotización inválida');
+
+    [['fUsdOf', mediaOf], ['fUsdBl', mediaBl]].forEach(([id, media]) => {
+      const el = document.getElementById(id);
+      if (auto && el.value && el.value !== el.dataset.auto) return; // escrita a mano
+      setMonto(id, media);
+      el.dataset.auto = el.value;
+    });
+    document.getElementById('lblOf').textContent = `C:$${dOf.compra} V:$${dOf.venta}`;
+    document.getElementById('lblBl').textContent = `C:$${dBl.compra} V:$${dBl.venta}`;
+
+    const fAct = dBl.fechaActualizacion ? new Date(dBl.fechaActualizacion) : null;
+    const upd = fAct && !isNaN(fAct.getTime()) ? ' ' + fAct.toLocaleString('es-AR',{timeZone:SersaleBase.ZONA,day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}) : '';
+    status.innerHTML = `✅ Actualizado${esc(upd)} · Oficial: <strong>$${mediaOf}</strong> · Blue: <strong style="color:#A8702A">$${mediaBl}</strong>`;
+    upRes();
+  } catch(e) {
+    status.textContent = '⚠️ No se pudo conectar con DolarAPI. Ingresá el valor manualmente.';
+    console.warn('DolarAPI:', e);
+  }
+  if (corte) clearTimeout(corte);
+  btn.textContent = '↻ Actualizar'; btn.disabled = false;
+  _dolarEnCurso = false;
+}
+
+// GUARDAR
+function formVacio() {
+  return !v('fZ') && !v('fEfec') && !v('fTarj') && !v('fMP') && !v('fOtro') && !getExtras().length && !getGastos().length && !document.getElementById('fObs').value.trim();
+}
+function nombreSuc(s){ return s==='PP' ? 'Parque Patricios' : s==='CAB' ? 'Caballito' : String(s||''); }
+// ¿Lo que ya está guardado es exactamente lo que se está por guardar? Pasa con mala señal:
+// el servidor guarda, la confirmación no llega y el guardado se reintenta solo. En ese caso
+// no hay nada que reemplazar ni que preguntar: el registro ya quedó guardado.
+function mismoRegistro(a, b) {
+  const lista = l => JSON.stringify((Array.isArray(l) ? l : []).map(x => [x && x.desc, x && x.monto]));
+  return ['fecha','sucursal','totalZ','cobEfec','cobTarj','cobMP','cobOtro','usdOficial','usdBlue','extraZ','extraDesc','totalGasto','totalCobros','totalVentas','totalNeto','obs'].every(k => a[k] === b[k])
+    && lista(a.extras) === lista(b.extras) && lista(a.gastos) === lista(b.gastos);
+}
+let _guardando = false;
+async function guardar() {
+  if(_guardando) return;
+  const fecha = document.getElementById('fFecha').value;
+  if(!fecha){ toast('Seleccioná una fecha', true); return; }
+  const sucG = suc; // la sucursal elegida al tocar Guardar
+  const R = SersaleBase.redondear;
+  const totalZ=v('fZ'), cobEfec=v('fEfec'), cobTarj=v('fTarj'), cobMP=v('fMP'), cobOtro=v('fOtro');
+  const usdOficial=v('fUsdOf'), usdBlue=v('fUsdBl');
+  const extras=getExtras(), extraZ=R(extras.reduce((s,e)=>s+e.monto,0));
+  const extraDesc=extras.map(e=>e.desc).join(', ');
+  const obs=document.getElementById('fObs').value.trim();
+  const gastos=getGastos(), totalGasto=R(gastos.reduce((s,g)=>s+g.monto,0));
+  const totalVentas=R(totalZ+extraZ), totalNeto=R(totalVentas-totalGasto);
+  const totalCobros=R(cobEfec+cobTarj+cobMP+cobOtro);
+  // Formulario vacío: después de guardar el formulario se limpia, y un segundo toque en
+  // "Guardar" reemplazaba el registro recién cargado por uno en cero.
+  if(formVacio()){
+    toast('No hay nada cargado: completá el Total Z antes de guardar', true); return;
+  }
+  // Sin conexión el guardado quedaba esperando para siempre (y se perdía al cerrar la página)
+  if(navigator.onLine === false){ toast('Sin conexión. No se guardó: probá de nuevo cuando vuelva la señal.', true); return; }
+  const datos = {
+    fecha, sucursal:sucG, totalZ, cobEfec, cobTarj, cobMP, cobOtro, usdOficial, usdBlue,
+    extraZ, extraDesc, extras, gastos, totalGasto, totalCobros, totalVentas, totalNeto, obs,
+    ts: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const ref = db.collection('ventas_diarias').doc(fecha+'_'+sucG);
+  const btn=document.getElementById('btnSave');
+  _guardando=true; btn.disabled=true; btn.textContent='Guardando...';
+  try {
+    // El id es fecha + sucursal: si ya hay un registro de ese día no se pisa sin preguntar
+    // (sucursal o fecha mal elegida, o dos teléfonos cargando lo mismo). La lectura y la
+    // escritura van en una transacción.
+    let reemplazar=false, guardado=false;
+    while(!guardado){
+      let existente=null;
+      await db.runTransaction(async tx=>{
+        const s=await tx.get(ref);
+        existente = (s.exists && !reemplazar) ? (s.data()||{}) : null;
+        if(!existente) tx.set(ref, datos);
+      });
+      if(!existente || mismoRegistro(existente, datos)){ guardado=true; break; }
+      const ok = await SersaleUI.confirmar({
+        titulo: 'Ya hay un registro de ese día',
+        cuerpo: SersaleBase.fmtFecha(fecha)+' · '+nombreSuc(sucG)+' ya tiene cargado Total Z '+fmt(existente.totalZ)+' (ventas '+fmt(existente.totalVentas)+'). Si seguís, se reemplaza por lo que cargaste ahora (Total Z '+fmt(totalZ)+').',
+        aceptar: 'Reemplazar', cancelar: 'Cancelar', peligro: true
+      });
+      if(!ok) break;
+      reemplazar=true;
+    }
+    if(guardado){
+      toast('✅ Registro guardado: '+SersaleBase.fmtFecha(fecha)+' · '+nombreSuc(sucG));
+      resetForm();
+    }
+  } catch(e){ toast('No se pudo guardar. Probá de nuevo.', true); console.error(e); }
+  _guardando=false; btn.disabled=false; btn.textContent='Guardar Registro del Día';
+}
+function resetForm() {
+  // La cotización del dólar se deja: es la misma para el cierre de la otra sucursal
+  ['fZ','fEfec','fTarj','fMP','fOtro'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('fObs').value='';
+  document.getElementById('gastosList').innerHTML='';
+  document.getElementById('extrasList').innerHTML='';
+  gc=0; ec=0; addGasto(); addExtra(); upRes();
+}
+
+// Cuando no se pudo cargar: mensaje y botón para reintentar sin tener que cambiar un filtro.
+function noCargoHtml(texto, fn) {
+  return '<div class="empty"><div class="empty-ico">⚠️</div>'+esc(texto)+'<div style="margin-top:14px"><button onclick="'+fn+'()" style="min-height:44px;padding:10px 22px;border-radius:10px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:14px;font-weight:600;cursor:pointer">Reintentar</button></div></div>';
+}
+// Esta página no guarda copia en el teléfono: sin conexión la consulta devuelve una lista
+// vacía en vez de fallar. No hay que mostrarla como "sin registros".
+const SIN_CONEXION = 'Sin conexión. No se pudieron cargar los datos.';
+function sinServidor(snap){ return !!(snap && snap.metadata && snap.metadata.fromCache); }
+// Días distintos con registro (cada día tiene un registro por sucursal)
+function contarDias(docs){ return new Set(docs.map(d=>d.fecha).filter(Boolean)).size; }
+function txtDias(n){ return n+(n===1?' día':' días'); }
+
+// HISTORIAL
+let _seqHist = 0;
+async function loadHist() {
+  const seq = ++_seqHist; // si se cambia el filtro mientras carga, la respuesta vieja se descarta
+  const suc2=document.getElementById('hSuc').value, mes=document.getElementById('hMes').value;
+  const c=document.getElementById('histContent');
+  c.innerHTML='<div class="loading"><div class="spinner"></div>Cargando...</div>';
+  try {
+    let q=db.collection('ventas_diarias');
+    if(mes){
+      // Rango real del mes seleccionado: mismo campo en where y orderBy (sin índice compuesto)
+      const [anio,mm]=mes.split('-').map(Number);
+      const ini=mes+'-01';
+      const fin=mes+'-'+String(new Date(anio,mm,0).getDate()).padStart(2,'0');
+      q=q.where('fecha','>=',ini).where('fecha','<=',fin);
+    }
+    q=q.orderBy('fecha','desc');
+    const snap=await q.get();
+    if(seq!==_seqHist) return;
+    if(sinServidor(snap)){ c.innerHTML=noCargoHtml(SIN_CONEXION,'loadHist'); return; }
+    let docs=snap.docs.map(d=>Object.assign({_id:d.id}, d.data()));
+    if(suc2!=='TODAS') docs=docs.filter(d=>d.sucursal===suc2);
+    if(!docs.length){ c.innerHTML='<div class="empty"><div class="empty-ico">📭</div>Sin registros para este período</div>'; return; }
+
+    const tV=docs.reduce((s,d)=>s+(d.totalVentas||0),0);
+    const tN=docs.reduce((s,d)=>s+(d.totalNeto||0),0);
+    const tG=docs.reduce((s,d)=>s+(d.totalGasto||0),0);
+    const tZ=docs.reduce((s,d)=>s+(d.totalZ||0),0);
+
+    let h=`<div class="kpi-grid">
+      <div class="kpi"><div class="kpi-lbl">TOTAL VENTAS</div><div class="kpi-val accent">${fmt(tV)}</div><div class="kpi-sub">${txtDias(contarDias(docs))}</div></div>
+      <div class="kpi"><div class="kpi-lbl">NETO</div><div class="kpi-val green">${fmt(tN)}</div></div>
+      <div class="kpi"><div class="kpi-lbl">TOTAL Z</div><div class="kpi-val">${fmt(tZ)}</div></div>
+      <div class="kpi"><div class="kpi-lbl">GASTOS</div><div class="kpi-val red">${fmt(tG)}</div></div>
+    </div>
+    <div class="card"><div class="card-title"><span class="dot"></span>Registros</div>
+    <table class="tbl"><thead><tr><th>Fecha</th><th>Suc</th><th>Ventas</th><th>Gastos</th><th></th></tr></thead><tbody>`;
+
+    _editDocs = docs;
+    docs.forEach((d,i) => {
+      const st = d.sucursal==='PP'?'<span class="stag pp">P.P.</span>':'<span class="stag cab">CAB</span>';
+      const fd = d.fecha?d.fecha.split('-').reverse().join('/'):'—';
+      h+=`<tr onclick="togDet('det${i}',this)">
+        <td>${esc(fd)}</td><td>${st}</td>
+        <td class="mono">${fmt(d.totalVentas||0)}</td>
+        <td class="mono" style="color:var(--red)">${fmt(d.totalGasto||0)}</td>
+        <td><button class="exp-btn">▾</button></td>
+      </tr>
+      <tr class="det-row" id="det${i}" style="display:none"><td colspan="5">
+        <div class="det-grid">
+          <div>Z: <strong>${fmt(d.totalZ||0)}</strong></div>
+          <div>Extra-Z: <strong style="color:var(--green)">${fmt(d.extraZ||0)}</strong></div>
+          <div>Efectivo: <strong>${fmt(d.cobEfec||0)}</strong></div>
+          <div>Tarjeta: <strong>${fmt(d.cobTarj||0)}</strong></div>
+          <div>Transf.: <strong>${fmt(d.cobMP||0)}</strong></div>
+          <div>Otro: <strong>${fmt(d.cobOtro||0)}</strong></div>
+        </div>
+        ${d.gastos&&d.gastos.length?`<div style="font-size:12px;color:var(--muted);margin-top:4px">💸 ${d.gastos.map(g=>esc(g.desc)+' '+fmt(g.monto)).join(' · ')}</div>`:''}
+        ${d.extras&&d.extras.length?`<div style="font-size:12px;color:var(--green);margin-top:4px">➕ ${d.extras.map(e=>esc(e.desc)+' '+fmt(e.monto)).join(' · ')}</div>`:d.extraDesc?`<div style="font-size:12px;color:var(--green);margin-top:4px">➕ ${esc(d.extraDesc)}</div>`:''}
+        ${d.obs?`<div style="font-size:12px;color:var(--muted);margin-top:4px">📝 ${esc(d.obs)}</div>`:''}
+        ${(d.usdOficial||d.usdBlue)?`<div style="font-size:12px;color:#B5872F;margin-top:4px">💵 ${d.usdOficial?'Oficial $'+d.usdOficial.toLocaleString('es-AR'):''}${d.usdOficial&&d.usdBlue?' · ':''}${d.usdBlue?'Blue $'+d.usdBlue.toLocaleString('es-AR'):''}</div>`:''}
+        <div style="margin-top:10px">
+          <button onclick="abrirEdit(${i})" style="padding:7px 14px;border-radius:8px;border:1.5px solid #B5872F;background:transparent;color:#B5872F;font-size:12px;font-weight:700;cursor:pointer">✏️ Editar registro</button>
+        </div>
+      </td></tr>`;
+    });
+    h+='</tbody></table></div>';
+    c.innerHTML=h;
+  } catch(e){ console.error(e); if(seq===_seqHist) c.innerHTML=noCargoHtml('Error al cargar','loadHist'); }
+}
+// EDITAR REGISTRO
+let editDocId = null;
+function abrirEdit(i) {
+  const d = _editDocs[i];
+  if(!d){ console.error('No doc at index',i); return; }
+  editDocId = d._id || (d.fecha + '_' + d.sucursal);
+  const fd = d.fecha ? d.fecha.split('-').reverse().join('/') : '—';
+  const sLabel = d.sucursal === 'PP' ? 'Parque Patricios' : 'Caballito';
+  document.getElementById('editSubtitle').textContent = fd + ' · ' + sLabel;
+  setMonto('eZ', d.totalZ || '');
+  setMonto('eExtraZ', d.extraZ || '');
+  setMonto('eEfec', d.cobEfec || '');
+  setMonto('eTarj', d.cobTarj || '');
+  setMonto('eMP', d.cobMP || '');
+  setMonto('eOtro', d.cobOtro || '');
+  setMonto('eUsdOf', d.usdOficial || '');
+  setMonto('eUsdBl', d.usdBlue || '');
+  document.getElementById('eObs').value = d.obs || '';
+  document.getElementById('editOverlay').classList.add('show');
+}
+function cerrarEdit() {
+  document.getElementById('editOverlay').classList.remove('show');
+  editDocId = null;
+}
+async function guardarEdit() {
+  if(!editDocId) return;
+  const id = editDocId;
+  const btn = document.getElementById('btnEditSave');
+  if(btn.disabled) return;
+  if(navigator.onLine === false){ toast('Sin conexión. No se guardó: probá de nuevo cuando vuelva la señal.', true); return; }
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  const R = SersaleBase.redondear;
+  const ev = n => { const el=document.getElementById(n); return el&&el.value!==''?parseFloat(desfmtMiles(el.value))||0:null; };
+  const totalZ = ev('eZ')||0, extraZ = ev('eExtraZ')||0;
+  const cobEfec = ev('eEfec')||0, cobTarj = ev('eTarj')||0, cobMP = ev('eMP')||0, cobOtro = ev('eOtro')||0;
+  const usdOficial = ev('eUsdOf'), usdBlue = ev('eUsdBl');
+  const obs = document.getElementById('eObs').value.trim();
+  try {
+    const ref = db.collection('ventas_diarias').doc(id);
+    // Lectura y escritura en una transacción: los totales se recalculan con los gastos y
+    // extras que tiene el registro en ese momento (otro teléfono puede haberlo cambiado).
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if(!snap.exists) throw new Error('El registro '+id+' ya no existe');
+      const prev = snap.data() || {};
+      const gastos = Array.isArray(prev.gastos) ? prev.gastos : null;
+
+      // Mantener extras[] coherente con el nuevo extraZ (comparando en centavos: la suma
+      // de 1000,10 + 2000,20 da 3000,3000000000002 y no es "otro" importe)
+      let extras = Array.isArray(prev.extras) ? prev.extras.slice() : [];
+      const extrasPrev = R(extras.reduce((s,e)=>s+(Number(e.monto)||0),0));
+      if(extraZ !== extrasPrev){
+        if(extraZ === 0) extras = [];
+        else if(extras.length === 1) extras = [{desc: extras[0].desc || 'Ingreso extra', monto: extraZ}];
+        else if(extras.length > 1) extras = [{desc: extras.map(e=>e.desc).join(' + '), monto: extraZ}];
+        else extras = [{desc: prev.extraDesc || 'Ingreso extra', monto: extraZ}];
+      }
+      const extraDesc = extras.map(e=>e.desc).join(', ');
+
+      // Totales derivados, recalculados siempre. Un registro viejo sin lista de gastos conserva su total.
+      const totalGasto = gastos ? R(gastos.reduce((s,g)=>s+(Number(g.monto)||0),0)) : (Number(prev.totalGasto)||0);
+      const totalVentas = R(totalZ + extraZ);
+      const totalNeto = R(totalVentas - totalGasto);
+      const totalCobros = R(cobEfec + cobTarj + cobMP + cobOtro);
+
+      const upd = { totalZ, extraZ, extras, extraDesc, cobEfec, cobTarj, cobMP, cobOtro, totalGasto, totalVentas, totalNeto, totalCobros, obs };
+      if(usdOficial !== null) upd.usdOficial = usdOficial;
+      if(usdBlue !== null) upd.usdBlue = usdBlue;
+      tx.update(ref, upd);
+    });
+    toast('✅ Registro actualizado');
+    cerrarEdit();
+    loadHist();
+  } catch(e) { toast('No se pudo guardar. Probá de nuevo.', true); console.error(e); }
+  btn.disabled = false; btn.textContent = 'Guardar';
+}
+
+function togDet(id, row) {
+  const det=document.getElementById(id);
+  if(!det) return;
+  const hidden=det.style.display==='none';
+  det.style.display=hidden?'table-row':'none';
+  const b=row.querySelector('.exp-btn');
+  if(b) b.textContent=hidden?'▴':'▾';
+}
+
+// REPORTES
+function onTipoChange() {
+  const v=document.getElementById('rTipo').value;
+  const cd=document.getElementById('cdate');
+  cd.style.display=v==='custom'?'flex':'none';
+  loadRep();
+}
+function getRange() {
+  const t=document.getElementById('rTipo').value;
+  if(t==='custom'){ const f=document.getElementById('rFrom').value, t2=document.getElementById('rTo').value; if(!f||!t2) return null; return{from:f,to:t2}; }
+  // Todo en días de Buenos Aires. Con toISOString() (UTC), después de las 21 hs "esta semana"
+  // empezaba el martes y "semana anterior" iba de martes a lunes.
+  const hoy=SersaleBase.hoy(), B=SersaleBase;
+  const d=B.diaSemana(hoy)||7; // lunes=1 … domingo=7
+  if(t==='semana') return {from:B.sumarDias(hoy,1-d), to:hoy};
+  if(t==='semana-ant') return {from:B.sumarDias(hoy,-d-6), to:B.sumarDias(hoy,-d)};
+  const ini=hoy.slice(0,8)+'01';
+  if(t==='mes-ant'){ const finAnt=B.sumarDias(ini,-1); return {from:finAnt.slice(0,8)+'01', to:finAnt}; }
+  return {from:ini, to:hoy};
+}
+
+let _seqRep = 0;
+async function loadRep() {
+  const seq = ++_seqRep; // una respuesta vieja no reemplaza al período elegido después
+  const c=document.getElementById('repContent');
+  const range=getRange();
+  if(!range){ c.innerHTML='<div class="empty"><div class="empty-ico">📅</div>Elegí las dos fechas del período</div>'; return; }
+  const sucF=document.getElementById('rSuc').value;
+  c.innerHTML='<div class="loading"><div class="spinner"></div>Calculando...</div>';
+  try {
+    let q=db.collection('ventas_diarias').where('fecha','>=',range.from).where('fecha','<=',range.to).orderBy('fecha','asc');
+    const snap=await q.get();
+    if(seq!==_seqRep) return;
+    if(sinServidor(snap)){ c.innerHTML=noCargoHtml(SIN_CONEXION,'loadRep'); return; }
+    let docs=snap.docs.map(d=>d.data());
+    if(sucF!=='TODAS') docs=docs.filter(d=>d.sucursal===sucF);
+    if(!docs.length){ c.innerHTML='<div class="empty"><div class="empty-ico">📊</div>Sin datos para el período</div>'; return; }
+
+    const sum=(f)=>docs.reduce((s,d)=>s+(d[f]||0),0);
+    const tV=sum('totalVentas'), tZ=sum('totalZ'), tEx=sum('extraZ');
+    const tG=sum('totalGasto'), tN=sum('totalNeto');
+    const tEf=sum('cobEfec'), tTj=sum('cobTarj'), tMP=sum('cobMP'), tOt=sum('cobOtro');
+    // Con las dos sucursales hay dos registros por día: el promedio es por día, no por registro
+    const dias=contarDias(docs)||docs.length;
+    const prom=tV/dias;
+
+    const pp=docs.filter(d=>d.sucursal==='PP'), cab=docs.filter(d=>d.sucursal==='CAB');
+    const tPP=pp.reduce((s,d)=>s+(d.totalVentas||0),0), tCAB=cab.reduce((s,d)=>s+(d.totalVentas||0),0);
+
+    const gDict=Object.create(null);
+    docs.forEach(d=>(Array.isArray(d.gastos)?d.gastos:[]).forEach(g=>{ const k=String(g.desc||'Sin descripción'); gDict[k]=(gDict[k]||0)+(Number(g.monto)||0); }));
+
+    const label=`${range.from.split('-').reverse().join('/')} — ${range.to.split('-').reverse().join('/')}`;
+
+    // Cotizaciones: promedio ponderado del período
+    const usdOfArr=docs.filter(d=>d.usdOficial>0), usdBlArr=docs.filter(d=>d.usdBlue>0);
+    const avgOf=usdOfArr.length?usdOfArr.reduce((s,d)=>s+d.usdOficial,0)/usdOfArr.length:0;
+    const avgBl=usdBlArr.length?usdBlArr.reduce((s,d)=>s+d.usdBlue,0)/usdBlArr.length:0;
+    const fmtUsd=n=>Math.round(n).toLocaleString('es-AR');
+
+    let h=`<div style="font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:14px">${label} · ${txtDias(dias)}</div>
+    <div class="kpi-grid">
+      <div class="kpi"><div class="kpi-lbl">TOTAL VENTAS</div><div class="kpi-val accent">${fmt(tV)}</div><div class="kpi-sub">prom ${fmt(prom)}/día</div></div>
+      <div class="kpi"><div class="kpi-lbl">NETO TOTAL</div><div class="kpi-val green">${fmt(tN)}</div>${avgBl>0?`<div class="kpi-sub" style="color:#A8702A">≈ U$S ${fmtUsd(tN/avgBl)} blue</div>`:''}</div>
+      <div class="kpi"><div class="kpi-lbl">GASTOS</div><div class="kpi-val red">${fmt(tG)}</div></div>
+      <div class="kpi"><div class="kpi-lbl">EXTRA-Z</div><div class="kpi-val blue">${fmt(tEx)}</div><div class="kpi-sub">${((tEx/tV)*100||0).toFixed(1)}% del total</div></div>
+    </div>
+    <div class="card"><div class="card-title"><span class="dot blue"></span>Formas de Cobro</div>
+    <div class="resumen">
+      <div class="res-row"><span class="lbl">Efectivo</span><span class="val">${fmt(tEf)}</span></div>
+      <div class="res-row"><span class="lbl">Tarjeta / Posnet</span><span class="val">${fmt(tTj)}</span></div>
+      <div class="res-row"><span class="lbl">Transferencia</span><span class="val">${fmt(tMP)}</span></div>
+      <div class="res-row"><span class="lbl">Otro</span><span class="val">${fmt(tOt)}</span></div>
+      <div class="res-row total"><span class="lbl">Total cobros</span><span class="val">${fmt(tEf+tTj+tMP+tOt)}</span></div>
+    </div></div>`;
+
+    // USD en reportes
+    if(avgOf>0||avgBl>0){
+      h+=`<div class="card"><div class="card-title"><span class="dot" style="background:#B5872F"></span>💵 Total en Dólares</div><div class="resumen">`;
+      if(avgOf>0) h+=`<div class="res-row"><span class="lbl" style="color:#B5872F">USD Oficial <span style="font-weight:400;font-size:11px">(prom. $${fmtUsd(avgOf)})</span></span><span class="val" style="color:#B5872F">U$S ${fmtUsd(tN/avgOf)}</span></div>`;
+      if(avgBl>0) h+=`<div class="res-row"><span class="lbl" style="color:#A8702A">USD Blue <span style="font-weight:400;font-size:11px">(prom. $${fmtUsd(avgBl)})</span></span><span class="val" style="color:#A8702A">U$S ${fmtUsd(tN/avgBl)}</span></div>`;
+      if(usdOfArr.length>1) h+=`<div style="font-size:10px;color:var(--muted);padding:6px 0 2px">Promedio de ${usdOfArr.length} cotizaciones del período</div>`;
+      h+=`</div></div>`;
+    }
+
+    if(sucF==='TODAS'&&pp.length&&cab.length) {
+      h+=`<div class="card"><div class="card-title"><span class="dot"></span>Por Sucursal</div><div class="resumen">
+        <div class="res-row"><span class="lbl" style="color:var(--pp)">📍 Parque Patricios (${pp.length}d)</span><span class="val" style="color:var(--pp)">${fmt(tPP)}</span></div>
+        <div class="res-row"><span class="lbl" style="color:var(--cab)">📍 Caballito (${cab.length}d)</span><span class="val" style="color:var(--cab)">${fmt(tCAB)}</span></div>
+        <div class="res-row total"><span class="lbl">Total combinado</span><span class="val">${fmt(tPP+tCAB)}</span></div>
+      </div></div>`;
+    }
+
+    if(Object.keys(gDict).length) {
+      const sorted=Object.entries(gDict).sort((a,b)=>b[1]-a[1]);
+      h+=`<div class="card"><div class="card-title"><span class="dot red"></span>Detalle de Gastos</div><div class="resumen">`;
+      sorted.forEach(([k,vv])=>{ h+=`<div class="res-row"><span class="lbl">${esc(k)}</span><span class="val red">${fmt(vv)}</span></div>`; });
+      h+=`<div class="res-row total"><span class="lbl">Total gastos</span><span class="val red">${fmt(tG)}</span></div></div></div>`;
+    }
+
+    h+=`<div class="card"><div class="card-title"><span class="dot"></span>Detalle por Día</div>
+    <table class="tbl"><thead><tr><th>Fecha</th><th>Suc</th><th>Ventas</th><th>Neto</th></tr></thead><tbody>`;
+    docs.forEach(d=>{
+      const st=d.sucursal==='PP'?'<span class="stag pp">P.P.</span>':'<span class="stag cab">CAB</span>';
+      const fd=d.fecha?d.fecha.split('-').reverse().join('/'):'—';
+      h+=`<tr><td>${esc(fd)}</td><td>${st}</td><td class="mono">${fmt(d.totalVentas||0)}</td><td class="mono" style="color:var(--green)">${fmt(d.totalNeto||0)}</td></tr>`;
+    });
+    h+='</tbody></table></div>';
+    h+=`<button onclick="imprimirReporte()" style="width:100%;padding:14px;border-radius:12px;border:none;background:#A4232A;color:#fff;font-weight:700;font-size:15px;cursor:pointer;margin-top:4px">🖨️ Exportar / Imprimir PDF</button>`;
+    // Store data for PDF export
+    window._repData = { docs, dias, tV, tZ, tEx, tG, tN, tEf, tTj, tMP, tOt, prom, tPP, tCAB, gDict, label, sucF, avgOf, avgBl };
+    c.innerHTML=h;
+  } catch(e){ console.error(e); if(seq===_seqRep) c.innerHTML=noCargoHtml('Error al cargar reporte','loadRep'); }
+}
+
+// IMPRIMIR REPORTE PDF
+function imprimirReporte() {
+  const d = window._repData;
+  if(!d) return;
+  const fmtP = n => n.toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0});
+  const fmtU = n => Math.round(n).toLocaleString('es-AR');
+
+  const filas = d.docs.map(doc=>{
+    const st = doc.sucursal==='PP'?'Parque Patricios':'Caballito';
+    const fd = doc.fecha?doc.fecha.split('-').reverse().join('/'):'—';
+    return `<tr>
+      <td style="padding:7px 10px;border-bottom:1px solid #E4E7EA">${esc(fd)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #E4E7EA">${st}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #E4E7EA;text-align:right">${fmtP(doc.totalVentas||0)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #E4E7EA;text-align:right">${fmtP(doc.totalGasto||0)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #E4E7EA;text-align:right;font-weight:700;color:#2F6B4F">${fmtP(doc.totalNeto||0)}</td>
+    </tr>`;
+  }).join('');
+
+  const gastoRows = Object.entries(d.gDict).sort((a,b)=>b[1]-a[1]).map(([k,v])=>
+    `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>${esc(k)}</span><span style="color:#C33039">${fmtP(v)}</span></div>`
+  ).join('');
+
+  const usdBlock = (d.avgOf>0||d.avgBl>0) ? `
+    <div style="background:#F3EEE2;border:1px solid #B5872F;border-radius:8px;padding:14px;margin-bottom:20px">
+      <div style="font-weight:700;color:#A8702A;margin-bottom:8px">💵 En Dólares</div>
+      ${d.avgOf>0?`<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="color:#B5872F">USD Oficial (prom. $${fmtU(d.avgOf)})</span><span style="font-weight:700;color:#B5872F">U$S ${fmtU(d.tN/d.avgOf)}</span></div>`:''}
+      ${d.avgBl>0?`<div style="display:flex;justify-content:space-between"><span style="color:#A8702A">USD Blue (prom. $${fmtU(d.avgBl)})</span><span style="font-weight:700;color:#A8702A">U$S ${fmtU(d.tN/d.avgBl)}</span></div>`:''}
+    </div>` : '';
+
+  const w = window.open('','_blank');
+  // Si el teléfono no deja abrir la ventana (bloqueo de ventanas emergentes, app instalada), se avisa
+  if(!w || !w.document){ toast('No se pudo abrir la ventana del reporte. Permití las ventanas emergentes para este sitio y probá de nuevo.', true); return; }
+  w.document.write(`<!DOCTYPE html><html><head>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0"><meta charset="UTF-8">
+    <title>Reporte Ventas — Frigorífico Sersale</title>
+    <style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:'Segoe UI',Arial,sans-serif;color:#191E23;padding:24px;max-width:760px;margin:auto}
+      .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #A4232A;padding-bottom:14px;margin-bottom:20px}
+      .header h1{font-size:20px;color:#A4232A;font-weight:900}
+      .header p{font-size:11px;color:#79828B;margin-top:2px}
+      .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+      .kpi{background:#F7F8F9;border-radius:8px;padding:12px;text-align:center}
+      .kpi .lbl{font-size:10px;color:#79828B;text-transform:uppercase;letter-spacing:.5px}
+      .kpi .val{font-size:18px;font-weight:900;margin-top:4px}
+      .section{margin-bottom:20px}
+      .section h2{font-size:13px;font-weight:700;color:#3A424A;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #E4E7EA}
+      table{width:100%;border-collapse:collapse}
+      thead tr{background:#2A333B;color:#fff}
+      thead th{padding:8px 10px;text-align:left;font-size:11px;text-transform:uppercase}
+      thead th:not(:first-child):not(:nth-child(2)){text-align:right}
+      .footer{font-size:10px;color:#A3ABB3;text-align:center;margin-top:24px;border-top:1px solid #E4E7EA;padding-top:12px}
+      @media print{button{display:none}}
+    </style>
+  </head><body>
+    <div class="header">
+      <div style="display:flex;align-items:center;gap:12px">
+        <img src="${new URL('assets/logo.png', location.href).href}" alt="Sersale" style="height:64px;width:auto" />
+        <div><h1>FRIGORÍFICO SERSALE</h1><p>24 de Noviembre 1926, Parque Patricios · CABA · (011) 6763-7860</p></div>
+      </div>
+      <div style="text-align:right"><div style="font-size:18px;font-weight:900;color:#A4232A">Reporte de Ventas</div><div style="font-size:12px;color:#79828B;margin-top:2px">${esc(d.label)}</div><div style="font-size:11px;color:#A3ABB3">${esc(txtDias(d.dias))} · ${d.sucF==='TODAS'?'Todas las sucursales':esc(nombreSuc(d.sucF))}</div></div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="lbl">Total Ventas</div><div class="val" style="color:#A4232A">${fmtP(d.tV)}</div></div>
+      <div class="kpi"><div class="lbl">Neto</div><div class="val" style="color:#2F6B4F">${fmtP(d.tN)}</div></div>
+      <div class="kpi"><div class="lbl">Gastos</div><div class="val" style="color:#C33039">${fmtP(d.tG)}</div></div>
+      <div class="kpi"><div class="lbl">Promedio/día</div><div class="val">${fmtP(d.prom)}</div></div>
+    </div>
+    ${usdBlock}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+      <div class="section"><h2>Formas de Cobro</h2>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>Efectivo</span><span>${fmtP(d.tEf)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>Tarjeta / Posnet</span><span>${fmtP(d.tTj)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>Transferencia</span><span>${fmtP(d.tMP)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EDEEF0;font-size:13px"><span>Cheque / Otro</span><span>${fmtP(d.tOt)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:13px;font-weight:700"><span>Total</span><span>${fmtP(d.tEf+d.tTj+d.tMP+d.tOt)}</span></div>
+      </div>
+      ${Object.keys(d.gDict).length?`<div class="section"><h2>Gastos</h2>${gastoRows}</div>`:''}
+    </div>
+    <div class="section"><h2>Detalle por Día</h2>
+    <table><thead><tr><th>Fecha</th><th>Sucursal</th><th style="text-align:right">Ventas</th><th style="text-align:right">Gastos</th><th style="text-align:right">Neto</th></tr></thead>
+    <tbody>${filas}</tbody></table></div>
+    <div class="footer">Frigorífico Sersale SRL · Reporte generado el ${SersaleBase.fmtFecha(SersaleBase.hoy())} · Documento interno</div>
+    <br><button onclick="window.print()" style="padding:10px 24px;background:#A4232A;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:700">🖨️ Imprimir / Guardar PDF</button><button onclick="window.close()" style="margin-left:8px;padding:10px 24px;background:#79828B;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">✕ Cerrar</button>
+  
+  
+
+</body></html>`);
+  w.document.close();
+}
+
+// COMPARATIVA MES A MES
+let _seqComp = 0;
+async function loadComp() {
+  const seq = ++_seqComp;
+  const sucF = document.getElementById('cSuc').value;
+  const nMeses = parseInt(document.getElementById('cMeses').value)||6;
+  const c = document.getElementById('compContent');
+  c.innerHTML = '<div class="loading"><div class="spinner"></div>Cargando...</div>';
+  try {
+    // Build array of last N months
+    const [anioHoy, mesHoy] = SersaleBase.hoy().split('-').map(Number); // mes en curso en Buenos Aires
+    const months = [];
+    for(let i = nMeses-1; i >= 0; i--) {
+      const d = new Date(anioHoy, mesHoy-1-i, 1);
+      const key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+      const label = d.toLocaleDateString('es-AR',{month:'short',year:'2-digit'});
+      months.push({key, label});
+    }
+
+    // Fetch all docs in range
+    const from = months[0].key+'-01';
+    const to = months[months.length-1].key+'-31';
+    let q = db.collection('ventas_diarias').where('fecha','>=',from).where('fecha','<=',to).orderBy('fecha','asc');
+    const snap = await q.get();
+    if(seq!==_seqComp) return;
+    if(sinServidor(snap)){ c.innerHTML=noCargoHtml(SIN_CONEXION,'loadComp'); return; }
+    let docs = snap.docs.map(d=>d.data());
+    if(sucF!=='TODAS') docs = docs.filter(d=>d.sucursal===sucF);
+
+    // Aggregate by month
+    const data = {};
+    months.forEach(m=>{ data[m.key]={ventas:0,neto:0,gastos:0,dias:0,extraZ:0,fechas:new Set()}; });
+    docs.forEach(d=>{
+      const mk = d.fecha?String(d.fecha).substring(0,7):null;
+      if(mk && data[mk]) {
+        data[mk].ventas += d.totalVentas||0;
+        data[mk].neto   += d.totalNeto||0;
+        data[mk].gastos += d.totalGasto||0;
+        data[mk].extraZ += d.extraZ||0;
+        data[mk].fechas.add(d.fecha); // días distintos: con dos sucursales hay dos registros por día
+        data[mk].dias = data[mk].fechas.size;
+      }
+    });
+
+    const vals = months.map(m=>data[m.key]);
+    const maxV = Math.max(...vals.map(v=>v.ventas), 1);
+    const fmt = n => n>=1000000 ? (n/1000000).toFixed(1)+'M' : n>=1000 ? Math.round(n/1000)+'K' : n.toString();
+    const fmtFull = n => '$'+Math.round(n).toLocaleString('es-AR');
+
+    // Calculate month-over-month changes
+    const pct = (curr, prev) => prev>0 ? ((curr-prev)/prev*100).toFixed(1) : null;
+
+    // Build bar chart HTML
+    const bars = months.map((m,i)=>{
+      const v = vals[i];
+      const hV = v.ventas>0 ? Math.max(8, Math.round((v.ventas/maxV)*140)) : 4;
+      const hN = v.neto>0 ? Math.max(4, Math.round((v.neto/maxV)*140)) : 2;
+      const chg = i>0 ? pct(v.ventas, vals[i-1].ventas) : null;
+      const chgColor = chg===null?'#8A929A':parseFloat(chg)>=0?'#2F6B4F':'#C33039';
+      const chgTxt = chg===null?'':parseFloat(chg)>=0?'▲'+chg+'%':'▼'+Math.abs(chg)+'%';
+      return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;gap:3px">
+        <div style="font-size:9px;color:${chgColor};font-weight:700;height:14px;display:flex;align-items:center">${chgTxt}</div>
+        <div style="width:100%;display:flex;gap:2px;align-items:flex-end;height:140px">
+          <div style="flex:1;background:#A4232A;border-radius:3px 3px 0 0;height:${hV}px;opacity:0.85;transition:height .4s;min-height:2px" title="${fmtFull(v.ventas)}"></div>
+          <div style="flex:1;background:#2F6B4F;border-radius:3px 3px 0 0;height:${hN}px;opacity:0.85;transition:height .4s;min-height:2px" title="${fmtFull(v.neto)}"></div>
+        </div>
+        <div style="font-size:9px;color:#5C666F;text-align:center;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.label}</div>
+        <div style="font-size:9px;color:#A4232A;font-weight:700">${fmt(v.ventas)}</div>
+      </div>`;
+    }).join('');
+
+    // Best/worst month
+    const sorted = [...months].map((m,i)=>({...m,...vals[i]})).filter(m=>m.dias>0).sort((a,b)=>b.ventas-a.ventas);
+    const best = sorted[0], worst = sorted[sorted.length-1];
+
+    // Totals
+    const totalV = vals.reduce((s,v)=>s+v.ventas,0);
+    const totalN = vals.reduce((s,v)=>s+v.neto,0);
+    const totalG = vals.reduce((s,v)=>s+v.gastos,0);
+    const promMes = totalV / months.filter((_,i)=>vals[i].dias>0).length || 0;
+
+    // Monthly detail table rows
+    const tableRows = months.map((m,i)=>{
+      const v = vals[i];
+      const chg = i>0 ? pct(v.ventas, vals[i-1].ventas) : null;
+      const chgHtml = chg===null?'<span style="color:#8A929A">—</span>':parseFloat(chg)>=0
+        ?`<span style="color:#2F6B4F;font-weight:700">▲${chg}%</span>`
+        :`<span style="color:#C33039;font-weight:700">▼${Math.abs(chg)}%</span>`;
+      return `<tr style="border-bottom:1px solid #EDEEF0">
+        <td style="padding:8px 10px;font-weight:600">${m.label.toUpperCase()}</td>
+        <td style="padding:8px 10px;text-align:right;color:#A4232A;font-weight:700">${v.dias>0?fmtFull(v.ventas):'—'}</td>
+        <td style="padding:8px 10px;text-align:right;color:#2F6B4F;font-weight:700">${v.dias>0?fmtFull(v.neto):'—'}</td>
+        <td style="padding:8px 10px;text-align:right;color:#C33039">${v.dias>0?fmtFull(v.gastos):'—'}</td>
+        <td style="padding:8px 10px;text-align:right">${chgHtml}</td>
+        <td style="padding:8px 10px;text-align:right;color:#79828B;font-size:12px">${v.dias>0?v.dias+'d':'—'}</td>
+      </tr>`;
+    }).join('');
+
+    c.innerHTML = `
+      <!-- KPIs -->
+      <div class="kpi-grid" style="margin-bottom:16px">
+        <div class="kpi"><div class="kpi-lbl">TOTAL ${nMeses}M</div><div class="kpi-val accent">${fmtFull(totalV)}</div></div>
+        <div class="kpi"><div class="kpi-lbl">NETO ${nMeses}M</div><div class="kpi-val green">${fmtFull(totalN)}</div></div>
+        <div class="kpi"><div class="kpi-lbl">PROM/MES</div><div class="kpi-val">${fmtFull(promMes)}</div></div>
+        <div class="kpi"><div class="kpi-lbl">GASTOS ${nMeses}M</div><div class="kpi-val red">${fmtFull(totalG)}</div></div>
+      </div>
+
+      <!-- Highlights -->
+      ${sorted.length>=2?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+        <div class="card" style="padding:12px;text-align:center">
+          <div style="font-size:11px;color:#79828B;text-transform:uppercase;letter-spacing:.5px">🏆 Mejor mes</div>
+          <div style="font-weight:900;font-size:15px;color:#2F6B4F;margin-top:4px">${best.label.toUpperCase()}</div>
+          <div style="font-size:13px;color:#262C32;margin-top:2px">${fmtFull(best.ventas)}</div>
+        </div>
+        <div class="card" style="padding:12px;text-align:center">
+          <div style="font-size:11px;color:#79828B;text-transform:uppercase;letter-spacing:.5px">📉 Menor mes</div>
+          <div style="font-weight:900;font-size:15px;color:#C33039;margin-top:4px">${worst.label.toUpperCase()}</div>
+          <div style="font-size:13px;color:#262C32;margin-top:2px">${fmtFull(worst.ventas)}</div>
+        </div>
+      </div>`:''}
+
+      <!-- Bar chart -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title"><span class="dot accent"></span>Ventas vs Neto por mes</div>
+        <div style="display:flex;gap:16px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#5C666F"><div style="width:10px;height:10px;background:#A4232A;border-radius:2px;opacity:.85"></div>Ventas</div>
+          <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#5C666F"><div style="width:10px;height:10px;background:#2F6B4F;border-radius:2px;opacity:.85"></div>Neto</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:flex-end;padding:0 4px">${bars}</div>
+      </div>
+
+      <!-- Monthly table -->
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>Detalle mensual</div>
+        <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="background:#2A333B;color:#fff">
+            <th style="padding:8px 10px;text-align:left;font-size:11px">Mes</th>
+            <th style="padding:8px 10px;text-align:right;font-size:11px">Ventas</th>
+            <th style="padding:8px 10px;text-align:right;font-size:11px">Neto</th>
+            <th style="padding:8px 10px;text-align:right;font-size:11px">Gastos</th>
+            <th style="padding:8px 10px;text-align:right;font-size:11px">Var.</th>
+            <th style="padding:8px 10px;text-align:right;font-size:11px">Días</th>
+          </tr></thead>
+          <tbody>${tableRows}</tbody>
+          <tfoot><tr style="background:#F7F8F9;font-weight:700">
+            <td style="padding:8px 10px">TOTAL</td>
+            <td style="padding:8px 10px;text-align:right;color:#A4232A">${fmtFull(totalV)}</td>
+            <td style="padding:8px 10px;text-align:right;color:#2F6B4F">${fmtFull(totalN)}</td>
+            <td style="padding:8px 10px;text-align:right;color:#C33039">${fmtFull(totalG)}</td>
+            <td colspan="2"></td>
+          </tfoot>
+        </table>
+        </div>
+      </div>`;
+  } catch(e) { console.error(e); if(seq===_seqComp) c.innerHTML=noCargoHtml('Error al cargar','loadComp'); }
+}
+
+// TOAST (el aviso propio de esta página quedaba tapado por la barra inferior: se usa el compartido)
+function toast(msg, isErr=false) {
+  SersaleUI.toast(msg, { tipo: isErr ? 'error' : 'ok' });
+}
+</script>
+
+<!-- MODAL EDICIÓN -->
+<div class="overlay" id="editOverlay">
+  <div class="modal" style="max-width:420px;width:95%;text-align:left;max-height:90vh;overflow-y:auto">
+    <h3 style="margin-bottom:4px">✏️ Editar registro</h3>
+    <p id="editSubtitle" style="font-size:13px;color:var(--muted);margin-bottom:16px"></p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="field"><label>Total Z</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="eZ" min="0"></div></div>
+      <div class="field"><label>Extra-Z</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="eExtraZ" min="0"></div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="field"><label>Efectivo</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="eEfec" min="0"></div></div>
+      <div class="field"><label>Tarjeta / Posnet</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="eTarj" min="0"></div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="field"><label>Transferencia</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="eMP" min="0"></div></div>
+      <div class="field"><label>Cheque / Otro</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="eOtro" min="0"></div></div>
+    </div>
+    <div style="height:1px;background:var(--border);margin:4px 0 12px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="field"><label style="color:#B5872F">💵 USD Oficial</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="eUsdOf" min="0" placeholder="0"></div></div>
+      <div class="field"><label style="color:#A8702A">💵 USD Blue</label><div class="pfx"><span>$</span><input type="text" inputmode="decimal" class="monto" id="eUsdBl" min="0" placeholder="0"></div></div>
+    </div>
+    <div style="height:1px;background:var(--border);margin:4px 0 12px"></div>
+    <div class="field" style="margin-bottom:12px">
+      <label>Observaciones</label>
+      <textarea id="eObs" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;resize:none;height:60px"></textarea>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button onclick="cerrarEdit()" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:14px;cursor:pointer">Cancelar</button>
+      <button onclick="guardarEdit()" id="btnEditSave" style="flex:1;padding:12px;border-radius:10px;border:none;background:#B5872F;color:#fff;font-weight:700;font-size:14px;cursor:pointer">Guardar</button>
+    </div>
+  </div>
+</div>
+
+
+
+
+  
+
+</body>
+</html>

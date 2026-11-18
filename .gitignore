@@ -1,0 +1,5 @@
+node_modules
+.netlify/
+.cache/
+.DS_Store
+.claude/

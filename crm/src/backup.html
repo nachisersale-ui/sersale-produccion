@@ -1,0 +1,246 @@
+<!DOCTYPE html><html lang="es"><head>
+<script src="js/sesion.js"></script>
+<script>
+  (function(){
+    var role = sessionStorage.getItem("sersale_role");
+    if (role === "director") return;
+    if (role === "operario") { window.location.href = "pedidos.html"; return; }
+    if (sessionStorage.getItem("sersale_auth") === "ok") return;
+    window.location.href = "index.html";
+  })();
+</script>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/base.js"></script>
+<script src="js/shell.js"></script>
+<title>Backup CRM — Frigorífico Sersale</title>
+<script src="vendor/firebase-app-compat.js"></script>
+<script src="vendor/firebase-firestore-compat.js"></script>
+<script src="js/fb-compat.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'IBM Plex Sans','Inter',sans-serif;background:#EDEEF0;min-height:100vh}
+.hdr{background:linear-gradient(135deg,#A8702A,#D35400);color:#fff;padding:18px 20px;text-align:center}
+.card{background:#fff;border-radius:16px;padding:24px;margin:16px;border:1px solid #D8DCE0;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+.btn{width:100%;padding:16px;border-radius:12px;border:none;font-weight:800;font-size:15px;cursor:pointer;font-family:'Inter';margin-top:12px}
+.btn-primary{background:linear-gradient(135deg,#A8702A,#D35400);color:#fff;box-shadow:0 4px 16px rgba(230,126,34,.4)}
+.btn-back{background:#F2F3F5;color:#5C666F}
+#status{text-align:center;padding:16px;font-size:13px;color:#79828B}
+</style><style>
+/* ── Capa visual compartida — Sersale ─────────────────────── */
+:root{
+  --carbon:#12161A; --lacre:#A4232A; --lacre-cl:#C33039;
+  --hueso:#EFEAE1;  --tinta:#191E23; --acero:#79828B; --linea:#D8DCE0;
+}
+body{ font-family:'IBM Plex Sans','Inter',system-ui,-apple-system,sans-serif;
+      -webkit-font-smoothing:antialiased; color:var(--tinta) }
+button,input,select,textarea{ font-family:inherit }
+
+/* Cartelería: la familia condensada solo en las chapas de cabecera */
+.chapa,.hdr-t,.header-sub,.card-title,.hdr-left h1{
+  font-family:'Barlow Condensed','IBM Plex Sans',sans-serif;
+  letter-spacing:.035em; font-size:1.06em;
+}
+.hdr-t,.hdr-left h1,.card-title{ text-transform:uppercase }
+
+/* Datos duros en monoespaciada tabular */
+.hdr-s,.mono,.dato{ font-family:'IBM Plex Mono',ui-monospace,monospace;
+      font-variant-numeric:tabular-nums; letter-spacing:.04em }
+
+/* Foco visible para teclado */
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+  outline:2px solid var(--lacre-cl); outline-offset:2px }
+::selection{ background:var(--lacre); color:var(--hueso) }
+
+/* Barras de desplazamiento discretas */
+*::-webkit-scrollbar{ width:9px; height:9px }
+*::-webkit-scrollbar-thumb{ background:#C4CAD1; border-radius:6px }
+*::-webkit-scrollbar-track{ background:transparent }
+
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important } }
+</style>
+</head><body>
+<div class="hdr"><h1 style="font-size:18px;font-weight:800">💾 Backup Excel del CRM</h1><p style="font-size:12px;opacity:.7;margin-top:4px">Frigorífico Sersale</p></div>
+<div class="card">
+<p style="font-size:14px;color:#555;line-height:1.6">Genera un archivo Excel (.xlsx) con <strong>toda la información del CRM</strong> organizada en hojas separadas:</p>
+<ul style="margin:12px 0;padding-left:20px;font-size:13px;color:#5C666F;line-height:2">
+<li>📦 Pedidos</li><li>📄 Remitos</li><li>👥 Clientes</li><li>💳 Cuentas Corrientes</li>
+<li>📒 Movimientos CC</li><li>💰 Ventas Diarias</li><li>🏭 Stock</li><li>🐖 Faenas</li>
+<li>🏷️ Lotes</li><li>💲 Precios por Cliente</li>
+<li>↩️ Devoluciones</li><li>📊 Movimientos de Stock</li><li>📝 Reportes de Producción</li>
+<li>🎄 Reservas de fin de año</li>
+</ul>
+<button class="btn btn-primary" id="btnBackup" onclick="generarBackup()">💾 Generar Backup Excel</button>
+<button class="btn btn-back" onclick="location.href='index.html'">← Volver al CRM</button>
+</div>
+<div id="status"></div>
+<script>
+var db;
+function estado_index(texto){document.getElementById('status').textContent=texto;}
+try{db=window.sersaleDbCompat();estado_index('✅ Conectado a Firebase');}catch(e){estado_index('❌ Error: '+e.message);}
+
+// Siempre del servidor. Sin señal, get() a secas contesta con una lista vacía
+// (esta página no guarda copia en el teléfono) y el backup salía en blanco,
+// con el cartel de "Backup generado".
+function fbGet(p){return db.collection(p).get({source:'server'}).then(function(s){return s.docs.map(function(d){return{id:d.id,data:d.data()};});});}
+
+// Colecciones que entran en el backup (todas las que usa el CRM, menos usuarios y configuración).
+var COLECCIONES_index=['pedidos','remitos','clientes','cuentas_corrientes','cc_movimientos','devoluciones','ventas_diarias','stock_produccion','stock_movimientos','reportes','faenas','trazabilidad_lotes','precios_cliente','reservas'];
+
+// Lo que va a una celda: texto o número. Una fecha guardada como Timestamp sale
+// como día y hora de Buenos Aires; cualquier otro objeto, como texto.
+function celda_index(v){
+  if(v==null)return '';
+  if(typeof v==='number')return isFinite(v)?v:'';
+  if(typeof v==='string'||typeof v==='boolean')return v;
+  if(v instanceof Date||typeof v.toDate==='function'||typeof v.seconds==='number'){var d=SersaleBase.diaDe(v);return d?d+' '+SersaleBase.fmtHora(v):'';}
+  try{return JSON.stringify(v);}catch(e){return String(v);}
+}
+function lista_index(v){return Array.isArray(v)?v:[];}
+// Día (AAAA-MM-DD, Buenos Aires) del primer valor que sea una fecha válida.
+function dia_index(){for(var i=0;i<arguments.length;i++){var d=SersaleBase.diaDe(arguments[i]);if(d)return d;}return '';}
+function momento_index(){for(var i=0;i<arguments.length;i++){var f=SersaleBase.aFecha(arguments[i]);if(f)return f.getTime();}return 0;}
+// Kg que se facturan de un ítem: lo pesado (aunque sea 0) o, si no se pesó, lo pedido. Igual que el remito.
+function kgItem_index(it){if(it.kgReal!=null&&it.kgReal!=='')return Number(it.kgReal)||0;return parseFloat(it.cantidad)||0;}
+
+// Reservas es una colección nueva: si las reglas de la base todavía no la habilitan
+// (permission-denied), el backup de todo lo demás se genera igual y se avisa bien claro.
+// Antes, por esa sola colección no se generaba ningún archivo. Cualquier otro error
+// (sin señal, lectura cortada) sigue frenando el backup, como en el resto.
+var reservasSinPermiso_index=false;
+function leerColeccion_index(n){
+  if(n!=='reservas')return fbGet(n);
+  reservasSinPermiso_index=false;
+  return fbGet(n).catch(function(e){if(e&&e.code==='permission-denied'){console.error('Backup: la base no permite leer las reservas',e);reservasSinPermiso_index=true;return [];}throw e;});
+}
+
+// Cada intento prueba la conexión de cero: si el anterior falló, Firestore queda un rato en
+// "sin conexión" y contestaría que no hay señal sin volver a probar.
+async function reiniciarRed_index(){try{await db.disableNetwork();await db.enableNetwork();}catch(e){console.warn(e);}}
+
+// Lee del servidor todas las colecciones del backup y avisa el avance. Con `limite` (ms): si
+// pasa ese tiempo sin que termine ninguna, falla con `trabada = true`. Sin límite, espera.
+function leerTodo_index(alAvanzar,limite){
+  return new Promise(function(ok,mal){
+    var hechas=0,fin=false,reloj=null;
+    function cerrar(fn,v){if(fin)return;fin=true;clearTimeout(reloj);fn(v);}
+    function vigilar(){if(!limite)return;clearTimeout(reloj);reloj=setTimeout(function(){var e=new Error('La lectura quedó trabada');e.trabada=true;cerrar(mal,e);},limite);}
+    vigilar();
+    Promise.all(COLECCIONES_index.map(function(n){return leerColeccion_index(n).then(function(r){hechas++;if(!fin){vigilar();alAvanzar(hechas);}return r;});}))
+      .then(function(r){cerrar(ok,r);},function(e){cerrar(mal,e);});
+  });
+}
+
+var generando_index=false;
+async function generarBackup(){
+  if(generando_index)return; // doble toque: un solo archivo
+  var btn=document.getElementById('btnBackup');
+  function fallo(texto,e){if(e)console.error(e);estado_index('❌ '+texto);SersaleUI.toast(texto,{tipo:'error'});}
+  if(navigator.onLine===false){fallo('Sin conexión: el backup se arma con los datos del servidor. No se generó ningún archivo.');return;}
+  generando_index=true;btn.disabled=true;btn.style.opacity='.6';
+  estado_index('⏳ Leyendo los datos del servidor...');
+  try{
+    // 1) Se lee todo antes de armar nada: si una colección no se pudo leer no hay
+    //    archivo (antes esa hoja se salteaba en silencio y el backup quedaba incompleto).
+    var base={};
+    try{
+      var avance=function(n){estado_index('⏳ Leyendo los datos del servidor... ('+n+' de '+COLECCIONES_index.length+')');};
+      var listas;
+      try{
+        await reiniciarRed_index();
+        listas=await leerTodo_index(avance,45000);
+      }catch(e){
+        if(!e||!e.trabada)throw e;
+        // Se vio a Firestore dejar una lectura colgada para siempre cuando la conexión vuelve
+        // justo en ese momento. Se reinicia la conexión y se lee todo de nuevo, ya sin límite
+        // (puede ser simplemente una conexión lenta).
+        console.warn('Backup: la lectura quedó trabada; se reintenta.');
+        estado_index('⏳ La lectura quedó trabada. Reintentando...');
+        await reiniciarRed_index();
+        listas=await leerTodo_index(avance,0);
+      }
+      COLECCIONES_index.forEach(function(n,i){base[n]=listas[i];});
+    }catch(e){
+      fallo('No se pudo leer la base. No se generó ningún archivo: probá de nuevo cuando haya señal.',e);
+      return;
+    }
+    estado_index('⏳ Armando el Excel...');
+    var wb=XLSX.utils.book_new();
+    var hoyDia=SersaleBase.hoy(); // día de Buenos Aires (con toISOString, después de las 21 ya era "mañana")
+    var fechaStr=SersaleBase.fmtFecha(hoyDia)+' '+SersaleBase.fmtHora(new Date());
+    var conteos={};
+    var conError=0;
+    // Una fila por documento (o varias, con `varias`). Un registro con un formato
+    // inesperado no tira abajo su hoja: queda anotado en su fila y se avisa al final.
+    function filas(docs,fn,varias){
+      var out=[];
+      docs.forEach(function(d){
+        try{var r=fn(d);if(varias)r.forEach(function(x){out.push(x);});else out.push(r);}
+        catch(e){conError++;console.error('Backup: registro '+d.id,e);out.push([d.id,'⚠ No se pudo leer este registro: '+(e&&e.message||e)]);}
+      });
+      return out;
+    }
+    function crearHoja(nombre,titulo,headers,datos){
+      datos=datos.map(function(row){return row.map(celda_index);});
+      var ws=XLSX.utils.aoa_to_sheet([]);
+      XLSX.utils.sheet_add_aoa(ws,[[titulo]],{origin:'A1'});
+      XLSX.utils.sheet_add_aoa(ws,[['Generado: '+fechaStr]],{origin:'A2'});
+      XLSX.utils.sheet_add_aoa(ws,[headers],{origin:'A4'});
+      if(datos.length)XLSX.utils.sheet_add_aoa(ws,datos,{origin:'A5'});
+      ws['!cols']=headers.map(function(h,i){var max=h.length;datos.forEach(function(row){if(row[i]!=null)max=Math.max(max,String(row[i]).length);});return{wch:Math.min(Math.max(max+2,12),40)};});
+      ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:Math.min(headers.length-1,5)}}];
+      XLSX.utils.book_append_sheet(wb,ws,nombre);
+      return datos.length;
+    }
+    // Pedidos: del más nuevo al más viejo. El orden se arma acá y no con orderBy('fechaPedido'),
+    // que deja afuera los pedidos que no tienen ese campo.
+    var pedidos=base.pedidos.slice().sort(function(a,b){return momento_index(b.data.fechaPedidoISO,b.data.fechaPedido,b.data.fechaEntrega)-momento_index(a.data.fechaPedidoISO,a.data.fechaPedido,a.data.fechaEntrega);});
+    conteos.Pedidos=crearHoja('Pedidos','PEDIDOS',['ID','Cliente','Tipo','Estado','Fecha Pedido','Fecha Entrega','CC','Productos','Cantidades','Precios','Total','Obs'],
+      filas(pedidos,function(d){var p=d.data;var fp=dia_index(p.fechaPedidoISO,p.fechaPedido);var items=lista_index(p.items);var total=items.reduce(function(s,it){return s+(kgItem_index(it)*(parseFloat(it.precio)||0));},0);return[d.id,p.cliente||'',p.tipo||'',p.estado||'',fp,p.fechaEntrega||'',p.cuentaCorriente?'SI':'NO',items.map(function(it){return it.producto;}).join(', '),items.map(function(it){return it.cantidad;}).join(', '),items.map(function(it){return it.precio?'$'+it.precio:'-';}).join(', '),total>0?Math.round(total):'-',p.obs||''];}));
+    conteos.Remitos=crearHoja('Remitos','REMITOS',['ID','Nro','Cliente','Fecha','Productos','Kg','Precios','Total'],filas(base.remitos,function(d){var r=d.data;var it=lista_index(r.items);return[d.id,r.nro||r.nroRemito||'',r.cliente||'',r.fecha||'',it.map(function(x){return x.producto;}).join(', '),it.map(function(x){return x.kg||x.kgReal||x.cantidad;}).join(', '),it.map(function(x){return '$'+(x.precio||0);}).join(', '),r.total||0];}));
+    conteos.Clientes=crearHoja('Clientes','CLIENTES',['ID','Nombre','Teléfono','Días Alerta','Dirección','Email'],filas(base.clientes,function(d){var c=d.data;return[d.id,c.nombre||'',c.telefono||'',c.diasAlerta||14,c.direccion||'',c.email||''];}));
+    conteos['CC Saldos']=crearHoja('CC Saldos','CUENTAS CORRIENTES',['ID','Cliente','Saldo ($)','Último Mov'],filas(base.cuentas_corrientes,function(d){var c=d.data;return[d.id,c.nombre||'',c.saldo||0,c.ultimoMovimiento||''];}));
+    conteos['CC Mov']=crearHoja('CC Movimientos','MOVIMIENTOS CC',['ID','Cliente','Tipo','Monto ($)','Fecha','Detalle','Obs','Origen'],filas(base.cc_movimientos,function(d){var m=d.data;return[d.id,m.cliente||'',m.tipo||'',m.monto||0,m.fecha||'',m.detalle||'',m.obs||'',m.origen||''];}));
+    // Campos reales de ventas_diarias: totalZ, cobEfec/cobTarj/cobMP/cobOtro, extraZ, gastos[], totalGasto, totalCobros, totalVentas, totalNeto, obs
+    conteos.Ventas=crearHoja('Ventas Diarias','VENTAS DIARIAS',['ID','Fecha','Sucursal','Ticket Z','Efectivo','Tarjeta','Mercado Pago','Otro','Extra Z','Total Cobros','Total Ventas','Gastos','Neto','Detalle gastos','Obs'],filas(base.ventas_diarias,function(d){var v=d.data;var gs=lista_index(v.gastos);var ef=parseFloat(v.cobEfec)||0,ta=parseFloat(v.cobTarj)||0,mp=parseFloat(v.cobMP)||0,ot=parseFloat(v.cobOtro)||0;var ga=v.totalGasto!=null?(parseFloat(v.totalGasto)||0):gs.reduce(function(s,g){return s+(parseFloat(g.monto)||0);},0);var tz=parseFloat(v.totalZ)||0,ex=parseFloat(v.extraZ)||0;var tv=v.totalVentas!=null?(parseFloat(v.totalVentas)||0):tz+ex;var tc=v.totalCobros!=null?(parseFloat(v.totalCobros)||0):ef+ta+mp+ot;var det=gs.map(function(g){return (g.desc||'')+' $'+(g.monto||0);}).join(', ');return[d.id,v.fecha||'',v.sucursal||'',tz,ef,ta,mp,ot,ex,tc,tv,ga,v.totalNeto!=null?(parseFloat(v.totalNeto)||0):tv-ga,det,v.obs||''];}));
+    // La colección de stock es stock_produccion (no 'produccion')
+    conteos.Stock=crearHoja('Stock','STOCK PRODUCCIÓN',['ID','Producto','Categoría','Cantidad','Unidad','Mínimo','Estado'],filas(base.stock_produccion,function(d){var p=d.data;var cant=parseFloat(p.cantidad)||0,min=parseFloat(p.minimo)||0;return[d.id,p.nombre||'',p.categoria||'',p.cantidad||0,p.unidad||'',p.minimo||'-',(min&&cant<min)?'BAJO':'OK'];}));
+    conteos.Faenas=crearHoja('Faenas','FAENAS',['ID','Fecha','Tipo','Cabezas','Peso Total','Peso Prom','Obs'],filas(base.faenas,function(d){var f=d.data;return[d.id,dia_index(f.fecha)||f.fecha||'',f.tipo||'',f.cantidad||0,f.pesoTotal||0,f.pesoPromedio||0,f.obs||''];}));
+    // La colección real es trazabilidad_lotes: nroLote, fechaElab, fechaVenc, operario, productos[], materiasPrimas[]. Una fila por producto del lote.
+    conteos.Lotes=crearHoja('Lotes','LOTES DE TRAZABILIDAD',['ID','Nro Lote','Elaboración','Vencimiento','Operario','Producto','Cantidad','Unidad','Materias primas','Obs'],filas(base.trazabilidad_lotes,function(d){var l=d.data;var prods=lista_index(l.productos).length?l.productos:[{}];var mp=lista_index(l.materiasPrimas).map(function(m){return [m.tipo,m.corte,m.proveedor,(m.kg!=null?m.kg+'kg':'')].filter(Boolean).join(' ');}).join(' | ');return prods.map(function(pr){return[d.id,l.nroLote||'',l.fechaElab||'',l.fechaVenc||'',l.operario||'',pr.nombre||'-',pr.cantidad!=null?pr.cantidad:'-',pr.unidad||'',mp,l.obs||''];});},true));
+    conteos.Precios=crearHoja('Precios','PRECIOS POR CLIENTE',['ID','Cliente','Producto','Precio ($)'],filas(base.precios_cliente,function(d){var pc=d.data;return[d.id,pc.cliente||'',pc.producto||'',pc.precio||0];}));
+    // Estas tres colecciones no entraban en el backup.
+    conteos.Devoluciones=crearHoja('Devoluciones','DEVOLUCIONES',['ID','Fecha','Cliente','Producto','Cantidad','Unidad','Motivo','Descripción','Pedido original','Monto ($)','Estado'],filas(base.devoluciones,function(d){var v=d.data;return[d.id,dia_index(v.fecha,v.createdAt),v.cliente||'',v.producto||'',v.cantidad!=null?v.cantidad:'',v.unidad||'',v.motivo||'',v.descripcion||'',v.fechaPedidoOrig||'',v.monto||0,v.estado||''];}));
+    var movsStock=base.stock_movimientos.slice().sort(function(a,b){return momento_index(b.data.createdAt,b.data.fecha)-momento_index(a.data.createdAt,a.data.fecha);});
+    conteos['Stock Mov']=crearHoja('Stock Movimientos','MOVIMIENTOS DE STOCK',['ID','Fecha','Producto','Tipo','Subtipo','Cantidad','Unidad','Destino','Encargado','Reporte','Obs'],filas(movsStock,function(d){var m=d.data;return[d.id,dia_index(m.fecha,m.createdAt),m.nombre||'',m.tipo||'',m.subtipo||'',m.cantidad!=null?m.cantidad:'',m.unidad||'',m.destino||'',m.encargado||'',m.ref||'',m.obs||''];}));
+    var reportes=base.reportes.slice().sort(function(a,b){return momento_index(b.data.fechaISO,b.data.fecha)-momento_index(a.data.fechaISO,a.data.fecha);});
+    conteos.Reportes=crearHoja('Reportes Producción','REPORTES DE PRODUCCIÓN',['ID','Fecha','Área','Encargado','Producto','Cantidad','Unidad','Obs ítem','Obs'],filas(reportes,function(d){var r=d.data;var its=lista_index(r.items).length?r.items:[{}];var f=dia_index(r.fechaISO,r.fecha);return its.map(function(it){return[d.id,f,r.area||'',r.encargado||'',it.producto||'-',it.cantidad!=null?it.cantidad:'',it.unidad||'',it.obs||'',r.obs||''];});},true));
+    // Reservas: por fecha del pedido y, en el mismo día, en el orden en que se cargaron (como en la pantalla).
+    // El total y el resto se calculan con "Kg" (el mínimo del rango). Con rango, una seña mayor que ese
+    // total es válida (cubre hasta el tope): resta 0, no un importe negativo.
+    var reservas=base.reservas.slice().sort(function(a,b){return String(a.data.fechaReserva||'').localeCompare(String(b.data.fechaReserva||''))||String(a.data.creadoEn||'').localeCompare(String(b.data.creadoEn||''));});
+    conteos.Reservas=crearHoja('Reservas','RESERVAS DE FIN DE AÑO'+(reservasSinPermiso_index?' — ⚠ NO SE PUDIERON LEER: la base de datos no lo permite':''),['ID','Fecha del pedido','Cliente','Contacto','Ítem','Kg','Kg hasta','Precio por kg ($)','Total estimado ($)','Seña ($)','Resta cobrar ($)','Fecha de retiro','Estado','Observaciones'],filas(reservas,function(d){var v=d.data;var kg=Number(v.kg)||0,ha=Number(v.kgHasta)||0,pr=Number(v.precioKg)||0,se=Number(v.sena)||0;var tot=kg>0&&pr>0?Math.round(kg*pr):'';return[d.id,v.fechaReserva||'',v.cliente||'',v.contacto||'',v.item||'',kg,ha>kg?ha:'',pr||'',tot,se,tot===''?'':ha>kg?Math.max(0,tot-se):tot-se,v.fechaRetiro||'',v.estado||'',v.obs||''];}));
+    var wsRes=XLSX.utils.aoa_to_sheet([]);
+    XLSX.utils.sheet_add_aoa(wsRes,[['BACKUP CRM — FRIGORÍFICO SERSALE'],['CUIT 30-70227633-7'],[],['Fecha:',fechaStr],[],['MÓDULO','REGISTROS']],{origin:'A1'});
+    var fila=7;Object.entries(conteos).forEach(function(e){XLSX.utils.sheet_add_aoa(wsRes,[[e[0],e[1]]],{origin:'A'+fila});fila++;});
+    wsRes['!cols']=[{wch:28},{wch:14}];
+    wb.SheetNames.unshift('Resumen');wb.Sheets['Resumen']=wsRes;
+    var archivo='Backup_CRM_Sersale_'+hoyDia+'.xlsx';
+    XLSX.writeFile(wb,archivo);
+    var total=Object.keys(conteos).reduce(function(s,k){return s+conteos[k];},0);
+    estado_index('✅ Backup generado: '+archivo+' ('+total+' registros)'+(conError?' · ⚠️ '+conError+' registro'+(conError===1?'':'s')+' con formato inesperado: figuran con ⚠ en su hoja':''));
+    if(conError)SersaleUI.toast(conError+' registro'+(conError===1?'':'s')+' no se pudieron leer bien. Revisá las filas con ⚠ en el Excel.',{tipo:'error'});
+    if(reservasSinPermiso_index){document.getElementById('status').textContent+=' · ⚠️ SIN las reservas de fin de año: la base de datos no permite leerlas. Avisá para que se habilite.';SersaleUI.toast('El backup salió sin las reservas de fin de año: la base de datos no permite leerlas.',{tipo:'error'});}
+  }catch(e){fallo('No se pudo generar el backup: '+(e&&e.message||e),e);}
+  finally{generando_index=false;btn.disabled=false;btn.style.opacity='';}
+}
+</script></body></html>

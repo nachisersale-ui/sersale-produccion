@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<script src="js/sesion.js"></script>
+<script>
+  (function(){
+    var role = sessionStorage.getItem("sersale_role");
+    if (role === "director") return;
+    if (role === "operario") { window.location.href = "pedidos.html"; return; }
+    if (sessionStorage.getItem("sersale_auth") === "ok") return;
+    window.location.href = "index.html";
+  })();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/base.js"></script>
+<script src="js/shell.js"></script>
+<title>Dashboard — Frigorífico Sersale</title>
+<script src="vendor/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'IBM Plex Sans','Inter',sans-serif}
+:root{--rojo:#A4232A;--rojo-osc:#7E1A20;--verde:#24523D;--azul:#1E4257;--fondo:#EDEEF0;--card:#fff;--borde:#D8DCE0}
+body{background:var(--fondo);min-height:100vh}
+.hdr{background:#12161A;border-bottom:2px solid #A4232A;color:#EFEAE1;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 6px 22px rgba(18,22,26,.28);position:sticky;top:0;z-index:100}
+.hdr-left h1{font-size:20px;font-weight:800}.hdr-left p{font-size:11px;opacity:.8;margin-top:2px}
+.mes-sel{display:flex;align-items:center;gap:8px}
+.mes-sel select{padding:6px 10px;border-radius:8px;border:none;font-size:13px;font-family:'IBM Plex Sans','Inter',sans-serif;background:rgba(255,255,255,0.2);color:#fff;cursor:pointer}
+.mes-sel select option{color:#262C32;background:#fff}
+.btn-refresh{padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.4);background:rgba(255,255,255,0.15);color:#fff;font-weight:700;font-size:12px;cursor:pointer;font-family:'IBM Plex Sans','Inter',sans-serif}
+
+.con{max-width:1200px;margin:0 auto;padding:24px 20px 60px}
+
+/* KPI Cards */
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+.kpi{background:var(--card);border-radius:16px;padding:20px;border:1px solid var(--borde);box-shadow:0 2px 8px rgba(0,0,0,.05);position:relative;overflow:hidden}
+.kpi::before{content:'';position:absolute;top:0;left:0;width:4px;height:100%;background:var(--accent,var(--rojo))}
+.kpi-icon{font-size:28px;margin-bottom:8px}
+.kpi-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#79828B;margin-bottom:4px}
+.kpi-valor{font-size:26px;font-weight:900;color:#111;line-height:1}
+.kpi-sub{font-size:11px;color:#A3ABB3;margin-top:6px}
+.kpi-badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;margin-top:4px}
+.badge-up{background:#DDE9E2;color:#24523D}
+.badge-down{background:#F7EAEA;color:#A4232A}
+.badge-neu{background:#EDEEF0;color:#5C666F}
+
+/* Grids */
+.row{display:grid;gap:16px;margin-bottom:24px}
+.row-2{grid-template-columns:1fr 1fr}
+.row-3{grid-template-columns:2fr 1fr}
+.row-full{grid-template-columns:minmax(0,1fr)}
+
+/* min-width:0 y minmax(0,1fr): una tabla ancha se desliza dentro de su tarjeta en vez de ensanchar toda la página */
+.card{background:var(--card);border-radius:16px;padding:20px;border:1px solid var(--borde);box-shadow:0 2px 8px rgba(0,0,0,.05);min-width:0}
+.card-scroll{max-height:420px;overflow-y:auto;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:-4px}
+.card-scroll::-webkit-scrollbar{width:4px}
+.card-scroll::-webkit-scrollbar-track{background:#F2F3F5;border-radius:2px}
+.card-scroll::-webkit-scrollbar-thumb{background:#D8DCE0;border-radius:2px}
+.card-title{font-size:13px;font-weight:800;color:#262C32;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between}
+.card-title span{font-size:11px;font-weight:500;color:#A3ABB3}
+canvas{max-height:220px !important}
+.chart-wrap{position:relative;height:220px;width:100%}
+
+/* Tabla clientes */
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:#79828B;padding:6px 10px;border-bottom:2px solid var(--borde);text-align:left}
+.tbl td{padding:10px;border-bottom:1px solid #F2F3F5;font-size:13px;vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:#F7F8F9}
+.rank{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;background:#EDEEF0;color:#555}
+.rank.gold{background:#F3EEE2;color:#A8702A}
+.rank.silver{background:#EDEEF0;color:#5C666F}
+.rank.bronze{background:#F0E7D9;color:#96601F}
+.pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700}
+.pill-red{background:#F7EAEA;color:#A4232A}
+.pill-green{background:#DDE9E2;color:#24523D}
+.pill-blue{background:#DCE5EB;color:#1E4257}
+
+/* Margen barras */
+.margen-bar{height:6px;border-radius:3px;background:#EDEEF0;overflow:hidden;margin-top:4px}
+.margen-fill{height:100%;border-radius:3px;transition:width .3s}
+
+/* Loading */
+.loading{display:flex;align-items:center;justify-content:center;height:200px;color:#A3ABB3;font-size:14px;gap:8px}
+.spinner{width:20px;height:20px;border:3px solid #D8DCE0;border-top-color:var(--rojo);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* CC semaforo */
+.cc-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #F2F3F5}
+.cc-row:last-child{border-bottom:none}
+.cc-nombre{font-size:13px;font-weight:600;color:#111}
+.cc-saldo{font-size:13px;font-weight:800}
+.cc-saldo.alto{color:#A4232A}
+.cc-saldo.medio{color:#A8702A}
+.cc-saldo.ok{color:#24523D}
+
+@media(max-width:900px){
+  .kpi-grid{grid-template-columns:1fr 1fr 1fr}
+  .row-2,.row-3{grid-template-columns:minmax(0,1fr)}
+}
+/* Teléfono: el encabezado va en dos renglones (título arriba, mes y botones abajo) para que "Reporte" no quede fuera de la pantalla */
+@media(max-width:600px){
+  .hdr{flex-wrap:wrap;gap:10px;padding:10px 12px}
+  .hdr-left{flex:1 1 100%;min-width:0}
+  .mes-sel{flex:1 1 100%}
+  .mes-sel select{flex:1 1 auto;min-width:0;min-height:44px;font-size:16px}
+  .btn-refresh{min-height:44px;min-width:44px;font-size:14px;white-space:nowrap}
+}
+@media(max-width:500px){
+  .kpi-grid{grid-template-columns:1fr}
+  .con{padding:16px 12px 60px}
+}
+
+    :root { --app-max-w: 480px; }
+    @media (min-width: 768px) { :root { --app-max-w: 860px; } }
+    @media (min-width: 1200px) { :root { --app-max-w: 960px; } }
+    .crm-page { min-height:100vh; background:#F2F3F5; max-width:var(--app-max-w); margin:0 auto; }
+</style>
+
+<style>
+/* ── Capa visual compartida — Sersale ─────────────────────── */
+:root{
+  --carbon:#12161A; --lacre:#A4232A; --lacre-cl:#C33039;
+  --hueso:#EFEAE1;  --tinta:#191E23; --acero:#79828B; --linea:#D8DCE0;
+}
+body{ font-family:'IBM Plex Sans','Inter',system-ui,-apple-system,sans-serif;
+      -webkit-font-smoothing:antialiased; color:var(--tinta) }
+button,input,select,textarea{ font-family:inherit }
+
+/* Cartelería: la familia condensada solo en las chapas de cabecera */
+.chapa,.hdr-t,.header-sub,.card-title,.hdr-left h1{
+  font-family:'Barlow Condensed','IBM Plex Sans',sans-serif;
+  letter-spacing:.035em; font-size:1.06em;
+}
+.hdr-t,.hdr-left h1,.card-title{ text-transform:uppercase }
+
+/* Datos duros en monoespaciada tabular */
+.hdr-s,.mono,.dato{ font-family:'IBM Plex Mono',ui-monospace,monospace;
+      font-variant-numeric:tabular-nums; letter-spacing:.04em }
+
+/* Foco visible para teclado */
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+  outline:2px solid var(--lacre-cl); outline-offset:2px }
+::selection{ background:var(--lacre); color:var(--hueso) }
+
+/* Barras de desplazamiento discretas */
+*::-webkit-scrollbar{ width:9px; height:9px }
+*::-webkit-scrollbar-thumb{ background:#C4CAD1; border-radius:6px }
+*::-webkit-scrollbar-track{ background:transparent }
+
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important } }
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div class="hdr-left" style="display:flex;align-items:center">
+    <img src="assets/logo.png" alt="Sersale" style="height:46px;width:auto;filter:drop-shadow(0 1px 4px rgba(0,0,0,0.5));margin-right:12px" />
+    <div>
+    <h1>📊 Dashboard Gerencial</h1>
+    <p>Frigorífico Sersale SRL · CUIT 30-70227633-7</p>
+    </div>
+  </div>
+  <div class="mes-sel">
+    <select id="sel-mes" onchange="cargarTodo()" aria-label="Mes"></select>
+    <button class="btn-refresh" id="btn-actualizar" onclick="cargarTodo()" aria-label="Actualizar">↻</button>
+    <button class="btn-refresh" onclick="abrirReporte()" style="background:rgba(255,255,255,0.3)">📄 Reporte</button>
+  </div>
+</div>
+
+<div class="con">
+
+  <!-- KPIs -->
+  <div class="kpi-grid">
+    <div class="kpi" style="--accent:#A4232A">
+      <div class="kpi-icon">💰</div>
+      <div class="kpi-label">Facturación del mes</div>
+      <div class="kpi-valor" id="k-fact">—</div>
+      <div class="kpi-sub" id="k-fact-sub">Cargando...</div>
+    </div>
+    <div class="kpi" style="--accent:#24523D">
+      <div class="kpi-icon">📦</div>
+      <div class="kpi-label">Pedidos del mes</div>
+      <div class="kpi-valor" id="k-pedidos">—</div>
+      <div class="kpi-sub" id="k-ped-sub">Cargando...</div>
+    </div>
+    <div class="kpi" style="--accent:#1E4257">
+      <div class="kpi-icon">👥</div>
+      <div class="kpi-label">Clientes activos</div>
+      <div class="kpi-valor" id="k-clientes">—</div>
+      <div class="kpi-sub" id="k-cli-sub">Cargando...</div>
+    </div>
+    <div class="kpi" style="--accent:#A8702A">
+      <div class="kpi-icon">💳</div>
+      <div class="kpi-label">Saldo CC total</div>
+      <div class="kpi-valor" id="k-cc">—</div>
+      <div class="kpi-sub" id="k-cc-sub">Cargando...</div>
+    </div>
+    <div class="kpi" style="--accent:#6B4E8E">
+      <div class="kpi-icon">🏪</div>
+      <div class="kpi-label">Ventas diarias (mes)</div>
+      <div class="kpi-valor" id="k-vd">—</div>
+      <div class="kpi-sub" id="k-vd-sub">Cargando...</div>
+    </div>
+    <div class="kpi" style="--accent:#1E4257">
+      <div class="kpi-icon">📊</div>
+      <div class="kpi-label">Facturación total combinada</div>
+      <div class="kpi-valor" id="k-total">—</div>
+      <div class="kpi-sub" id="k-total-sub">Pedidos + Ventas diarias</div>
+    </div>
+  </div>
+
+  <!-- Facturación + Pedidos por semana -->
+  <div class="row row-3">
+    <div class="card">
+      <div class="card-title">📈 Facturación mensual <span id="lbl-evol"></span></div>
+      <div class="chart-wrap"><canvas id="chart-fact"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">📅 Pedidos por día de semana</div>
+      <div class="chart-wrap"><canvas id="chart-dias"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Top clientes + CC en rojo -->
+  <div class="row row-2">
+    <div class="card">
+      <div class="card-title">🏆 Top 10 clientes del mes <span>por facturación</span></div>
+      <div class="card-scroll" id="tabla-clientes"><div class="loading"><div class="spinner"></div> Cargando...</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">🚨 Cuentas corrientes <span>saldo pendiente</span></div>
+      <div class="card-scroll" id="lista-cc"><div class="loading"><div class="spinner"></div> Cargando...</div></div>
+    </div>
+  </div>
+
+  <!-- Ranking rentabilidad por cliente -->
+  <div class="row row-full">
+    <div class="card">
+      <div class="card-title">💎 Ranking de rentabilidad por cliente <span>ganancia estimada según margen de producto</span></div>
+      <div class="card-scroll" id="tabla-rentabilidad"><div class="loading"><div class="spinner"></div> Cargando...</div></div>
+    </div>
+  </div>
+
+  <!-- Productos más vendidos + Margen por producto -->
+  <div class="row row-2">
+    <div class="card">
+      <div class="card-title">🥩 Productos más pedidos <span>unidades/kg del mes</span></div>
+      <div class="card-scroll" id="tabla-productos"><div class="loading"><div class="spinner"></div> Cargando...</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">📊 Margen por producto <span>según planilla de costos</span></div>
+      <div class="card-scroll" id="tabla-margenes"><div class="loading"><div class="spinner"></div> Cargando...</div></div>
+    </div>
+  </div>
+
+</div>
+
+<script type="module">
+import { db, collection, getDocs, query, where, doc, getDoc } from "./js/fb.js";
+
+const B = window.SersaleBase, UI = window.SersaleUI;
+const esc = B.esc;
+
+// Costos desde planilla
+const COSTO_PROD = {"Jamón Cocido Natural Sublime": 6057.07, "Jamón Cocido Especial Bajo Sodio": 5242.1, "Jamón Cocido de Pata": 4974.15, "Fiambre Cocido de Paleta de Cerdo": 4180.49, "Fiambre de Cerdo p/ Emparedados": 3563.7, "Panceta Ahumada": 30.88, "Panceta Salada": 1748.17, "Lomo Ahumado": 28638.22, "Lomo Tipo Suizo": 8714.45, "Salchichas de Viena": 1139.6, "Salchichas de Copetin": 1139.62, "Pechito Ahumado": 30.88, "Salamín Picado Fino": 2083.54, "Salamín Picado Grueso": 2368.45, "Sopresatta de Cerdo": 2083.54, "Chorizo Tipo Candelario": 2083.54, "Chorizo Tipo Cantimpalo": 2083.54, "Longaniza Tipo Española": 2083.54, "Longaniza Tipo Calabresa": 2083.54, "Longaniza T/ Calabresa Bastón": 2083.54, "Salame Tipo Milán": 1397.4, "Salame Tipo Español": 1397.4, "Salame Chacarero de Campo": 1397.4, "Chorizo Puro Cerdo": 722.88, "Chorizo Especial Vacuno/Cerdo": 722.14, "Chorizo Bombón": 722.14, "Chorizo Bombón Puro Cerdo": 722.88, "Morcilla Criolla": 996.95, "Morcilla Criolla Rosca": 996.95, "Morcilla Criolla Bombón": 996.95, "Morcilla Vasca": 1932.19, "Salchicha Fresca Parrillera": 841.43, "Mortadela Bocha": 10362.39, "Mortadela Bologna": 1038.24, "Mortadela Familiar": 1039.09, "Salchichón c/ Jamón": 1030.77, "Salchichón Primavera": 5499.06, "Salchichón c/ Jamón Familiar": 1031.63, "Salchichón Primavera Familiar": 5500.35};
+const COSTOS = [{"nombre": "Chorizo Fresco", "costo": 722.14, "precio": 5190, "margen_pct": 86.1}, {"nombre": "Chorizo Fresco Puro Cerdo", "costo": 722.88, "precio": 5990, "margen_pct": 87.9}, {"nombre": "Salchicha fresca parrillera", "costo": 841.43, "precio": 6590, "margen_pct": 87.2}, {"nombre": "Sublime", "costo": 6057.07, "precio": 11590, "margen_pct": 47.7}, {"nombre": "Especial", "costo": 5242.1, "precio": 8990, "margen_pct": 41.7}, {"nombre": "Jamón 1° JAM", "costo": 4974.15, "precio": 6990, "margen_pct": 28.8}, {"nombre": "Paleta 1°", "costo": 4180.49, "precio": 5990, "margen_pct": 30.2}, {"nombre": "Emparedados", "costo": 3563.7, "precio": 4990, "margen_pct": 28.6}, {"nombre": "Lomo Ahumado", "costo": 28638.22, "precio": 14990, "margen_pct": -91.0}, {"nombre": "Lomo Suizo", "costo": 8714.45, "precio": 18990, "margen_pct": 54.1}, {"nombre": "Matambre Arrollado Vacuno", "costo": 4818.71, "precio": 16900, "margen_pct": 71.5}, {"nombre": "Morcilla Vasca", "costo": 1932.19, "precio": 5990, "margen_pct": 67.7}, {"nombre": "Morcilla Criolla", "costo": 996.95, "precio": 4590, "margen_pct": 78.3}, {"nombre": "Mortadela Bologna", "costo": 1038.24, "precio": 5490, "margen_pct": 81.1}, {"nombre": "Mortadela Familiar", "costo": 1039.09, "precio": 5900, "margen_pct": 82.4}, {"nombre": "Mortadela Bocha", "costo": 10362.39, "precio": 5890, "margen_pct": -75.9}, {"nombre": "Leberwurst", "costo": 788.37, "precio": 2190, "margen_pct": 64.0}, {"nombre": "Panceta Ahumada", "costo": 30.88, "precio": 14990, "margen_pct": 99.8}, {"nombre": "Panceta Salada", "costo": 1748.17, "precio": 12990, "margen_pct": 86.5}, {"nombre": "Queso de Cerdo", "costo": 2457.23, "precio": 4990, "margen_pct": 50.8}, {"nombre": "Salame Milan", "costo": 1397.4, "precio": 14990, "margen_pct": 90.7}, {"nombre": "Salchicha Viena", "costo": 1139.6, "precio": 9990, "margen_pct": 88.6}, {"nombre": "Salchicha Viena Copetín", "costo": 1139.62, "precio": 11990, "margen_pct": 90.5}, {"nombre": "Salchichon con Jamon", "costo": 1030.77, "precio": 4900, "margen_pct": 79.0}, {"nombre": "Salchichon con Jamon Familiar", "costo": 1031.63, "precio": 5500, "margen_pct": 81.2}, {"nombre": "Salchichon Primavera", "costo": 5499.06, "precio": 4900, "margen_pct": -12.2}, {"nombre": "Salchichon Primavera Familiar", "costo": 5500.35, "precio": 5500, "margen_pct": -0.0}, {"nombre": "Seco s/rojo", "costo": 2368.45, "precio": 14990, "margen_pct": 84.2}, {"nombre": "Seco", "costo": 2083.54, "precio": 14990, "margen_pct": 86.1}];
+
+const DIAS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+const MESES_NOMBRE = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+let chartFact = null, chartDias = null;
+
+function fmt$(n){ return B.fmtMonto(n); }
+// Monto abreviado: "$840K", "$6,3M" (coma decimal, como el resto del sistema). 999.600 es "$1,0M", no "$1000K".
+function fmtK(n){
+  n = Number(n)||0;
+  const a = Math.abs(n), signo = n<0 ? '-' : '';
+  if(a>=999500) return signo+'$'+(a/1000000).toLocaleString('es-AR',{minimumFractionDigits:1,maximumFractionDigits:1})+'M';
+  if(a>=1000) return signo+'$'+Math.round(a/1000)+'K';
+  return fmt$(n);
+}
+
+// Lo que se factura de un ítem: precio × kilos pesados (o la cantidad pedida si
+// todavía no se pesó), igual que lo calcula el remito. Una sola cuenta para
+// todas las tarjetas, así no difieren entre sí.
+// Un ítem pesado en 0 kg ("no había") no se factura: el remito no lo cobra ni lo carga a la
+// cuenta corriente. (Los remitos de la versión anterior sí cobraban la cantidad pedida en ese
+// caso, y la dejaron anotada en sus kg: completarConRemito la toma de ahí.)
+function cantFact(it){
+  if(it.kgReal!=null && it.kgReal!=='') return parseFloat(it.kgReal)||0;
+  return parseFloat(it.cantidad)||0;
+}
+function factItem(it){ return (parseFloat(it.precio)||0) * cantFact(it); }
+function factPedido(p){ return (p.items||[]).reduce((s,it)=>s+factItem(it),0); }
+
+// Inicializar selector de meses (últimos 6)
+function initMeses(){
+  const sel = document.getElementById('sel-mes');
+  const [anioHoy, mesHoy] = B.hoy().split('-').map(Number); // hoy en Buenos Aires
+  for(let i=0;i<6;i++){
+    const d = new Date(anioHoy, mesHoy-1-i, 1);
+    const val = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = MESES_NOMBRE[d.getMonth()]+' '+d.getFullYear();
+    sel.appendChild(opt);
+  }
+}
+
+// Remito de cada pedido. Si un pedido tiene más de un remito (los duplicados que dejaba la
+// versión anterior), vale el último que se guardó. Corregir un remito también es guardarlo:
+// la corrección deja su fecha en updatedAt y no cambia createdAt.
+function remitoPorPedido(remitos){
+  const por = {};
+  const guardadoEn = r => String(r.updatedAt||r.createdAt||'');
+  remitos.forEach(r => {
+    if(!r.pedidoId) return;
+    const otro = por[r.pedidoId];
+    if(!otro || guardadoEn(r) >= guardadoEn(otro)) por[r.pedidoId] = r;
+  });
+  return por;
+}
+
+// Los pedidos comunes se guardan sin precio: el precio (y los kilos, si faltan) salen de su remito.
+function completarConRemito(pedidos, remitoDe){
+  pedidos.forEach(p => {
+    const rem = remitoDe[p.id];
+    if(!rem || !Array.isArray(rem.items)) return;
+    const remPrices = {};
+    rem.items.forEach(ri => { if(ri.precio>0) remPrices[ri.producto] = ri.precio; });
+    (p.items||[]).forEach(it => {
+      if((!it.precio || it.precio===0) && remPrices[it.producto]) {
+        it.precio = remPrices[it.producto];
+      }
+      if(!it.kgReal || it.kgReal===0) {
+        const ri = rem.items.find(x=>x.producto===it.producto);
+        if(ri && ri.kg>0) it.kgReal = ri.kg;
+      }
+    });
+  });
+}
+
+const KPI_IDS = ['k-fact','k-pedidos','k-clientes','k-cc','k-vd','k-total'];
+const KPI_SUB_IDS = ['k-fact-sub','k-ped-sub','k-cli-sub','k-cc-sub','k-vd-sub','k-total-sub'];
+const CAJA_IDS = ['tabla-clientes','lista-cc','tabla-rentabilidad','tabla-productos','tabla-margenes'];
+const SIN_CARGAR = '<div class="loading" style="height:80px">No se pudo cargar</div>';
+
+// Si la carga falla no se deja en pantalla nada del mes anterior como si fuera del elegido.
+function mostrarSinCargar(){
+  KPI_IDS.forEach(id => { document.getElementById(id).textContent = '—'; });
+  KPI_SUB_IDS.forEach(id => { document.getElementById(id).textContent = 'No se pudo cargar'; });
+  CAJA_IDS.forEach(id => { document.getElementById(id).innerHTML = SIN_CARGAR; });
+  if(chartFact){ chartFact.destroy(); chartFact=null; }
+  if(chartDias){ chartDias.destroy(); chartDias=null; }
+  document.getElementById('lbl-evol').textContent = '';
+}
+
+// Cada carga lleva su número: si la respuesta de una carga anterior llega tarde
+// (se cambió de mes mientras tanto), se descarta en vez de pisar la pantalla.
+let cargaNro = 0;
+
+window.cargarTodo = async function(){
+  const miCarga = ++cargaNro;
+  const vigente = () => miCarga === cargaNro;
+  const mes = document.getElementById('sel-mes').value;
+  const [anio, m] = mes.split('-').map(Number);
+
+  // Rango del mes
+  const desde = `${anio}-${String(m).padStart(2,'0')}-01`;
+  const hasta = `${anio}-${String(m).padStart(2,'0')}-${new Date(anio,m,0).getDate()}`;
+
+  // Mientras carga no hay datos para el reporte: así no se exporta un mes con los números de otro.
+  window._repData = { listo:false };
+  KPI_IDS.forEach(id => { document.getElementById(id).textContent = '...'; });
+  const btnActualizar = document.getElementById('btn-actualizar');
+  btnActualizar.disabled = true;
+
+  try {
+    // Mes anterior
+    const mAnt = m===1?12:m-1, aAnt = m===1?anio-1:anio;
+    const desdeAnt = `${aAnt}-${String(mAnt).padStart(2,'0')}-01`;
+    const diasMesAnt = new Date(aAnt,mAnt,0).getDate();
+    const hastaAnt = `${aAnt}-${String(mAnt).padStart(2,'0')}-${diasMesAnt}`;
+
+    // El remito lleva la fecha del día en que se hizo, que puede caer en otro mes
+    // que la entrega del pedido: se traen con margen para los dos meses que se muestran.
+    const desdeRem = B.sumarDias(desdeAnt, -45), hastaRem = B.sumarDias(hasta, 45);
+
+    // Cargar todo en paralelo
+    const [snapP, snapAnt, snapCC, snapCli, snapVD, snapVDAnt, snapRemitos] = await Promise.all([
+      getDocs(query(collection(db,'pedidos'),where('fechaEntrega','>=',desde),where('fechaEntrega','<=',hasta))),
+      getDocs(query(collection(db,'pedidos'),where('fechaEntrega','>=',desdeAnt),where('fechaEntrega','<=',hastaAnt))),
+      getDocs(collection(db,'cuentas_corrientes')),
+      getDocs(collection(db,'clientes')),
+      getDocs(query(collection(db,'ventas_diarias'),where('fecha','>=',desde),where('fecha','<=',hasta))),
+      getDocs(query(collection(db,'ventas_diarias'),where('fecha','>=',desdeAnt),where('fecha','<=',hastaAnt))),
+      getDocs(query(collection(db,'remitos'),where('fecha','>=',desdeRem),where('fecha','<=',hastaRem))),
+    ]);
+    if(!vigente()) return;
+
+    const todosMes = snapP.docs.map(d=>({id:d.id,...d.data()}));
+    const todosAnt = snapAnt.docs.map(d=>({id:d.id,...d.data()}));
+    const pedidos = todosMes.filter(p=>p.estado!=='cancelado');
+    const pedidosAnt = todosAnt.filter(p=>p.estado!=='cancelado');
+    const remitos = snapRemitos.docs.map(d=>({id:d.id,...d.data()}));
+    const ccs = snapCC.docs.map(d=>d.data()).filter(c=>c.saldo>0).sort((a,b)=>b.saldo-a.saldo);
+    // Los clientes fusionados en otro (migración) no cuentan como registrados
+    const totalClientes = snapCli.docs.filter(d=>{ const c = d.data(); return c.activo!==false && !c.mergedInto; }).length;
+    const ventasDiarias = snapVD.docs.map(d=>d.data());
+    const ventasDiariasAnt = snapVDAnt.docs.map(d=>d.data());
+
+    // Si a un pedido sin precio no le apareció el remito en esas fechas, se lo busca por pedido.
+    let remitoDe = remitoPorPedido(remitos);
+    const faltan = [...pedidos, ...pedidosAnt]
+      .filter(p => !remitoDe[p.id] && (p.items||[]).some(it => !(parseFloat(it.precio)>0)))
+      .map(p => p.id);
+    if(faltan.length){
+      const tandas = [];
+      for(let i=0;i<faltan.length;i+=10){
+        tandas.push(getDocs(query(collection(db,'remitos'),where('pedidoId','in',faltan.slice(i,i+10)))));
+      }
+      const snaps = await Promise.all(tandas);
+      if(!vigente()) return;
+      const vistos = new Set(remitos.map(r=>r.id));
+      snaps.forEach(s => s.docs.forEach(d => {
+        if(!vistos.has(d.id)){ vistos.add(d.id); remitos.push({id:d.id,...d.data()}); }
+      }));
+      remitoDe = remitoPorPedido(remitos);
+    }
+
+    // Remitos sueltos del mes: los que no tienen pedido, o cuyo pedido ya no existe.
+    // El remito de un pedido cancelado, o de un pedido que se entrega en otro mes,
+    // no es una venta aparte (el segundo se cuenta en el mes de su pedido).
+    const idsPedidos = new Set([...todosMes, ...todosAnt].map(p=>p.id));
+    const candidatos = remitos.filter(r => r.cliente && r.total>0 && r.fecha>=desde && r.fecha<=hasta
+      && !(r.pedidoId && idsPedidos.has(r.pedidoId)));
+    const tienePedido = await Promise.all(candidatos.map(r => !r.pedidoId ? false :
+      getDoc(doc(db,'pedidos',r.pedidoId)).then(s=>s.exists(), e=>{
+        console.warn('No se pudo consultar el pedido del remito', r.id, e);
+        return true;
+      })));
+    if(!vigente()) return;
+    const remitosSueltos = candidatos.filter((r,i)=>!tienePedido[i]);
+
+    // Precios del remito para los dos meses (antes solo se hacía con el mes elegido
+    // y el mes anterior quedaba casi en $0, con lo que la variación salía disparatada).
+    completarConRemito(pedidos, remitoDe);
+    completarConRemito(pedidosAnt, remitoDe);
+
+    // Datos crudos para los reportes (PDF / CSV) — sin abreviar
+    const D = window._repData;
+    D.mes = mes;
+    D.mesLabel = MESES_NOMBRE[m-1]+' '+anio;
+    D.ventas = ventasDiarias.slice().sort((a,b)=>String(a.fecha||'').localeCompare(String(b.fecha||'')));
+
+    // Cada tarjeta se arma por separado: si una falla, las demás se muestran igual.
+    const pasos = [
+      [()=>actualizarKPIs(pedidos, pedidosAnt, ccs, totalClientes, mes, ventasDiarias, ventasDiariasAnt), null],
+      [()=>actualizarChartFact(pedidos, ventasDiarias, mes), null],
+      [()=>actualizarChartDias(pedidos), null],
+      [()=>actualizarTopClientes(pedidos, remitoDe, remitosSueltos), 'tabla-clientes'],
+      [()=>actualizarCC(ccs), 'lista-cc'],
+      [()=>actualizarProductos(pedidos), 'tabla-productos'],
+      [()=>actualizarRentabilidad(pedidos), 'tabla-rentabilidad'],
+      [()=>actualizarMargenes(), 'tabla-margenes'],
+    ];
+    let fallo = false;
+    pasos.forEach(([armar, idCaja]) => {
+      try { armar(); }
+      catch(e){
+        fallo = true;
+        console.error('Error armando el panel:', e);
+        if(idCaja) document.getElementById(idCaja).innerHTML = SIN_CARGAR;
+      }
+    });
+    D.listo = !fallo;
+    if(fallo) KPI_IDS.forEach(id => { const el = document.getElementById(id); if(el.textContent==='...') el.textContent = '—'; });
+    if(fallo) UI.toast('Una parte del panel no se pudo mostrar. Tocá ↻ para probar de nuevo.', { tipo:'error' });
+
+  } catch(e) {
+    if(!vigente()) return;
+    console.error('Error cargando dashboard:', e);
+    window._repData = { listo:false };
+    mostrarSinCargar();
+    UI.toast('No se pudieron cargar los datos. Revisá la conexión y tocá ↻.', { tipo:'error' });
+  } finally {
+    if(vigente()) btnActualizar.disabled = false;
+  }
+};
+
+function calcFact(pedidos){
+  return pedidos.reduce((s,p)=>s+factPedido(p),0);
+}
+
+function actualizarKPIs(pedidos, pedidosAnt, ccs, totalClientes, mes, ventasDiarias=[], ventasDiariasAnt=[]){
+  const fact = calcFact(pedidos);
+  const factAnt = calcFact(pedidosAnt);
+  const varFact = factAnt>0 ? ((fact-factAnt)/factAnt*100) : 0;
+  const saldoCC = ccs.reduce((s,c)=>s+c.saldo,0);
+  const clientesMes = new Set(pedidos.map(p=>p.cliente)).size;
+
+  // Ventas diarias
+  const totalVD = ventasDiarias.reduce((s,v)=>s+(v.totalVentas||0),0);
+  const totalVDAnt = ventasDiariasAnt.reduce((s,v)=>s+(v.totalVentas||0),0);
+  const varVD = totalVDAnt>0 ? ((totalVD-totalVDAnt)/totalVDAnt*100) : 0;
+  // Hay un registro por día y por sucursal: se cuentan los días, no los registros
+  const diasConVenta = new Set(ventasDiarias.map(v=>v.fecha).filter(Boolean)).size;
+
+  // Total combinado
+  const totalCombinado = fact + totalVD;
+  const totalCombinadoAnt = factAnt + totalVDAnt;
+  const varTotal = totalCombinadoAnt>0 ? ((totalCombinado-totalCombinadoAnt)/totalCombinadoAnt*100) : 0;
+
+  document.getElementById('k-fact').textContent = fmtK(fact);
+  document.getElementById('k-fact-sub').innerHTML = `<span class="kpi-badge ${varFact>=0?'badge-up':'badge-down'}">${varFact>=0?'▲':'▼'} ${Math.abs(varFact).toFixed(1)}% vs mes ant.</span>`;
+
+  document.getElementById('k-pedidos').textContent = pedidos.length;
+  document.getElementById('k-ped-sub').innerHTML = `<span class="kpi-badge ${pedidos.length>=pedidosAnt.length?'badge-up':'badge-down'}">${pedidos.length>=pedidosAnt.length?'▲':'▼'} vs ${pedidosAnt.length} mes ant.</span>`;
+
+  document.getElementById('k-clientes').textContent = clientesMes;
+  document.getElementById('k-cli-sub').innerHTML = `<span class="kpi-badge badge-neu">Total registrados: ${totalClientes}</span>`;
+
+  document.getElementById('k-cc').textContent = fmtK(saldoCC);
+  document.getElementById('k-cc-sub').innerHTML = `<span class="kpi-badge ${saldoCC>500000?'badge-down':'badge-neu'}">${ccs.length} cliente${ccs.length!==1?'s':''} con saldo</span>`;
+
+  document.getElementById('k-vd').textContent = fmtK(totalVD);
+  document.getElementById('k-vd-sub').innerHTML = `<span class="kpi-badge ${varVD>=0?'badge-up':'badge-down'}">${varVD>=0?'▲':'▼'} ${Math.abs(varVD).toFixed(1)}% · ${diasConVenta} días registrados</span>`;
+
+  document.getElementById('k-total').textContent = fmtK(totalCombinado);
+  document.getElementById('k-total-sub').innerHTML = `<span class="kpi-badge ${varTotal>=0?'badge-up':'badge-down'}">${varTotal>=0?'▲':'▼'} ${Math.abs(varTotal).toFixed(1)}% vs mes ant.</span>`;
+
+  window._repData = window._repData || {};
+  window._repData.kpis = {fact, factAnt, varFact, pedidos:pedidos.length, pedidosAnt:pedidosAnt.length,
+    clientesMes, totalClientes, saldoCC, ccCount:ccs.length, totalVD, totalVDAnt, varVD, diasConVenta,
+    totalCombinado, totalCombinadoAnt, varTotal};
+}
+
+function actualizarChartFact(pedidos, ventasDiarias=[], mes){
+  const [anio,m] = mes.split('-').map(Number);
+  const semanas = {'Sem 1':0,'Sem 2':0,'Sem 3':0,'Sem 4':0,'Sem 5':0};
+  const semanasVD = {'Sem 1':0,'Sem 2':0,'Sem 3':0,'Sem 4':0,'Sem 5':0};
+
+  // Pedidos por semana
+  pedidos.forEach(p=>{
+    if(!p.fechaEntrega) return;
+    const dia = parseInt(p.fechaEntrega.substring(8,10));
+    const sem = `Sem ${Math.min(5,Math.ceil(dia/7))}`;
+    semanas[sem] += factPedido(p);
+  });
+
+  // Ventas diarias por semana
+  ventasDiarias.forEach(v=>{
+    if(!v.fecha) return;
+    const dia = parseInt(v.fecha.substring(8,10));
+    const sem = `Sem ${Math.min(5,Math.ceil(dia/7))}`;
+    semanasVD[sem] += (v.totalVentas||0);
+  });
+
+  // Filtrar semanas vacías del final
+  const entries = Object.entries(semanas);
+  let lastIdx = entries.length-1;
+  while(lastIdx>0 && entries[lastIdx][1]===0 && Object.values(semanasVD)[lastIdx]===0) lastIdx--;
+  const labels = entries.slice(0,lastIdx+1).map(e=>e[0]);
+  const dataPed = entries.slice(0,lastIdx+1).map(e=>e[1]);
+  const dataVD  = Object.values(semanasVD).slice(0,lastIdx+1);
+
+  if(chartFact){ chartFact.destroy(); chartFact=null; }
+  const ctx = document.getElementById('chart-fact').getContext('2d');
+  chartFact = new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels,
+      datasets:[
+        {
+          label:'Pedidos mayoristas',
+          data:dataPed,
+          backgroundColor:'rgba(192,57,43,0.7)',
+          borderColor:'#A4232A',
+          borderWidth:1,
+          borderRadius:6,
+          stack:'total',
+        },
+        {
+          label:'Ventas diarias',
+          data:dataVD,
+          backgroundColor:'rgba(142,68,173,0.7)',
+          borderColor:'#6B4E8E',
+          borderWidth:1,
+          borderRadius:6,
+          stack:'total',
+        }
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      animation:{duration:400},
+      plugins:{
+        legend:{display:true,position:'bottom',labels:{font:{size:11},boxWidth:12}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: $${Math.round(ctx.parsed.y).toLocaleString('es-AR')}`}}
+      },
+      scales:{
+        y:{stacked:true,ticks:{callback:v=>fmtK(v),maxTicksLimit:5},grid:{color:'#EDEEF0'}},
+        x:{stacked:true,grid:{display:false}}
+      }
+    }
+  });
+  const totalPed = Object.values(semanas).reduce((a,b)=>a+b,0);
+  const totalVD2 = Object.values(semanasVD).reduce((a,b)=>a+b,0);
+  document.getElementById('lbl-evol').textContent = `Total: ${fmtK(totalPed+totalVD2)}`;
+}
+
+function actualizarChartDias(pedidos){
+  const dias = [0,0,0,0,0,0,0];
+  pedidos.forEach(p=>{
+    if(!p.fechaEntrega) return;
+    const d = B.diaSemana(p.fechaEntrega);
+    if(d>=0) dias[d]++;
+  });
+  if(chartDias){ chartDias.destroy(); chartDias=null; }
+  const ctx = document.getElementById('chart-dias').getContext('2d');
+  chartDias = new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels:DIAS,
+      datasets:[{
+        data:dias,
+        backgroundColor:dias.map((_,i)=>i===0||i===6?'rgba(200,200,200,0.3)':'rgba(192,57,43,0.7)'),
+        borderRadius:6,
+      }]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      animation:{duration:400},
+      plugins:{legend:{display:false}},
+      scales:{y:{ticks:{stepSize:1,maxTicksLimit:5},grid:{color:'#EDEEF0'}},x:{grid:{display:false}}}
+    }
+  });
+}
+
+function actualizarTopClientes(pedidos, remitoDe, remitosSueltos){
+  const por = {};
+  const de = (cliente) => por[cliente] || (por[cliente]={fact:0,pedidos:0});
+
+  // 1) Pedidos del período, ya con los precios de su remito (sea de la fecha que sea).
+  //    Si el pedido quedó en $0 pero su remito tiene total, vale el total del remito, una sola vez.
+  pedidos.forEach(p=>{
+    if(!p.cliente) return;
+    de(p.cliente).pedidos++;
+    const f = factPedido(p);
+    if(f>0){ por[p.cliente].fact += f; return; }
+    const rem = (remitoDe||{})[p.id];
+    if(rem && rem.total>0) de(rem.cliente||p.cliente).fact += rem.total;
+  });
+
+  // 2) Remitos sueltos (sin pedido): cuentan como venta propia. Los remitos de pedidos
+  //    cancelados o de pedidos de otro mes no entran acá: sumarlos duplicaba o inventaba ventas.
+  (remitosSueltos||[]).forEach(r=>{
+    const c = de(r.cliente);
+    c.fact += r.total;
+    c.pedidos++;
+  });
+
+  const sorted = Object.entries(por).sort((a,b)=>b[1].fact-a[1].fact).slice(0,10);
+  const maxFact = sorted[0]?.[1].fact || 1;
+
+  window._repData = window._repData || {};
+  window._repData.clientes = sorted.map(([nombre,d])=>({nombre, pedidos:d.pedidos, fact:d.fact}));
+
+  let html = '<table class="tbl"><thead><tr><th>#</th><th>Cliente</th><th>Pedidos</th><th style="text-align:right">Facturación</th></tr></thead><tbody>';
+  sorted.forEach(([nombre,d],i)=>{
+    const rankClass = i===0?'gold':i===1?'silver':i===2?'bronze':'';
+    const pct = (d.fact/maxFact*100).toFixed(0);
+    html += `<tr>
+      <td><div class="rank ${rankClass}">${i+1}</div></td>
+      <td><div style="font-weight:600">${esc(nombre)}</div><div class="margen-bar"><div class="margen-fill" style="width:${pct}%;background:#A4232A"></div></div></td>
+      <td><span class="pill pill-blue">${d.pedidos}</span></td>
+      <td style="text-align:right;font-weight:800;color:#A4232A">${fmtK(d.fact)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  if(!sorted.length) html = '<div class="loading" style="height:100px">Sin pedidos en este período</div>';
+  document.getElementById('tabla-clientes').innerHTML = html;
+}
+
+function actualizarCC(ccs){
+  window._repData = window._repData || {};
+  window._repData.cc = (ccs||[]).map(c=>({nombre:c.nombre||'', saldo:c.saldo||0}));
+  if(!ccs.length){
+    document.getElementById('lista-cc').innerHTML = '<div class="loading" style="height:80px">✅ Sin saldos pendientes</div>';
+    return;
+  }
+  let html = '';
+  ccs.slice(0,12).forEach(c=>{
+    const cls = c.saldo>500000?'alto':c.saldo>200000?'medio':'ok';
+    const icon = c.saldo>500000?'🔴':c.saldo>200000?'🟡':'🟢';
+    html += `<div class="cc-row">
+      <div><div class="cc-nombre">${icon} ${esc(c.nombre||'(sin nombre)')}</div></div>
+      <div class="cc-saldo ${cls}">${fmt$(c.saldo)}</div>
+    </div>`;
+  });
+  // La lista muestra las 12 más altas: se avisa cuántas quedan afuera (están todas en el reporte)
+  if(ccs.length>12){
+    const resto = ccs.slice(12);
+    html += `<div class="cc-row" id="cc-resto">
+      <div><div class="cc-nombre" style="font-weight:500;color:#79828B">y ${resto.length} cuenta${resto.length!==1?'s':''} más</div></div>
+      <div class="cc-saldo" style="color:#79828B">${fmt$(resto.reduce((s,c)=>s+c.saldo,0))}</div>
+    </div>`;
+  }
+  document.getElementById('lista-cc').innerHTML = html;
+}
+
+function actualizarProductos(pedidos){
+  const prods = {};
+  pedidos.forEach(p=>{
+    (p.items||[]).forEach(it=>{
+      const k = it.producto;
+      if(!k) return;
+      if(!prods[k]) prods[k]={unidades:0,kgTotal:0,pedidos:0,unidad:it.unidad||'kg'};
+      const cant = parseFloat(it.cantidad)||0;
+      const kg   = it.kgReal!=null ? parseFloat(it.kgReal)||0 : cant;
+      if(it.unidad==='kg'){
+        prods[k].unidades += cant;
+        prods[k].kgTotal  += cant;
+      } else {
+        prods[k].unidades += cant;
+        prods[k].kgTotal  += kg;
+      }
+      prods[k].pedidos++;
+    });
+  });
+  const sorted = Object.entries(prods).sort((a,b)=>b[1].kgTotal-a[1].kgTotal).slice(0,12);
+  const max = sorted[0]?.[1].kgTotal||1;
+
+  window._repData = window._repData || {};
+  window._repData.productos = sorted.map(([nombre,d])=>({nombre, unidades:d.unidades, kgTotal:d.kgTotal, pedidos:d.pedidos, unidad:d.unidad}));
+
+  let html = '<table class="tbl"><thead><tr><th>Producto</th><th style="text-align:right">Unidades</th><th style="text-align:right">Kg total</th><th style="text-align:right">Pedidos</th></tr></thead><tbody>';
+  sorted.forEach(([nombre,d])=>{
+    const pct = (d.kgTotal/max*100).toFixed(0);
+    const unidStr = d.unidad==='kg' ? '—' : `${d.unidades.toLocaleString('es-AR',{maximumFractionDigits:1})} ${esc(d.unidad)}`;
+    const kgStr   = d.kgTotal>0 ? `${d.kgTotal.toLocaleString('es-AR',{maximumFractionDigits:1})} kg` : '—';
+    html += `<tr>
+      <td><div style="font-size:12px;font-weight:600;color:#262C32">${esc(nombre)}</div>
+          <div class="margen-bar"><div class="margen-fill" style="width:${pct}%;background:#1E4257"></div></div></td>
+      <td style="text-align:right;font-weight:600;font-size:12px;color:#555">${unidStr}</td>
+      <td style="text-align:right;font-weight:700;color:#A4232A">${kgStr}</td>
+      <td style="text-align:right"><span class="pill pill-blue">${d.pedidos}</span></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  if(!sorted.length) html = '<div class="loading" style="height:100px">Sin datos</div>';
+  document.getElementById('tabla-productos').innerHTML = html;
+}
+
+function actualizarRentabilidad(pedidos){
+  const clis = {};
+
+  pedidos.forEach(p=>{
+    const cli = p.cliente;
+    if(!cli) return;
+    if(!clis[cli]) clis[cli]={fact:0,factCon:0,ganancia:0,itemsCon:0,itemsSin:0};
+
+    (p.items||[]).forEach(it=>{
+      const kg      = cantFact(it);
+      const precio  = parseFloat(it.precio)||0;
+      const factura = kg * precio;
+      clis[cli].fact += factura;
+      // Un ítem todavía sin precio o sin kilos no se facturó: no cuenta ni a favor ni en contra de la cobertura
+      if(!(factura>0)) return;
+
+      const costo = COSTO_PROD[it.producto];
+      if(costo!=null){
+        // Ganancia real = (precio de venta del pedido - costo unitario) × kg
+        const ganancia = (precio - costo) * kg;
+        clis[cli].ganancia += ganancia;
+        clis[cli].factCon += factura;
+        clis[cli].itemsCon++;
+      } else {
+        clis[cli].itemsSin++;
+      }
+    });
+  });
+
+  const sorted = Object.entries(clis)
+    .filter(([,d])=>d.fact>0)
+    .map(([nombre,d])=>({
+      nombre,
+      fact:    d.fact,
+      ganancia: d.ganancia,
+      // El margen se calcula sobre lo facturado de los ítems que tienen costo: dividir por toda la
+      // facturación hacía parecer poco rentable al cliente que compra productos sin costo cargado.
+      margenEfectivo: d.factCon>0 ? (d.ganancia/d.factCon*100) : 0,
+      cobertura: (d.itemsCon+d.itemsSin)>0
+        ? Math.round(d.itemsCon/(d.itemsCon+d.itemsSin)*100) : 0
+    }))
+    .sort((a,b)=>b.ganancia-a.ganancia);
+
+  window._repData = window._repData || {};
+  window._repData.rentabilidad = sorted;
+
+  if(!sorted.length){
+    document.getElementById('tabla-rentabilidad').innerHTML=
+      '<div class="loading" style="height:80px">Sin datos</div>';
+    return;
+  }
+
+  const maxG = Math.max(...sorted.map(d=>d.ganancia), 1);
+
+  let html = `<table class="tbl">
+    <thead><tr>
+      <th>#</th>
+      <th>Cliente</th>
+      <th style="text-align:right">Facturación</th>
+      <th style="text-align:right">Ganancia real est.</th>
+      <th style="text-align:right">Margen efectivo</th>
+      <th style="text-align:right">Cobertura</th>
+    </tr></thead><tbody>`;
+
+  sorted.forEach((d,i)=>{
+    const rankClass = i===0?'gold':i===1?'silver':i===2?'bronze':'';
+    const colorMg   = d.margenEfectivo>60?'#24523D':d.margenEfectivo>30?'#A8702A':'#A4232A';
+    const pct       = Math.max(0,(d.ganancia/maxG*100)).toFixed(0);
+    html += `<tr>
+      <td><div class="rank ${rankClass}">${i+1}</div></td>
+      <td>
+        <div style="font-weight:700;font-size:13px">${esc(d.nombre)}</div>
+        <div class="margen-bar">
+          <div class="margen-fill" style="width:${pct}%;background:${colorMg}"></div>
+        </div>
+      </td>
+      <td style="text-align:right;font-size:12px;color:#79828B">${fmtK(d.fact)}</td>
+      <td style="text-align:right;font-weight:900;font-size:13px;color:${colorMg}">
+        ${d.ganancia>=0?'':'-'}${fmtK(Math.abs(d.ganancia))}
+      </td>
+      <td style="text-align:right;font-weight:700;color:${colorMg}">
+        ${d.margenEfectivo.toFixed(1)}%
+      </td>
+      <td style="text-align:right">
+        <span class="pill ${d.cobertura>=80?'pill-green':d.cobertura>=50?'pill-blue':'pill-red'}"
+          title="${d.cobertura}% de ítems con costo cargado">
+          ${d.cobertura}%
+        </span>
+      </td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  html += `<div style="margin-top:8px;padding:8px 12px;background:#F7F8F9;border-radius:8px;font-size:10px;color:#A3ABB3;line-height:1.6">
+    <b style="color:#555">Ganancia real est.</b> = (precio cobrado en el pedido − costo unitario planilla) × kg.<br>
+    <b style="color:#555">Margen efectivo</b> = ganancia ÷ facturación de los ítems con costo cargado.<br>
+    <b style="color:#555">Cobertura</b> = % de ítems facturados con costo cargado. Si es &lt;100% la ganancia está subestimada.
+  </div>`;
+
+  document.getElementById('tabla-rentabilidad').innerHTML = html;
+}
+
+function actualizarMargenes(){
+  // Calcular ambos indicadores
+  const data = COSTOS.map(p=>{
+    const sobre_precio = p.margen_pct; // ya calculado: (precio-costo)/precio*100
+    const sobre_costo  = p.costo > 0 ? (p.precio - p.costo) / p.costo * 100 : 0;
+    return {...p, sobre_precio, sobre_costo};
+  }).sort((a,b)=>b.sobre_precio-a.sobre_precio);
+
+  window._repData = window._repData || {};
+  window._repData.margenes = data;
+
+  const maxSP = Math.max(...data.map(p=>Math.max(0,p.sobre_precio)));
+
+  let html = `<table class="tbl">
+    <thead><tr>
+      <th>Producto</th>
+      <th style="text-align:right">Precio</th>
+      <th style="text-align:right" title="Margen sobre precio de venta: (Precio-Costo)/Precio">
+        Mg. s/precio <span style="font-size:9px;color:#A3ABB3;font-weight:400">ℹ</span></th>
+      <th style="text-align:right" title="Margen sobre costo: (Precio-Costo)/Costo">
+        Mg. s/costo <span style="font-size:9px;color:#A3ABB3;font-weight:400">ℹ</span></th>
+    </tr></thead><tbody>`;
+
+  data.forEach(p=>{
+    const colorSP = p.sobre_precio>50?'#24523D':p.sobre_precio>20?'#A8702A':'#A4232A';
+    const colorSC = p.sobre_costo>100?'#24523D':p.sobre_costo>30?'#A8702A':'#A4232A';
+    const barW = Math.max(0,(p.sobre_precio/maxSP*100)).toFixed(0);
+    html += `<tr>
+      <td>
+        <div style="font-size:12px;font-weight:600;color:#262C32">${esc(p.nombre)}</div>
+        <div class="margen-bar"><div class="margen-fill" style="width:${barW}%;background:${colorSP}"></div></div>
+      </td>
+      <td style="text-align:right;font-size:12px;color:#79828B">${fmt$(p.precio)}</td>
+      <td style="text-align:right;font-weight:800;color:${colorSP}">${p.sobre_precio.toFixed(1)}%</td>
+      <td style="text-align:right;font-weight:700;color:${colorSC};font-size:12px">${p.sobre_costo.toFixed(1)}%</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+
+  // Leyenda
+  html += `<div style="margin-top:10px;padding:10px;background:#F7F8F9;border-radius:8px;font-size:10px;color:#79828B;line-height:1.6">
+    <b style="color:#555">Mg. s/precio</b> — de cada $100 cobrados, cuánto es ganancia. Ej: 30% = $30 de cada $100.<br>
+    <b style="color:#555">Mg. s/costo</b> — cuánto ganás por cada $100 invertido. Ej: 150% = $150 de ganancia por cada $100 de costo.
+  </div>`;
+
+  document.getElementById('tabla-margenes').innerHTML = html;
+}
+
+// Init
+initMeses();
+cargarTodo();
+</script>
+
+<!-- jsPDF for PDF reports -->
+<script src="vendor/jspdf.umd.min.js"></script>
+
+<!-- Report Modal -->
+<div id="reportModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;overflow-y:auto">
+  <div style="background:#fff;margin:40px auto;max-width:440px;border-radius:20px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <h3 style="font-size:18px;font-weight:800;color:#2A333B">📄 Generar Reporte Mensual</h3>
+      <button onclick="cerrarReporte()" aria-label="Cerrar" style="background:none;border:none;font-size:22px;cursor:pointer;color:#79828B;min-width:44px;min-height:44px">✕</button>
+    </div>
+    <p id="repMes" style="font-size:13px;color:#79828B;margin-bottom:16px"></p>
+
+    <div style="font-weight:700;font-size:12px;color:#79828B;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Seleccioná las secciones</div>
+
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EDEEF0;cursor:pointer;font-size:14px">
+      <input type="checkbox" id="rep-kpi" checked style="width:18px;height:18px;accent-color:#A4232A"> 💰 KPIs del mes
+    </label>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EDEEF0;cursor:pointer;font-size:14px">
+      <input type="checkbox" id="rep-clientes" checked style="width:18px;height:18px;accent-color:#A4232A"> 🏆 Top clientes por facturación
+    </label>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EDEEF0;cursor:pointer;font-size:14px">
+      <input type="checkbox" id="rep-cc" checked style="width:18px;height:18px;accent-color:#A4232A"> 🚨 Cuentas corrientes pendientes
+    </label>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EDEEF0;cursor:pointer;font-size:14px">
+      <input type="checkbox" id="rep-productos" checked style="width:18px;height:18px;accent-color:#A4232A"> 🥩 Productos más pedidos
+    </label>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EDEEF0;cursor:pointer;font-size:14px">
+      <input type="checkbox" id="rep-rentabilidad" checked style="width:18px;height:18px;accent-color:#A4232A"> 💎 Ranking de rentabilidad
+    </label>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EDEEF0;cursor:pointer;font-size:14px">
+      <input type="checkbox" id="rep-margenes" checked style="width:18px;height:18px;accent-color:#A4232A"> 📊 Márgenes por producto
+    </label>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EDEEF0;cursor:pointer;font-size:14px">
+      <input type="checkbox" id="rep-ventas" checked style="width:18px;height:18px;accent-color:#A4232A"> 🏪 Ventas diarias del mes
+    </label>
+
+    <div style="display:flex;gap:10px;margin-top:20px">
+      <button onclick="generarPDF()" id="btnRepPDF" style="flex:1;padding:14px;border-radius:12px;border:none;background:#A4232A;color:#fff;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">📄 PDF</button>
+      <button onclick="generarExcel()" id="btnRepXLS" style="flex:1;padding:14px;border-radius:12px;border:none;background:#1E4257;color:#fff;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">📊 Excel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Datos crudos del último render (los llena el módulo) — base de PDF y CSV
+window._repData = window._repData || {};
+
+// El reporte sale siempre de los datos que están cargados (window._repData), con el
+// mes de esos datos como título. Mientras el panel carga, o si la carga falló, no hay reporte.
+function repListo() {
+  const D = window._repData || {};
+  if (D.listo) return D;
+  SersaleUI.toast('Los datos todavía no están cargados. Esperá un momento o tocá ↻.', { tipo: 'info' });
+  return null;
+}
+function abrirReporte() {
+  const D = repListo();
+  if (!D) return;
+  document.getElementById('repMes').textContent = D.mesLabel;
+  document.getElementById('reportModal').style.display = 'block';
+}
+function cerrarReporte() { document.getElementById('reportModal').style.display = 'none'; }
+
+function getCheck(id) { return document.getElementById(id).checked; }
+function repNum(n){ return Math.round(Number(n)||0).toLocaleString('es-AR'); }
+function repDec(n){ return (Number(n)||0).toLocaleString('es-AR',{maximumFractionDigits:1}); }
+function repMoney(n){ return SersaleBase.fmtMonto(n); }
+function repPct(n){ return (Number(n)||0).toFixed(1)+'%'; }
+function csvNum(n){ return String(Math.round((Number(n)||0)*100)/100).replace('.',','); }
+// Texto para una celda del CSV: entre comillas si trae ; comillas o saltos de línea (si no, corre
+// las columnas), y con apóstrofo adelante si empieza como fórmula (= + - @) para que Excel no la ejecute.
+function csvTxt(s){
+  let t = String(s==null ? '' : s);
+  if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+  return /[";\n\r]/.test(t) ? '"' + t.replace(/"/g,'""') + '"' : t;
+}
+// Gastos de un día de ventas: el total está en totalGasto; "gastos" es la lista del detalle.
+function repGasto(v){
+  if (v.totalGasto != null) return Number(v.totalGasto)||0;
+  if (Array.isArray(v.gastos)) return v.gastos.reduce((s,g)=>s+(Number(g && g.monto)||0),0);
+  return Number(v.gastos)||0;
+}
+
+// Genera el archivo y avisa cómo terminó: antes un error dejaba el botón sin hacer nada.
+function generarReporte(armar) {
+  const D = repListo();
+  if (!D) return;
+  try {
+    armar(D);
+    cerrarReporte();
+    SersaleUI.toast('Reporte generado', { tipo: 'ok' });
+  } catch (e) {
+    console.error('Error generando el reporte:', e);
+    SersaleUI.toast('No se pudo generar el reporte. Probá de nuevo.', { tipo: 'error' });
+  }
+}
+function generarPDF() { generarReporte(armarPDF); }
+function generarExcel() { generarReporte(armarCSV); }
+
+function armarPDF(D) {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ orientation:'portrait', unit:'pt', format:'a4' });
+  const PW = 595, M = 40;
+  const CW = PW - 2*M;
+  let y = 40;
+  const mesLabel = D.mesLabel;
+
+  // Helper functions
+  function addHeader() {
+    pdf.setFillColor(192,57,43);
+    pdf.rect(0,0,PW,70,'F');
+    pdf.setFontSize(18); pdf.setTextColor(255,255,255);
+    pdf.text('FRIGORÍFICO SERSALE', M, 30);
+    pdf.setFontSize(10);
+    pdf.text('Informe Gerencial — ' + mesLabel, M, 48);
+    pdf.text('Generado: ' + SersaleBase.fmtFecha(SersaleBase.hoy()), PW-M, 48, {align:'right'});
+    pdf.setFontSize(8);
+    pdf.text('24 de Noviembre 1926, Parque Patricios · CUIT 30-70227633-7', M, 62);
+    y = 90;
+  }
+
+  function checkPage(need) {
+    if (y + need > 800) { pdf.addPage(); y = 40; }
+  }
+
+  function sectionTitle(title) {
+    checkPage(40);
+    pdf.setFillColor(44,62,80);
+    pdf.rect(M, y, CW, 22, 'F');
+    pdf.setFontSize(11); pdf.setTextColor(255,255,255);
+    pdf.setFont(undefined,'bold'); // todos los títulos iguales (antes heredaban el estilo de la fila anterior)
+    pdf.text(title, M+8, y+15);
+    pdf.setFont(undefined,'normal');
+    y += 30;
+    pdf.setTextColor(0,0,0);
+  }
+
+  // Un nombre que no entra en su columna se recorta con "..." (si no, tapa el importe de la columna de al lado)
+  function recortar(txt, maxW) {
+    let t = String(txt);
+    if (pdf.getTextWidth(t) <= maxW) return t;
+    while (t.length > 1 && pdf.getTextWidth(t + '...') > maxW) t = t.slice(0, -1);
+    return t.trimEnd() + '...';
+  }
+
+  function tableRow(cols, widths, bold, bg) {
+    checkPage(18);
+    if(bg) { pdf.setFillColor(bg[0],bg[1],bg[2]); pdf.rect(M,y,CW,16,'F'); }
+    pdf.setFontSize(9);
+    if(bold) pdf.setFont(undefined,'bold'); else pdf.setFont(undefined,'normal');
+    let x = M + 4;
+    cols.forEach((c,i) => {
+      // la última columna no tiene nada a su derecha
+      pdf.text(i < cols.length-1 ? recortar(c, widths[i]-6) : String(c), x, y+11);
+      x += widths[i];
+    });
+    y += 16;
+  }
+
+  function sinDatos() {
+    pdf.setFontSize(9); pdf.setFont(undefined,'normal');
+    pdf.text('Sin datos en el período', M+8, y+5); y += 16;
+  }
+
+  addHeader();
+
+  // KPIs
+  if(getCheck('rep-kpi')) {
+    sectionTitle('INDICADORES CLAVE DEL MES');
+    const k = D.kpis || {};
+    const kpis = [
+      ['Facturación pedidos mayoristas', repMoney(k.fact)],
+      ['Pedidos del mes', repNum(k.pedidos) + ' (mes anterior: ' + repNum(k.pedidosAnt) + ')'],
+      ['Clientes activos', repNum(k.clientesMes) + ' de ' + repNum(k.totalClientes) + ' registrados'],
+      ['Saldo cuenta corriente total', repMoney(k.saldoCC) + ' en ' + repNum(k.ccCount) + ' clientes'],
+      ['Ventas diarias', repMoney(k.totalVD) + ' en ' + repNum(k.diasConVenta) + ' días'],
+      ['Facturación combinada', repMoney(k.totalCombinado)],
+      ['Variación vs mes anterior', repPct(k.varTotal)],
+    ];
+    kpis.forEach((kp,i) => tableRow(kp, [280,CW-280], false, i%2?[245,245,245]:null));
+    y += 10;
+  }
+
+  // Top clientes
+  if(getCheck('rep-clientes')) {
+    sectionTitle('TOP CLIENTES POR FACTURACIÓN');
+    const W = [30,265,60,CW-355];
+    const lst = D.clientes || [];
+    if(lst.length) {
+      tableRow(['#','Cliente','Pedidos','Facturación'], W, true, [220,220,220]);
+      lst.forEach((c,i) => tableRow([i+1, c.nombre, repNum(c.pedidos), repMoney(c.fact)], W, false, i%2?[248,248,248]:null));
+    } else sinDatos();
+    y += 10;
+  }
+
+  // CC
+  if(getCheck('rep-cc')) {
+    sectionTitle('CUENTAS CORRIENTES PENDIENTES');
+    const W = [320,CW-320];
+    const lst = D.cc || [];
+    if(lst.length) {
+      tableRow(['Cliente','Saldo'], W, true, [220,220,220]);
+      lst.forEach((c,i) => tableRow([c.nombre, repMoney(c.saldo)], W, false, i%2?[248,248,248]:null));
+      tableRow(['TOTAL', repMoney(lst.reduce((s,c)=>s+c.saldo,0))], W, true, [230,230,230]);
+    } else {
+      pdf.setFontSize(9); pdf.text('Sin saldos pendientes', M+8, y+5); y+=16;
+    }
+    y += 10;
+  }
+
+  // Productos
+  if(getCheck('rep-productos')) {
+    sectionTitle('PRODUCTOS MÁS PEDIDOS');
+    const W = [30,235,90,90,CW-445];
+    const lst = D.productos || [];
+    if(lst.length) {
+      tableRow(['#','Producto','Unidades','Kg total','Pedidos'], W, true, [220,220,220]);
+      lst.forEach((p,i) => tableRow([
+        i+1, p.nombre,
+        p.unidad==='kg' ? '-' : repDec(p.unidades)+' '+(p.unidad||''),
+        repDec(p.kgTotal)+' kg',
+        repNum(p.pedidos)
+      ], W, false, i%2?[248,248,248]:null));
+    } else sinDatos();
+    y += 10;
+  }
+
+  // Rentabilidad
+  if(getCheck('rep-rentabilidad')) {
+    sectionTitle('RANKING DE RENTABILIDAD POR CLIENTE');
+    const W = [26,180,95,95,60,CW-456];
+    const lst = D.rentabilidad || [];
+    if(lst.length) {
+      tableRow(['#','Cliente','Facturación','Ganancia est.','Margen','Cobert.'], W, true, [220,220,220]);
+      lst.forEach((d,i) => tableRow([
+        i+1, d.nombre, repMoney(d.fact), repMoney(d.ganancia),
+        repPct(d.margenEfectivo), d.cobertura+'%'
+      ], W, false, i%2?[248,248,248]:null));
+      y += 4;
+      pdf.setFontSize(7); pdf.setTextColor(120,120,120);
+      pdf.text('Ganancia est. = (precio cobrado - costo unitario de planilla) x kg. Cobertura = % de ítems con costo cargado.', M+4, y+6);
+      pdf.setTextColor(0,0,0); y += 14;
+    } else sinDatos();
+    y += 10;
+  }
+
+  // Márgenes por producto
+  if(getCheck('rep-margenes')) {
+    sectionTitle('MÁRGENES POR PRODUCTO (PLANILLA DE COSTOS)');
+    const W = [220,80,80,80,CW-460];
+    const lst = D.margenes || [];
+    if(lst.length) {
+      tableRow(['Producto','Costo','Precio','Mg. s/precio','Mg. s/costo'], W, true, [220,220,220]);
+      lst.forEach((p,i) => tableRow([
+        p.nombre, repMoney(p.costo), repMoney(p.precio),
+        repPct(p.sobre_precio), repPct(p.sobre_costo)
+      ], W, false, i%2?[248,248,248]:null));
+    } else sinDatos();
+    y += 10;
+  }
+
+  // Ventas diarias
+  if(getCheck('rep-ventas')) {
+    sectionTitle('VENTAS DIARIAS DEL MES');
+    const W = [80,175,90,80,CW-425];
+    const lst = D.ventas || [];
+    if(lst.length) {
+      tableRow(['Fecha','Sucursal','Ventas','Gastos','Neto'], W, true, [220,220,220]);
+      let tV=0, tG=0;
+      lst.forEach((v,i) => {
+        const ven = Number(v.totalVentas)||0, gas = repGasto(v);
+        tV += ven; tG += gas;
+        tableRow([v.fecha||'', v.sucursal||'', repMoney(ven), repMoney(gas), repMoney(ven-gas)], W, false, i%2?[248,248,248]:null);
+      });
+      tableRow(['TOTAL','', repMoney(tV), repMoney(tG), repMoney(tV-tG)], W, true, [230,230,230]);
+    } else sinDatos();
+    y += 10;
+  }
+
+  // Footer on each page
+  const totalPages = pdf.internal.getNumberOfPages();
+  for(let i=1; i<=totalPages; i++) {
+    pdf.setPage(i);
+    pdf.setFontSize(8); pdf.setTextColor(150,150,150); pdf.setFont(undefined,'normal');
+    pdf.text('Frigorífico Sersale SRL · Informe generado el ' + SersaleBase.fmtFecha(SersaleBase.hoy()) + ' · Página ' + i + '/' + totalPages, PW/2, 830, {align:'center'});
+  }
+
+  pdf.save('Sersale_Informe_' + mesLabel.replace(/\s/g,'_') + '.pdf');
+}
+
+function armarCSV(D) {
+  const mesLabel = D.mesLabel;
+  let csv = 'sep=;\n'; // Excel hint for separator
+
+  // KPIs
+  if(getCheck('rep-kpi')) {
+    const k = D.kpis || {};
+    csv += '\nINDICADORES CLAVE - ' + mesLabel + '\n';
+    csv += 'Indicador;Valor\n';
+    csv += 'Facturación pedidos mayoristas;' + csvNum(k.fact) + '\n';
+    csv += 'Pedidos del mes;' + csvNum(k.pedidos) + '\n';
+    csv += 'Pedidos mes anterior;' + csvNum(k.pedidosAnt) + '\n';
+    csv += 'Clientes activos;' + csvNum(k.clientesMes) + '\n';
+    csv += 'Clientes registrados;' + csvNum(k.totalClientes) + '\n';
+    csv += 'Saldo CC total;' + csvNum(k.saldoCC) + '\n';
+    csv += 'Clientes con saldo;' + csvNum(k.ccCount) + '\n';
+    csv += 'Ventas diarias;' + csvNum(k.totalVD) + '\n';
+    csv += 'Días con venta registrada;' + csvNum(k.diasConVenta) + '\n';
+    csv += 'Facturación combinada;' + csvNum(k.totalCombinado) + '\n';
+    csv += 'Variación vs mes anterior (%);' + csvNum(k.varTotal) + '\n';
+  }
+
+  // Top clientes
+  if(getCheck('rep-clientes')) {
+    csv += '\nTOP CLIENTES - ' + mesLabel + '\n';
+    csv += '#;Cliente;Pedidos;Facturación\n';
+    (D.clientes||[]).forEach((c,i) => {
+      csv += (i+1)+';'+csvTxt(c.nombre)+';'+csvNum(c.pedidos)+';'+csvNum(c.fact)+'\n';
+    });
+  }
+
+  // CC
+  if(getCheck('rep-cc')) {
+    csv += '\nCUENTAS CORRIENTES PENDIENTES\n';
+    csv += 'Cliente;Saldo\n';
+    (D.cc||[]).forEach(c => { csv += csvTxt(c.nombre)+';'+csvNum(c.saldo)+'\n'; });
+  }
+
+  // Productos
+  if(getCheck('rep-productos')) {
+    csv += '\nPRODUCTOS MÁS PEDIDOS - ' + mesLabel + '\n';
+    csv += '#;Producto;Unidades;Unidad;Kg total;Pedidos\n';
+    (D.productos||[]).forEach((p,i) => {
+      csv += (i+1)+';'+csvTxt(p.nombre)+';'+csvNum(p.unidades)+';'+csvTxt(p.unidad)+';'+csvNum(p.kgTotal)+';'+csvNum(p.pedidos)+'\n';
+    });
+  }
+
+  // Rentabilidad
+  if(getCheck('rep-rentabilidad')) {
+    csv += '\nRANKING DE RENTABILIDAD - ' + mesLabel + '\n';
+    csv += '#;Cliente;Facturación;Ganancia estimada;Margen efectivo (%);Cobertura (%)\n';
+    (D.rentabilidad||[]).forEach((d,i) => {
+      csv += (i+1)+';'+csvTxt(d.nombre)+';'+csvNum(d.fact)+';'+csvNum(d.ganancia)+';'+csvNum(d.margenEfectivo)+';'+csvNum(d.cobertura)+'\n';
+    });
+  }
+
+  // Márgenes por producto
+  if(getCheck('rep-margenes')) {
+    csv += '\nMÁRGENES POR PRODUCTO (PLANILLA DE COSTOS)\n';
+    csv += 'Producto;Costo;Precio;Mg. s/precio (%);Mg. s/costo (%)\n';
+    (D.margenes||[]).forEach(p => {
+      csv += csvTxt(p.nombre)+';'+csvNum(p.costo)+';'+csvNum(p.precio)+';'+csvNum(p.sobre_precio)+';'+csvNum(p.sobre_costo)+'\n';
+    });
+  }
+
+  // Ventas diarias
+  if(getCheck('rep-ventas')) {
+    csv += '\nVENTAS DIARIAS - ' + mesLabel + '\n';
+    csv += 'Fecha;Sucursal;Ventas;Gastos;Neto\n';
+    (D.ventas||[]).forEach(v => {
+      const ven = Number(v.totalVentas)||0, gas = repGasto(v);
+      csv += csvTxt(v.fecha)+';'+csvTxt(v.sucursal)+';'+csvNum(ven)+';'+csvNum(gas)+';'+csvNum(ven-gas)+'\n';
+    });
+  }
+
+  // Download CSV as .csv (opens in Excel)
+  const BOM = '﻿'; // UTF-8 BOM for Excel
+  const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Sersale_Informe_' + mesLabel.replace(/\s/g,'_') + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Safari del iPhone lee el archivo después de este toque: si la dirección se libera enseguida, la descarga falla.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+</script>
+
+</body>
+</html>

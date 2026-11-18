@@ -1,0 +1,557 @@
+{
+ "summary": "Lines 1-608 of /home/user/sersale-produccion/crm/src/pedidos.html are the bootstrap of the orders app plus three shared pieces. (1) Head: a sessionStorage login guard, iOS web-app metas, seven render-blocking CDN scripts (EmailJS, jsPDF, logo data URL, React 18, ReactDOM, Babel standalone) and an ES-module that initialises Firebase/Firestore, publishes it as window.__db / window.__fb / window.__fbReady and loads the product catalog override from config/productos. (2) Money input helpers: fmtMilesTxt / desfmtMiles and the InputMonto component (text input with live es-AR thousands separators and caret preservation), reused by remitos, payments, price lists and returns further down the file. (3) Two director screens: HistorialPrecios (per-client price history per product: list, sparkline, % change, add / edit / delete entries in precios_cliente; opened from GestionClientes) and GestionProductos (CRUD of the category -> products catalog stored as one map in config/productos, which feeds every product picker). It also declares the ESTADOS order-state map, the LAST_SEEN_KEY localStorage key and a CLIENTES_DEFAULT list of demo clients. The fb() helper used by these components is defined outside the section (line 819). Main findings: the Firestore catalog is never applied to the PRODUCTOS global (startup race), GestionProductos can overwrite the whole catalog with hardcoded defaults after a failed read, the catalog is saved with full-document read-modify-write, and the money parser treats every dot as a thousands separator. No file was modified.",
+ "components": [
+  {
+   "name": "Auth guard (inline IIFE)",
+   "lines": "pedidos.html:4-12",
+   "purpose": "Redirects to index.html unless sessionStorage sersale_role is 'director' or 'operario', or legacy sersale_auth === 'ok'. Does not stop the rest of the page from loading."
+  },
+  {
+   "name": "Head metas and CDN includes",
+   "lines": "pedidos.html:14-32",
+   "purpose": "Cache metas, Google Fonts (Barlow Condensed, IBM Plex Mono, IBM Plex Sans), viewport with maximum-scale=1.0, theme-color, apple-mobile-web-app-capable/title, title; synchronous scripts: EmailJS v4, jsPDF 2.5.1, assets/logo-data.js, React 18, ReactDOM 18, @babel/standalone 7.26.4. No apple-touch-icon, manifest, viewport-fit or status-bar-style."
+  },
+  {
+   "name": "Firebase init module",
+   "lines": "pedidos.html:33-59",
+   "purpose": "Imports Firebase JS SDK 10.7.0 (app + firestore) from gstatic, initialises project sersale-produccion, exposes window.__db, window.__fb (collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot, increment, runTransaction), sets window.__fbReady = true synchronously, then asynchronously reads config/productos into window.__productosOverride and dispatches the document event 'fbReady'. No Firebase Auth, no persistent cache."
+  },
+  {
+   "name": "Global CSS",
+   "lines": "pedidos.html:60-116",
+   "purpose": "Reset, .badge/.new-badge, responsive --app-max-w (480/860/960px), .crm-page container (min-height:100vh, background var(--fondo)), body/html padding-bottom 64px !important for the fixed bottom nav, shared palette variables (--carbon, --lacre, --lacre-cl, --hueso, --tinta, --acero, --linea), header typography (.chapa etc.), focus ring, scrollbar and reduced-motion rules. --fondo, --borde and --sombra are used but never defined in this file."
+  },
+  {
+   "name": "Root mount and Babel script start",
+   "lines": "pedidos.html:118-121",
+   "purpose": "<div id=\"root\"> (empty, no splash) and start of the single text/babel script; destructures useState/useEffect from React."
+  },
+  {
+   "name": "LAST_SEEN_KEY",
+   "lines": "pedidos.html:123",
+   "purpose": "localStorage key 'sersale_last_seen' used by getLastSeen/setLastSeen (856-857) for the new-orders badge."
+  },
+  {
+   "name": "ESTADOS",
+   "lines": "pedidos.html:125-131",
+   "purpose": "Order state map: pendiente, preparando, listo, despachado, cancelado -> {label, color, bg}. Defines the valid values of pedidos.estado."
+  },
+  {
+   "name": "CLIENTES_DEFAULT",
+   "lines": "pedidos.html:133-137",
+   "purpose": "Nine hardcoded demo client names; appended to the client select of the order forms at lines 1143 and 1518 when no real client has the same name."
+  },
+  {
+   "name": "fmtMilesTxt(raw)",
+   "lines": "pedidos.html:143-155",
+   "purpose": "Formats an internal plain numeric string or number ('1000000.5') to es-AR display text ('1.000.000,5'); keeps a trailing comma while typing; strips leading zeros."
+  },
+  {
+   "name": "desfmtMiles(txt)",
+   "lines": "pedidos.html:156-167",
+   "purpose": "Parses display text back to an internal string with '.' decimal: removes ALL dots, turns commas into dots, keeps at most 2 decimals, keeps a leading minus. Returns a string, not a number."
+  },
+  {
+   "name": "InputMonto({value,onChange,...rest})",
+   "lines": "pedidos.html:170-212",
+   "purpose": "Controlled <input type=text inputMode=decimal> showing fmtMilesTxt(value) and emitting desfmtMiles(text); restores the caret after reformatting by counting digits/commas (effect without deps + caretRef); Backspace over a thousands dot deletes the previous digit. Used at lines 389, 1997, 2916, 3455, 3674, 5463."
+  },
+  {
+   "name": "HistorialPrecios({cliente,onBack})",
+   "lines": "pedidos.html:215-405",
+   "purpose": "Per-client price history screen. cargar (223-241) queries precios_cliente by exact cliente, sorts by fecha desc and groups by producto; abrirEditar (247-251); abrirNuevo (252-256); guardarPrecio (257-278) addDoc for new / updateDoc for edit; eliminarPrecio (279-286) deleteDoc of one entry. Renders search, cards with last price, % vs previous, 8-bar sparkline, last 4 entries, and a centered add/edit modal. Rendered by GestionClientes (line 694)."
+  },
+  {
+   "name": "GestionProductos({onBack})",
+   "lines": "pedidos.html:410-607",
+   "purpose": "Product catalog admin. cargar (419-430) reads config/productos or falls back to hardcoded PRODUCTOS; guardar (432-441) setDoc of the whole categorias map and updates window.__productosOverride; agregarProducto (443-452); eliminarProducto (454-458); agregarCategoria (460-467); eliminarCategoria (469-475). Renders collapsible categories and two bottom-sheet modals. Rendered from App (5564, vista 'productos') and from line 1449."
+  }
+ ],
+ "firestore": [
+  {
+   "collection": "config/productos",
+   "docId": "Fixed: collection 'config', document id 'productos' (single document for the whole catalog). May not exist on a fresh project.",
+   "ops": "getDoc at startup (line 52) -> window.__productosOverride = data.categorias (only if doc exists and categorias is truthy; errors swallowed). getDoc in GestionProductos.cargar (422). setDoc WITHOUT merge in GestionProductos.guardar (436): replaces the whole document on every add/remove of a product or category. No transaction, no onSnapshot.",
+   "fields": "categorias: map<string, array<string>> - key = category display name (e.g. \"Jamones Cocidos\", \"Artículos Varios\"), value = array of product display names (plain strings, trimmed, case-sensitive; empty arrays allowed; readers defensively filter falsy entries). updatedAt: string, ISO-8601 UTC timestamp from new Date().toISOString() (e.g. \"2026-11-10T15:04:05.123Z\"); written, never read.",
+   "lines": "pedidos.html:52-55, 422-429, 436-438",
+   "notes": "Shape must match the hardcoded PRODUCTOS object (755-766). Consumers: getProductos() (770) returns window.__productosOverride || PRODUCTOS; several places read PRODUCTOS directly (3229, 3380, 3389, 3444) and therefore never see this document. Products and categories are identified only by name; precios_cliente, pedidos and remitos store product names as strings, so there is no rename and deleting does not cascade. Not included in backup.html. Category names are map keys: empty names and names of the form __x__ are rejected by the SDK."
+  },
+  {
+   "collection": "precios_cliente",
+   "docId": "Auto-generated id (addDoc).",
+   "ops": "getDocs(query(collection(db,'precios_cliente'), where('cliente','==',cliente))) with no orderBy (sorted client-side by fecha desc, grouped by producto) - line 227-230. addDoc for a new price (264-267): always appends, no upsert. updateDoc(doc(db,'precios_cliente',id), {producto, precio, fecha}) for edit (269-272): cliente is not rewritten. deleteDoc(doc(db,'precios_cliente',id)) for one entry (283).",
+   "fields": "cliente: string - client display name; this screen matches it EXACTLY (case and whitespace) against clientes.nombre passed as prop. producto: string - product display name (from the catalog select on create; free text on edit), trimmed. precio: number (JS number, not a string) - ARS per kg, > 0, at most 2 decimals (from +formPrecio). fecha: string - full ISO-8601 UTC timestamp from new Date().toISOString(); sorted lexicographically and shown with new Date(fecha).toLocaleDateString('es-AR'); rewritten to 'now' on every edit.",
+   "lines": "pedidos.html:226-238, 262-273, 282-284",
+   "notes": "Multiple documents per (cliente, producto) are expected: the collection is an append-only history and 'current price' = the document with the greatest fecha. Other writers with the same shape: RemitoPedido adds one doc per priced item on every remito even if the price did not change (1732-1737); TabPrecios upserts (3284-3303). Other readers: RemitoPedido (1647-1663, with case-insensitive fallback), ReportePreciosClientes (2963, 2993), TabPrecios (3246), GestionClientes.eliminar (652-656, case-insensitive delete), backup.html (cliente, producto, precio only), migracion.html (renames cliente). The code assumes producto and numeric precio are always present (ultimo.precio.toLocaleString at 324 would throw otherwise; there is no error boundary)."
+  }
+ ],
+ "clientState": [
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_role",
+   "usage": "Read by the head guard (line 6): 'director' or 'operario' grants access. Set in index.html (240, 360); read again in App (5503) to lock operario into the deposito view.",
+   "lines": "pedidos.html:6-9"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_auth",
+   "usage": "Legacy flag: value 'ok' alone passes the guard (line 7-9) and, with no role, the app behaves as director. Set to 'ok' by index.html for both roles.",
+   "lines": "pedidos.html:7-9"
+  },
+  {
+   "kind": "sessionStorage",
+   "key": "sersale_vista",
+   "usage": "Outside the section (5504-5507) but decides whether GestionProductos is mounted on reload (vista 'productos').",
+   "lines": "pedidos.html:5504-5507"
+  },
+  {
+   "kind": "localStorage",
+   "key": "sersale_last_seen",
+   "usage": "Constant LAST_SEEN_KEY declared at line 123; ISO-8601 UTC string written/read at 856-857 to count new pending orders.",
+   "lines": "pedidos.html:123"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "__db",
+   "usage": "Firestore instance, consumed through fb() (line 819).",
+   "lines": "pedidos.html:47"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "__fb",
+   "usage": "Object with the Firestore functions: collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot, increment, runTransaction.",
+   "lines": "pedidos.html:48"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "__fbReady",
+   "usage": "Set to true synchronously when the module runs, before the catalog is loaded. Every component does 'if(window.__fbReady) cargar(); else document.addEventListener(\"fbReady\",cargar)'; in practice it is always true when React starts.",
+   "lines": "pedidos.html:49, 244, 478"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "__productosOverride",
+   "usage": "Catalog map from config/productos.categorias; set asynchronously at startup (54) and after each save in GestionProductos (437); read by getProductos() (770) and once at line 768.",
+   "lines": "pedidos.html:54, 437"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "fbReady (document CustomEvent)",
+   "usage": "Dispatched on document after the catalog fetch settles (57). No listener is ever registered in practice because __fbReady is already true.",
+   "lines": "pedidos.html:57"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "__sersaleLogo",
+   "usage": "PNG data URL defined by assets/logo-data.js (loaded at line 29), used by jsPDF code later in the file.",
+   "lines": "pedidos.html:29"
+  },
+  {
+   "kind": "windowGlobal",
+   "key": "React, ReactDOM, Babel, jspdf, emailjs",
+   "usage": "UMD globals from the CDN scripts in the head.",
+   "lines": "pedidos.html:27-32"
+  },
+  {
+   "kind": "domId",
+   "key": "root",
+   "usage": "React mount point; empty until Babel has compiled and run the app.",
+   "lines": "pedidos.html:119"
+  },
+  {
+   "kind": "domId",
+   "key": "sersale_nav",
+   "usage": "Fixed bottom nav (line 5579, outside the section); the CSS at line 83 reserves 64px on both html and body for it.",
+   "lines": "pedidos.html:83"
+  }
+ ],
+ "external": [
+  {
+   "service": "Firebase / Firestore (project sersale-produccion), JS SDK 10.7.0 as ES modules from www.gstatic.com",
+   "usage": "All data access, directly from the browser, unauthenticated (no firebase-auth import). Default in-memory cache, no offline persistence.",
+   "lines": "pedidos.html:33-58"
+  },
+  {
+   "service": "unpkg.com",
+   "usage": "react@18 and react-dom@18 production UMD (floating major version, served through a redirect) and @babel/standalone@7.26.4 (about 3 MB, compiles the JSX on every page load).",
+   "lines": "pedidos.html:30-32"
+  },
+  {
+   "service": "cdnjs.cloudflare.com",
+   "usage": "jsPDF 2.5.1 UMD, loaded synchronously on every page load although only needed when a PDF is generated.",
+   "lines": "pedidos.html:28"
+  },
+  {
+   "service": "cdn.jsdelivr.net (EmailJS browser SDK @4, floating)",
+   "usage": "SDK for the re-contact alert e-mails (service/template/public key are at lines 777-779, outside the section).",
+   "lines": "pedidos.html:27"
+  },
+  {
+   "service": "Google Fonts (fonts.googleapis.com / fonts.gstatic.com)",
+   "usage": "Barlow Condensed 500/600/700, IBM Plex Mono 400/500/600, IBM Plex Sans 400/500/600/700; render-blocking stylesheet with display=swap.",
+   "lines": "pedidos.html:18-21"
+  }
+ ],
+ "bugs": [
+  {
+   "title": "Gestión de Productos falls back to the hardcoded catalog when the read fails, and the next save overwrites the whole Firestore catalog with it",
+   "lines": "pedidos.html:419-441 (see also 50-56, 755-768)",
+   "severity": "high",
+   "category": "persistence-integrity",
+   "evidence": "cargar: `catch(e){ console.error(e); setCats(PRODUCTOS); }` (429). PRODUCTOS is the hardcoded default object (755-766; line 768 never applies the override, see the next bug). guardar: `await setDoc(doc(db,\"config\",\"productos\"), { categorias: nuevasCats, updatedAt: ... })` (436) with no merge, where nuevasCats is derived from `cats`. Nothing marks the screen as 'failed to load' or blocks editing.",
+   "failureScenario": "Director opens Productos with no signal in the plant (getDoc rejects with 'client is offline' because the document is not kept in the memory cache), or when the Firestore read quota is exhausted. The screen silently shows the 10 default categories. When signal returns he adds 'Jamón Serrano': config/productos is replaced by defaults + that product, and every category/product added or removed since go-live disappears from the order form and price screens on all devices. config is not covered by backup.html.",
+   "suggestedFix": "On a load error show an error state with a retry button and keep all editing disabled; seed from defaults only when `!snap.exists()`. Apply each change as a delta inside runTransaction (read current categorias, add/remove one item, write) instead of writing a client-held copy.",
+   "confidence": "medium"
+  },
+  {
+   "title": "The Firestore catalog is never applied to the PRODUCTOS global: the app starts before config/productos is loaded",
+   "lines": "pedidos.html:47-58 (effect at 768, 3229, 3380, 3389, 3444)",
+   "severity": "medium",
+   "category": "async-race",
+   "evidence": "`window.__fbReady = true;` is set synchronously (49); the catalog is fetched in an un-awaited IIFE (50-58) that only later sets `window.__productosOverride` and dispatches 'fbReady'. Module scripts run before DOMContentLoaded and Babel standalone compiles and runs the inline text/babel script synchronously on DOMContentLoaded, so `if(window.__productosOverride) PRODUCTOS = window.__productosOverride;` (768) always runs before the getDoc can resolve. Nothing re-assigns PRODUCTOS later, and because __fbReady is already true no component listens for 'fbReady', so nothing re-renders when the override arrives.",
+   "failureScenario": "Director adds the category 'Fiambres Importados' and the product 'Jamón Serrano' in Gestión de Productos. In the Precios tab (TabPrecios reads `PRODUCTOS` directly at 3229/3389/3444) the product never appears and cannot be given a price, the 'x de N productos con precio acordado' counter uses the default list, and products removed from the catalog are still listed. Screens that use getProductos() show the default catalog until their next re-render if opened in the first moments after load.",
+   "suggestedFix": "Keep the catalog in one reactive place: load config/productos (ideally onSnapshot) into React state/context before or right after first render, and replace every direct `PRODUCTOS` read with that source (or getProductos()). Set __fbReady / dispatch fbReady only after the catalog fetch settles if the flag is meant to cover it.",
+   "confidence": "high"
+  },
+  {
+   "title": "Catalog saved with full-document read-modify-write from stale state: lost updates between devices and between consecutive taps",
+   "lines": "pedidos.html:432-475, 519, 534",
+   "severity": "medium",
+   "category": "persistence-integrity",
+   "evidence": "Every handler builds the new map from the `cats` captured at render, e.g. `const nuevasCats = {...cats, [cat]: cats[cat].filter(p=>p!==prod)};` (456), and guardar writes the entire map with setDoc (436). `cats` is loaded once on mount (477-479). Only the add buttons are disabled by `guardando` (572, 596); the delete buttons (519, 534) are not.",
+   "failureScenario": "(a) On a slow connection the director deletes 'Pollo' and, before that write returns, deletes 'Ribs': the second handler still sees `cats` containing 'Pollo' and its setDoc lands last, so 'Pollo' comes back. (b) A PC tab left open since yesterday adds a product and overwrites everything that was added from the iPhone in the meantime.",
+   "suggestedFix": "runTransaction on config/productos applying a single add/remove; disable all mutating controls while a save is in flight; subscribe with onSnapshot so the screen is never stale.",
+   "confidence": "medium"
+  },
+  {
+   "title": "desfmtMiles treats every dot as a thousands separator: '1500.50' becomes 150050",
+   "lines": "pedidos.html:156-167 (158), 189-194",
+   "severity": "medium",
+   "category": "money-parsing",
+   "evidence": "`String(txt).replace(/\\s/g, \"\").replace(/\\./g, \"\").replace(/,/g, \".\")` removes all dots before parsing. Checked by running the function: desfmtMiles(\"8990.50\") returns \"899050\", desfmtMiles(\"1500.5\") returns \"15005\", desfmtMiles(\"8,990.50\") returns \"8.99\".",
+   "failureScenario": "An amount pasted as 152340.50 (bank app, spreadsheet) into 'Registrar pago' (InputMonto at 3674), or typed with a keyboard whose decimal key is '.' (PC numpad, an iPhone whose region is not Argentina), becomes 15.234.050: the dot is silently swallowed and the decimals join the integer part. If not noticed, a payment or price 100 times too large is saved.",
+   "suggestedFix": "When the text has no comma and exactly one dot followed by 1-2 digits at the end, treat that dot as the decimal separator; for typed input, map a typed '.' to ',' (beforeinput/keydown) instead of discarding it.",
+   "confidence": "medium"
+  },
+  {
+   "title": "The delete button on a product card removes only the newest history entry, so the previous price silently becomes the current one",
+   "lines": "pedidos.html:279-286, 331, 346-355",
+   "severity": "medium",
+   "category": "logic",
+   "evidence": "`<button onClick={()=>eliminarPrecio(ultimo.id, prod)}>` (331) with `confirm(\"¿Eliminar precio de \"+producto+\"?\")` (280) deletes one document. The card then shows hist[1] as the price. RemitoPedido takes the latest entry per product (1659-1663) and adds a new entry on every remito (1732), so a product usually has many entries; only the first 4 rows have a delete button (346-351) and '+ N registros anteriores' (355) is not expandable.",
+   "failureScenario": "The director removes 'Jamón Cocido' from a client because the agreed price no longer applies. The card stays, now showing the older $7.500, and the next remito for that client is pre-filled with $7.500. To really remove the product he must tap delete and confirm once per historical entry.",
+   "suggestedFix": "Make the card-level delete remove all entries of that product for the client (batched write) with a clear confirmation text; keep per-row delete for single entries and make the full history reachable.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Offline or failed load is shown as 'Sin precios registrados para este cliente'",
+   "lines": "pedidos.html:223-241 (239), 303-309",
+   "severity": "medium",
+   "category": "error-handling",
+   "evidence": "`catch(e){ console.error(e); setPrecios({}); }` (239) and no check of `snap.metadata.fromCache`; with the default memory cache a getDocs query resolves with an empty cached snapshot when the device is offline. The render shows the empty state whenever `productos.length===0` (304-309).",
+   "failureScenario": "With no signal, the director opens a client's prices and reads 'Sin precios registrados... Tocá + Nuevo'. He believes the list was lost and re-enters prices or quotes from memory; re-entered prices are appended as extra history entries.",
+   "suggestedFix": "Add a separate error/offline state with a retry button (treat an empty snapshot with fromCache === true as 'sin conexión'), never the empty state.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Saves hang forever when offline: 'Guardando...' never clears",
+   "lines": "pedidos.html:257-278, 432-441",
+   "severity": "medium",
+   "category": "async",
+   "evidence": "`await addDoc(...)` / `await updateDoc(...)` (264-272) and `await setDoc(...)` (436) only resolve when the server acknowledges the write; there is no timeout and `setGuardando(false)` (277, 440) runs only after the await.",
+   "failureScenario": "In an area without signal the director taps Guardar: the button stays on 'Guardando...' indefinitely. He taps Cancelar and reopens '+ Nuevo': the button is still disabled because `guardando` is still true. If he closes the app the queued write is lost (memory cache); if signal returns later the write lands and anything he re-entered in the meantime is duplicated in the history. In GestionProductos every add button stays disabled until reconnection.",
+   "suggestedFix": "Do not block the UI on the server ack: update local state optimistically and show a 'pendiente de sincronizar' indicator, or race the write against a timeout and tell the user clearly; show an offline banner (navigator.onLine / snapshot metadata).",
+   "confidence": "medium"
+  },
+  {
+   "title": "Editing a price rewrites the entry in place (price, date and free-text product name), so the 'history' loses data and can split",
+   "lines": "pedidos.html:247-251, 269-272, 383-384",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "Edit mode does `updateDoc(doc(db,\"precios_cliente\",editModal.id),{ producto:formProducto.trim(), precio:+formPrecio, fecha:new Date().toISOString() })` on the newest entry, and the product is an editable text input (383-384) while only that single document is renamed.",
+   "failureScenario": "The header says 'Tocá para editar', so a price increase from $8.990 to $9.500 is entered by editing: the $8.990 entry disappears, the date becomes today and the '% vs anterior' is computed against an older price. If the product text is changed (typo fix, accidental edit), only the newest entry moves to the new name; the old card remains with the previous price as 'current' and that older price is what the next remito pre-fills.",
+   "suggestedFix": "Make the default action 'new price' (append a new entry for the same product); if a correction mode is kept, do not touch fecha and show the product name read-only.",
+   "confidence": "medium"
+  },
+  {
+   "title": "Unchanged price shows a down arrow: '▼ 0.0% vs anterior'",
+   "lines": "pedidos.html:314, 325-329",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`{diff>0?\"▲\":\"▼\"} {Math.abs(diff).toFixed(1)}% vs anterior` has no case for diff === 0, and toFixed prints a dot decimal instead of the es-AR comma. RemitoPedido appends an entry on every remito even when the price is the same (1732), so diff === 0 is the usual case.",
+   "failureScenario": "Most product cards read '▼ 0.0% vs anterior', which looks like a price drop; a real change of 5,3% is printed as '5.3%'.",
+   "suggestedFix": "Hide the line (or show '= sin cambios') when diff is 0 and format with toLocaleString('es-AR', {maximumFractionDigits:1}). Compare against the last different price rather than the previous entry.",
+   "confidence": "high"
+  },
+  {
+   "title": "Search with no matches shows the 'no prices for this client' empty state",
+   "lines": "pedidos.html:288, 303-309",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "`productos` is the filtered list (288) and `productos.length===0` renders 'Sin precios registrados para este cliente / Tocá + Nuevo' (304-309) without distinguishing an empty collection from an empty filter result. The filter is accent-sensitive (`p.toLowerCase().includes(filtroProducto.toLowerCase())`).",
+   "failureScenario": "The director types 'jamon' (no accent, as typed on an iPhone): 'Jamón Cocido Natural Sublime' does not match and the screen says the client has no prices registered.",
+   "suggestedFix": "Normalise both sides (NFD, strip diacritics) and show 'Sin resultados para \"...\"' when the filter is non-empty.",
+   "confidence": "high"
+  },
+  {
+   "title": "Price history is queried by exact client name while the rest of the app matches case-insensitively",
+   "lines": "pedidos.html:227-230",
+   "severity": "low",
+   "category": "data-contract",
+   "evidence": "`where(\"cliente\",\"==\",cliente)` with the name from clientes.nombre. RemitoPedido falls back to a lower-cased/trimmed comparison (1649-1657) and GestionClientes.eliminar deletes by lower-cased name (651-656), which shows name variants exist; GestionClientes.guardar renames the client without touching precios_cliente (633).",
+   "failureScenario": "A client is renamed, or its orders were entered through 'Otro' with different capitalisation: remitos keep saving and finding prices under the other spelling, but this screen shows an incomplete history or 'Sin precios registrados' for the registered client. Would require such name variants to exist in the data.",
+   "suggestedFix": "Reference clients by document id (store clienteId in precios_cliente) or at least normalise names on write and cascade renames.",
+   "confidence": "low"
+  },
+  {
+   "title": "CSS variables --fondo, --borde and --sombra are used but never defined in pedidos.html",
+   "lines": "pedidos.html:77, 316",
+   "severity": "low",
+   "category": "css",
+   "evidence": "`.crm-page{ background: var(--fondo) }` (77) and the card style `border:\"1px solid var(--borde)\", boxShadow:\"var(--sombra)\"` (316, and nine more places later in the file). :root (86-89) only defines --carbon, --lacre, --lacre-cl, --hueso, --tinta, --acero, --linea; --fondo/--borde exist only in index.html, migracion.html and dashboard.html.",
+   "failureScenario": "The declarations are invalid at computed-value time, so the price cards render with no border and no shadow (white blocks on grey) instead of the intended card style.",
+   "suggestedFix": "Define --fondo, --borde and --sombra in the :root block of this page (or replace with --linea and a literal shadow).",
+   "confidence": "high"
+  },
+  {
+   "title": "Bottom padding applied twice and impossible to remove for the operario view",
+   "lines": "pedidos.html:83 (with 5520)",
+   "severity": "low",
+   "category": "css",
+   "evidence": "`body,html{padding-bottom:64px !important;}` adds 64px on html and another 64px on body. App tries `document.body.style.paddingBottom = \"0\"` for operarios (5520), which cannot override a stylesheet !important rule.",
+   "failureScenario": "Every screen ends with 128px of empty space (the nav is about 58px tall) and, combined with .crm-page min-height:100vh, even an empty screen scrolls. Warehouse staff, whose nav is hidden, still get the 128px blank strip.",
+   "suggestedFix": "Apply the padding to body only, without !important, sized with env(safe-area-inset-bottom), and toggle it with a class for the operario role.",
+   "confidence": "high"
+  },
+  {
+   "title": "Demo client names are merged into the real client picker",
+   "lines": "pedidos.html:133-137 (used at 1143, 1518)",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "CLIENTES_DEFAULT holds nine placeholder names ('Supermercado Don Juan', 'Hotel Castelar', ...) and the order forms build `[...clientesDB.map(c=>c.nombre), ...CLIENTES_DEFAULT.filter(d=>!clientesDB.find(c=>c.nombre===d)), \"Otro\"]`.",
+   "failureScenario": "The client select of 'Nuevo pedido' always lists nine clients that do not exist after the real ones; picking one creates an order for a client with no record, phone, address or current account.",
+   "suggestedFix": "Remove the constant and its two usages (use it only when the clientes collection is empty, if at all).",
+   "confidence": "high"
+  },
+  {
+   "title": "guardar() swallows the error, so the add modals close and clear the typed text even when the save failed",
+   "lines": "pedidos.html:432-441, 450-451, 465-466",
+   "severity": "low",
+   "category": "error-handling",
+   "evidence": "guardar catches the error, shows `alert(\"Error al guardar\")` and returns normally; agregarProducto then runs `setInputProd(\"\"); setModalCat(null);` (451) and agregarCategoria `setInputCat(\"\"); setModalNuevaCat(false);` (466) unconditionally.",
+   "failureScenario": "A write is rejected (permission, quota): after the alert the bottom sheet closes and the product name is gone; the user must reopen the category and type it again.",
+   "suggestedFix": "Return a boolean (or rethrow) from guardar and only reset/close on success.",
+   "confidence": "high"
+  },
+  {
+   "title": "A category containing only empty entries cannot be deleted",
+   "lines": "pedidos.html:470, 504, 518",
+   "severity": "low",
+   "category": "logic",
+   "evidence": "The 'Eliminar' button is shown when `prodsValidos.length===0` (518, after `.filter(p=>p)` at 504) but the handler checks the raw array: `if(cats[cat]?.length>0){ alert(\"Vaciá la categoría antes de eliminarla\"); return; }` (470).",
+   "failureScenario": "If a category array holds an empty string or null (the code filters for them everywhere, which suggests they exist in the stored data), the screen shows 0 products and an Eliminar button that always answers 'Vaciá la categoría antes de eliminarla' with nothing left to remove. Requires such entries to exist in config/productos.",
+   "suggestedFix": "Use the same filtered list in the handler and strip falsy entries when saving.",
+   "confidence": "low"
+  },
+  {
+   "title": "InputMonto caret bookkeeping: stale caretRef after a rejected keystroke, and wrong caret after a leading comma",
+   "lines": "pedidos.html:173-194",
+   "severity": "low",
+   "category": "react",
+   "evidence": "handleChange always sets `caretRef.current` (192) but the effect that consumes it (173-188) only runs on a re-render; when the keystroke does not change the value (third decimal digit, second comma, a dot) the parent state does not change, no render happens and the ref stays set, so the next unrelated render calls `el.setSelectionRange(pos,pos)` on this input even if it is not focused. Separately, typing ',' in an empty field gives display '0,' with objetivo=1, and the loop places the caret after the '0' (before the comma).",
+   "failureScenario": "(a) After a rejected keystroke in the amount, typing in another field of the same form triggers setSelectionRange on the unfocused amount input; on Safari versions where that call moves focus, the cursor jumps back to the amount (depends on that WebKit behaviour). (b) Typing ',5' yields '5,' (value 5) instead of '0,5'; only matters for amounts below 1.",
+   "suggestedFix": "Clear caretRef when the parsed value equals the current value, apply the selection only if document.activeElement === el, and count the inserted leading zero when computing the target position.",
+   "confidence": "low"
+  }
+ ],
+ "security": [
+  {
+   "title": "No Firebase Auth: Firestore is used unauthenticated from the browser",
+   "detail": "The module imports only firebase-app and firebase-firestore (34-36); no auth SDK is loaded anywhere in the page, so every read/write is anonymous and the Firestore rules must allow unauthenticated access to all collections used. Anyone who has the public config (37-44, also in /home/user/sersale-produccion/firebase.js) can read, modify or delete clients, prices, current accounts and orders without opening the app. The rules file is not in the repo, so this is inferred from the absence of auth. A real fix needs Firebase Auth (or App Check plus rules), not UI changes.",
+   "lines": "pedidos.html:33-48"
+  },
+  {
+   "title": "Access control is a client-side sessionStorage flag",
+   "detail": "The guard accepts sersale_role 'director'/'operario' or sersale_auth === 'ok' (6-9). Any visitor can set those keys from the console. sersale_auth === 'ok' with no role gives the full director UI (App only checks role === 'operario' at 5503). The operario role needs no password at all (index.html 239-246) and receives the same HTML with all director code; the restriction is only the esOperario flag in React. The guard also does not stop execution: the rest of the page keeps loading while the redirect is pending.",
+   "lines": "pedidos.html:4-12"
+  },
+  {
+   "title": "Full Firestore write API exposed on window",
+   "detail": "window.__db and window.__fb (including setDoc, deleteDoc, runTransaction) are global, so any script running in the page, including any of the third-party CDN scripts, has unrestricted database access.",
+   "lines": "pedidos.html:47-48"
+  },
+  {
+   "title": "Third-party scripts without integrity hashes and with floating versions",
+   "detail": "react@18, react-dom@18 and @emailjs/browser@4 resolve to whatever the CDN serves at load time; none of the seven script tags has an integrity attribute and there is no Content-Security-Policy. A compromised or changed package would run with full access to the data (see previous point).",
+   "lines": "pedidos.html:27-32"
+  },
+  {
+   "title": "API key in source",
+   "detail": "Normal for Firebase web apps, but it should be restricted by HTTP referrer in Google Cloud and paired with App Check, since the key plus open rules is all that is needed to use the database.",
+   "lines": "pedidos.html:37-44"
+  },
+  {
+   "title": "Injection surface in this section",
+   "detail": "No innerHTML or document.write; client, product and category names are rendered as React text nodes and passed as plain strings to confirm(). Category names become Firestore map keys through setDoc with a plain object, which is safe for dots and slashes. No injection issue found in lines 1-608.",
+   "lines": "pedidos.html:215-607"
+  }
+ ],
+ "ux": [
+  {
+   "title": "Login is lost every time the home-screen app is closed",
+   "problem": "The guard relies on sessionStorage (sersale_role / sersale_auth). iOS discards sessionStorage when a home-screen web app is closed or evicted from memory, so the director has to type the password again on almost every launch and loses the last view.",
+   "suggestion": "Persist the session in localStorage with an expiry (for example 30 days) and an explicit 'Cerrar sesión'; keep the role check in one shared helper for all pages.",
+   "impact": "high",
+   "lines": "pedidos.html:4-12"
+  },
+  {
+   "title": "Blank screen while the app boots",
+   "problem": "#root is empty until seven synchronous scripts are downloaded and Babel has compiled 337 KB of JSX; on an iPhone that is one to several seconds of grey page on every page load and on every bottom-nav switch. If the Firebase module fails to load (no signal) the screens stay on 'Cargando...' forever with no message.",
+   "suggestion": "Put a static splash/skeleton inside #root, precompile the JSX, and add a timeout with a 'Sin conexión - Reintentar' state.",
+   "impact": "high",
+   "lines": "pedidos.html:27-32, 119-120"
+  },
+  {
+   "title": "Native alert() and confirm() dialogs",
+   "problem": "Validation, errors and every delete use blocking browser dialogs showing the site domain: alert at 258, 259, 276, 285, 439, 448, 463, 470; confirm at 280, 455, 471. Error messages are generic ('Error al guardar').",
+   "suggestion": "Inline field validation, toast/snackbar for success and errors, an in-app confirmation sheet or delete with 'Deshacer'.",
+   "impact": "medium",
+   "lines": "pedidos.html:258-285, 439-471"
+  },
+  {
+   "title": "Tap targets far below 44px",
+   "problem": "Back arrow is a 20px glyph with padding 0 (293, 487); the card-level delete is a 16px glyph at 50% opacity right next to the tappable price (331); per-row delete is a 12px glyph with padding 0 (351); product delete is 26x26 (535); 'Eliminar' category has padding 4px 8px at 11px (520); '+ Categoría' and '+ Nuevo' are about 28-32px tall (298, 493); modal close buttons are 32x32 (565, 589).",
+   "suggestion": "Minimum 44x44 hit areas (padding or pseudo-element), move destructive actions away from the edit target (swipe action or a menu).",
+   "impact": "high",
+   "lines": "pedidos.html:293, 298, 331, 351, 487, 493, 520, 535, 565, 589"
+  },
+  {
+   "title": "Changing a price takes too many steps",
+   "problem": "Tap the card, then tap the price field (not auto-focused), delete the old digits one by one (no select-on-focus, no clear button), type, dismiss the keyboard to reach Guardar (no Enter-to-save, and the centered fixed modal leaves the buttons under the iOS keyboard on small phones), then wait for a full re-query. The modal cannot be dismissed by tapping the backdrop.",
+   "suggestion": "Bottom sheet sized with visualViewport, autoFocus and select the amount, enterKeyHint='done' with Enter saving, optimistic list update plus toast, backdrop/swipe to dismiss.",
+   "impact": "high",
+   "lines": "pedidos.html:363-402"
+  },
+  {
+   "title": "Product is chosen from a native picker with about 80 options",
+   "problem": "'+ Nuevo' uses a <select> with optgroups for the whole catalog; on iOS that is a long wheel with no search, and the grey colour meant for '(ya cargado)' options is ignored by the native picker.",
+   "suggestion": "Searchable product list (accent-insensitive) with already-priced products marked or moved to the end.",
+   "impact": "medium",
+   "lines": "pedidos.html:369-381"
+  },
+  {
+   "title": "No feedback after saving or deleting; nothing while reloading",
+   "problem": "After guardarPrecio / eliminarPrecio / guardar the only signal is that the list eventually changes; deletes have no in-flight state at all, so on a slow network the tap appears to do nothing.",
+   "suggestion": "Optimistic update, per-item pending state, success toast.",
+   "impact": "medium",
+   "lines": "pedidos.html:274-275, 279-286, 432-441"
+  },
+  {
+   "title": "Scroll position is not managed between the client list and the price history",
+   "problem": "HistorialPrecios replaces GestionClientes in the same document, so window scroll carries over: coming from a client far down the list, the history opens scrolled down (clamped to the bottom of the shorter page), and on going back the list is no longer at the client that was opened.",
+   "suggestion": "Scroll to top when a sub-screen opens and restore the saved scrollY (or keep the list mounted and show the detail as an overlay) on back.",
+   "impact": "medium",
+   "lines": "pedidos.html:215, 290-293"
+  },
+  {
+   "title": "In-app navigation is not connected to browser history",
+   "problem": "Screens switch only through onBack props; the iOS edge-swipe back gesture leaves pedidos.html entirely (or does nothing in standalone mode) and in-progress input is lost.",
+   "suggestion": "Push a history state per screen/modal and handle popstate so the back gesture closes the modal or returns to the previous screen.",
+   "impact": "medium",
+   "lines": "pedidos.html:293, 487"
+  },
+  {
+   "title": "Product catalog screen has no search, rename, move or reorder",
+   "problem": "Categories are collapsed; finding a product means opening them one by one. Fixing a typo requires delete and re-create (and price lists keep the old name). Product name inputs have no autoCapitalize hint.",
+   "suggestion": "Global search across categories, inline rename (with optional cascade to precios_cliente), move between categories, autoCapitalize='words'.",
+   "impact": "medium",
+   "lines": "pedidos.html:498-553, 568, 592"
+  },
+  {
+   "title": "Bottom-sheet modals sit behind the keyboard",
+   "problem": "The add-product and add-category sheets are position:fixed at the bottom with an auto-focused input; the iOS keyboard covers the sheet and Safari has to scroll the page to reveal the input, leaving the action button hidden. Mitigated only because Enter also submits.",
+   "suggestion": "Position sheets using window.visualViewport height (or place them at the top third), and set enterKeyHint.",
+   "impact": "low",
+   "lines": "pedidos.html:556-604"
+  },
+  {
+   "title": "Inputs with 14px text and zoom lock",
+   "problem": "Search and form inputs use 14px (301, 371, 384, 568, 592). iOS does not zoom on focus only because the viewport has maximum-scale=1.0 (22), which also disables pinch zoom on some browsers; if that meta is ever relaxed the page will zoom on every focus. Inputs also remove the outline (outline:none) and have no focus style.",
+   "suggestion": "Use 16px on all inputs/selects and add a visible focus border.",
+   "impact": "low",
+   "lines": "pedidos.html:22, 301, 371, 384, 568, 592"
+  },
+  {
+   "title": "Missing home-screen app polish",
+   "problem": "No apple-touch-icon or web manifest (the home-screen icon is a page screenshot), no viewport-fit=cover / safe-area handling, no status-bar style, 100vh min-height plus 128px of bottom padding makes every screen scroll and bounce.",
+   "suggestion": "Add apple-touch-icon and manifest, viewport-fit=cover with env(safe-area-inset-*) paddings, use 100dvh, single bottom padding equal to the nav height.",
+   "impact": "medium",
+   "lines": "pedidos.html:22-25, 75-83"
+  },
+  {
+   "title": "Price cards always say '/kg' and offer limited history",
+   "problem": "The unit is hardcoded as '/kg' although orders can be in piezas/unidades; only 4 history rows are visible and '+ N registros anteriores' cannot be expanded; the sparkline only has a title attribute, which does not exist on touch.",
+   "suggestion": "Show the unit only when known, make the history expandable, show the value on tap.",
+   "impact": "low",
+   "lines": "pedidos.html:324, 336-355"
+  }
+ ],
+ "perf": [
+  {
+   "title": "JSX compiled in the browser on every page load",
+   "problem": "@babel/standalone (about 3 MB of JavaScript to download, parse and run) compiles the 337 KB inline script on the main thread at DOMContentLoaded on every load and every bottom-nav page switch. With no data-presets attribute Babel standalone applies its default presets (react plus env), so the code is also down-levelled (async/await to generator state machines, etc.) and an inline source map is generated, which makes both compile and runtime slower.",
+   "suggestion": "Precompile the JSX once (a one-off compile step whose output is committed or built by Netlify) and drop Babel from the page; as a stopgap add data-presets=\"react\" to skip the env transforms.",
+   "impact": "high",
+   "lines": "pedidos.html:32, 120"
+  },
+  {
+   "title": "Seven synchronous scripts block first paint",
+   "problem": "EmailJS, jsPDF (about 360 KB), assets/logo-data.js (81 KB), React, ReactDOM and Babel are plain <script src> tags in the head, from four different origins with no preconnect, and all are needed before anything is drawn. jsPDF, the logo and EmailJS are only used when generating a PDF or sending the alert e-mail.",
+   "suggestion": "Load jsPDF, the logo data and EmailJS lazily on first use (dynamic script injection); add defer to the rest and preconnect to the CDN origins, or self-host the files on Netlify.",
+   "impact": "high",
+   "lines": "pedidos.html:27-32"
+  },
+  {
+   "title": "Floating CDN versions",
+   "problem": "unpkg.com/react@18 and react-dom@18 answer with a redirect to the current 18.x file on each uncached load (extra round trip, short cache lifetime), and @emailjs/browser@4 is also unpinned.",
+   "suggestion": "Pin exact versions (for example react@18.3.1) so the files are served directly and cached long-term.",
+   "impact": "low",
+   "lines": "pedidos.html:27, 30-31"
+  },
+  {
+   "title": "No local Firestore cache",
+   "problem": "getFirestore(app) uses the default in-memory cache: every page load and every screen re-downloads its data, nothing is available offline, and getDoc fails outright without signal.",
+   "suggestion": "initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }) for instant repeat loads and offline reads/writes; review the screens that rely on getDocs returning server data.",
+   "impact": "medium",
+   "lines": "pedidos.html:45-46"
+  },
+  {
+   "title": "Price history is fully re-downloaded on open and after every change, and grows without bound",
+   "problem": "cargar reads every precios_cliente document of the client (227-230) on mount and again after each save or delete (275, 284). RemitoPedido appends one document per item per remito (1732), so an active client accumulates thousands of documents per year, all billed as reads and all sorted and grouped on the phone each time.",
+   "suggestion": "Update local state after a write instead of re-querying; store only real price changes (skip the write when the price equals the latest) or keep a per-client 'current prices' document plus an optional history sub-collection.",
+   "impact": "medium",
+   "lines": "pedidos.html:223-241, 275, 284"
+  },
+  {
+   "title": "Catalog document fetched twice",
+   "problem": "config/productos is read at startup (52) and again when GestionProductos mounts (422) although window.__productosOverride already holds it.",
+   "suggestion": "Single shared catalog store (state/context fed by one onSnapshot).",
+   "impact": "low",
+   "lines": "pedidos.html:52, 422"
+  },
+  {
+   "title": "Render-blocking web fonts",
+   "problem": "One stylesheet requesting three families and ten weights is loaded before first paint; the preconnect to fonts.gstatic.com is duplicated (19-20).",
+   "suggestion": "Reduce to the weights actually used, load the stylesheet non-blocking (media swap) or self-host woff2 files.",
+   "impact": "low",
+   "lines": "pedidos.html:18-21"
+  },
+  {
+   "title": "Small per-render work in HistorialPrecios",
+   "problem": "The filtered and sorted product list (288) and, for each bar, the min/max of the sparkline (337-338) are recomputed on every render, including each keystroke in the search box and in the modal.",
+   "suggestion": "useMemo for the filtered list and compute min/max once per card; not noticeable today but grows with the unbounded history.",
+   "impact": "low",
+   "lines": "pedidos.html:288, 336-342"
+  }
+ ]
+}

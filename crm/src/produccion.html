@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<script src="js/sesion.js"></script>
+<script>
+  (function(){
+    var role = sessionStorage.getItem("sersale_role");
+    if (role === "director") return;
+    if (role === "operario") { window.location.href = "pedidos.html"; return; }
+    // Compat: si tiene auth legacy pero no rol nuevo, también dejarlo pasar (será migrado al loguear)
+    if (sessionStorage.getItem("sersale_auth") === "ok") return;
+    window.location.href = "index.html";
+  })();
+</script>
+
+  <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/base.js"></script>
+<script src="js/shell.js"></script>
+  <title>Sersale — Producción</title>
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
+  <script type="module">
+    import { db, collection, addDoc, getDocs, getDocsFromServer, getDoc, updateDoc, deleteDoc, doc, query, orderBy, where, Timestamp, setDoc, runTransaction } from "./js/fb.js";
+    window.__db = db;
+    window.__firebase = { collection, addDoc, getDocs, getDocsFromServer, getDoc, updateDoc, deleteDoc, doc, query, orderBy, where, Timestamp, setDoc, runTransaction };
+    window.__fbReady = true;
+    document.dispatchEvent(new Event("fbReady"));
+  </script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #F2F3F5; font-family: 'IBM Plex Sans','IBM Plex Sans','Inter',sans-serif; }
+    input, select, textarea, button { font-family: inherit; }
+  
+    :root { --app-max-w: 480px; }
+    @media (min-width: 768px) { :root { --app-max-w: 860px; } }
+    @media (min-width: 1200px) { :root { --app-max-w: 960px; } }
+    .crm-page { min-height:100vh; background:#F2F3F5; max-width:var(--app-max-w); margin:0 auto; }
+</style>
+<script src="vendor/jspdf.umd.min.js"></script>
+
+<style>
+/* ── Capa visual compartida — Sersale ─────────────────────── */
+:root{
+  --carbon:#12161A; --lacre:#A4232A; --lacre-cl:#C33039;
+  --hueso:#EFEAE1;  --tinta:#191E23; --acero:#79828B; --linea:#D8DCE0;
+}
+body{ font-family:'IBM Plex Sans','Inter',system-ui,-apple-system,sans-serif;
+      -webkit-font-smoothing:antialiased; color:var(--tinta) }
+button,input,select,textarea{ font-family:inherit }
+
+/* Cartelería: la familia condensada solo en las chapas de cabecera */
+.chapa,.hdr-t,.header-sub,.card-title,.hdr-left h1{
+  font-family:'Barlow Condensed','IBM Plex Sans',sans-serif;
+  letter-spacing:.035em; font-size:1.06em;
+}
+.hdr-t,.hdr-left h1,.card-title{ text-transform:uppercase }
+
+/* Datos duros en monoespaciada tabular */
+.hdr-s,.mono,.dato{ font-family:'IBM Plex Mono',ui-monospace,monospace;
+      font-variant-numeric:tabular-nums; letter-spacing:.04em }
+
+/* Foco visible para teclado */
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+  outline:2px solid var(--lacre-cl); outline-offset:2px }
+::selection{ background:var(--lacre); color:var(--hueso) }
+
+/* Barras de desplazamiento discretas */
+*::-webkit-scrollbar{ width:9px; height:9px }
+*::-webkit-scrollbar-thumb{ background:#C4CAD1; border-radius:6px }
+*::-webkit-scrollbar-track{ background:transparent }
+
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important } }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script defer src="js/produccion.js"></script>
+
+
+
+  
+
+</body>
+</html>
