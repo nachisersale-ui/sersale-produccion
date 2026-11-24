@@ -279,6 +279,58 @@
       );
     }
 
+    // ── Selector de producto con buscador ──
+    // El catálogo es largo: en vez de recorrer una lista, se escribe parte del nombre
+    // (sin importar acentos ni mayúsculas) y se toca el producto. Si no está en el
+    // catálogo, «Otro» deja cargado lo que se escribió.
+    function MueSelectorProducto({ valor, libre, catalogo, etiqueta, id, onElegir }) {
+      const [abierto, setAbierto] = useState(false);
+      const [busqueda, setBusqueda] = useState("");
+      const campo = React.useRef(null);
+      useEffect(() => { if (abierto && campo.current) campo.current.focus(); }, [abierto]);
+      const q = busqueda.trim();
+      const grupos = Object.keys(catalogo)
+        .map(cat => ({ cat, productos: p1ProductosDe(catalogo, cat).filter(p => !q || SersaleBase.coincide(p, q)) }))
+        .filter(g => g.productos.length > 0);
+      const cantidad = grupos.reduce((s, g) => s + g.productos.length, 0);
+      const mostrado = valor === MUE_OTRO ? (libre.trim() || "Otro (escribir)") : valor;
+      function elegir(sel, texto) { onElegir(sel, texto); setAbierto(false); setBusqueda(""); }
+      return (
+        <div>
+          <button type="button" id={id} aria-label={etiqueta} aria-expanded={abierto} onClick={()=>setAbierto(!abierto)}
+            style={{...MUE_CAMPO, display:"flex", alignItems:"center", justifyContent:"space-between", textAlign:"left", cursor:"pointer", minHeight:48}}>
+            <span style={{color:mostrado ? "#191E23" : "#79828B", overflowWrap:"anywhere"}}>{mostrado || "Elegir producto…"}</span>
+            <span style={{color:"#79828B",fontSize:12,marginLeft:8,flexShrink:0}}>{abierto ? "▲" : "▼"}</span>
+          </button>
+          {abierto && (
+            <div style={{marginTop:6,border:"1.5px solid #2A333B",borderRadius:12,background:"#fff",overflow:"hidden"}}>
+              <div style={{padding:8,borderBottom:"1px solid #E4E7EA"}}>
+                <input ref={campo} style={{...MUE_CAMPO, padding:"10px 12px"}} placeholder="🔍 Buscar producto por nombre" aria-label={"Buscar " + etiqueta.toLowerCase()}
+                  enterKeyHint="search" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"
+                  value={busqueda} onChange={e=>setBusqueda(e.target.value)} />
+              </div>
+              <div style={{maxHeight:280,overflowY:"auto",WebkitOverflowScrolling:"touch"}}>
+                {grupos.map(g => (
+                  <div key={g.cat}>
+                    <div style={{padding:"6px 14px",background:"#F2F3F5",fontSize:11,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",color:"#5C666F"}}>{g.cat}</div>
+                    {g.productos.map(p => (
+                      <button key={g.cat + "|" + p} type="button" onClick={()=>elegir(p, "")}
+                        style={{display:"block",width:"100%",minHeight:44,padding:"8px 14px",border:"none",borderBottom:"1px solid #F2F3F5",background:p === valor ? "#F7EAEA" : "#fff",textAlign:"left",fontSize:15,color:"#191E23",fontWeight:p === valor ? 600 : 400,cursor:"pointer"}}>{p}</button>
+                    ))}
+                  </div>
+                ))}
+                {cantidad === 0 && <div style={{padding:"14px",fontSize:13,color:"#79828B"}}>Ningún producto del catálogo coincide.</div>}
+                <button type="button" onClick={()=>elegir(MUE_OTRO, q)}
+                  style={{display:"block",width:"100%",minHeight:46,padding:"8px 14px",border:"none",background:"#fff",textAlign:"left",fontSize:15,color:"#6B4E8E",fontWeight:600,cursor:"pointer"}}>
+                  {q ? "➕ Otro: «" + q + "»" : "➕ Otro (escribir el nombre)"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ── Formulario (alta y edición de un certificado) ──
     function MuestraForm({ muestra, clientes, onCerrar, onGuardada, atras }) {
       const nueva = !muestra || !muestra.id;
@@ -450,15 +502,8 @@
                   <span style={{fontWeight:700,fontSize:12,color:"#79828B",letterSpacing:".06em"}}>MUESTRA {i + 1}</span>
                   {filas.length > 1 && <button type="button" onClick={()=>setFilas(fs => fs.filter(x => x.fila !== f.fila))} aria-label={"Quitar la muestra " + (i + 1)} style={{minWidth:44,minHeight:44,margin:"-10px -8px -6px 0",border:"none",background:"transparent",color:"#C33039",fontSize:18,cursor:"pointer"}}>✕</button>}
                 </div>
-                <select id={"mue-prod-" + f.fila} aria-label={"Producto de la muestra " + (i + 1)} style={MUE_CAMPO} value={f.sel} onChange={e=>cambiarFila(f.fila, { sel: e.target.value })}>
-                  <option value="">Elegir producto…</option>
-                  {Object.keys(catalogo).filter(cat => productosDe(cat).length > 0).map(cat => (
-                    <optgroup key={cat} label={cat}>
-                      {productosDe(cat).map(p => <option key={cat + "|" + p} value={p}>{p}</option>)}
-                    </optgroup>
-                  ))}
-                  <option value={MUE_OTRO}>Otro (escribir)…</option>
-                </select>
+                <MueSelectorProducto id={"mue-prod-" + f.fila} etiqueta={"Producto de la muestra " + (i + 1)} valor={f.sel} libre={f.libre} catalogo={catalogo}
+                  onElegir={(sel, texto) => cambiarFila(f.fila, sel === MUE_OTRO ? { sel, libre: texto || f.libre } : { sel, libre: "" })} />
                 {f.sel === MUE_OTRO && (
                   <input id={"mue-libre-" + f.fila} style={{...MUE_CAMPO, marginTop:8}} placeholder="Escribí qué muestra es" aria-label={"Nombre de la muestra " + (i + 1)} autoComplete="off"
                     value={f.libre} onChange={e=>cambiarFila(f.fila, { libre: e.target.value })} />

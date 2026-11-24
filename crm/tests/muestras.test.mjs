@@ -50,9 +50,21 @@ async function elegirCliente(h, nombre, libre) {
   if (libre != null) await p.getByRole("button", { name: "➕ Otro (cliente nuevo)" }).click();
   else await p.getByRole("button", { name: nombre, exact: true }).click();
 }
-async function fila(h, n, { producto, otro, cantidad, unidad, nota }) {
+async function fila(h, n, { producto, buscar, otro, cantidad, unidad, nota }) {
   const p = h.page;
-  if (producto != null) await p.getByLabel("Producto de la muestra " + n).selectOption(producto);
+  // El producto se elige con el buscador: `buscar` es lo que se escribe (por defecto, el nombre entero).
+  if (producto != null) {
+    await p.getByRole("button", { name: "Producto de la muestra " + n, exact: true }).click();
+    const campo = p.getByLabel("Buscar producto de la muestra " + n);
+    if (producto === "__otro__") {
+      if (otro != null) await campo.fill(otro);
+      await p.getByRole("button", { name: /^➕ Otro/ }).click();
+      otro = null; // ya quedó cargado con lo que se buscó
+    } else {
+      await campo.fill(buscar != null ? buscar : producto);
+      await p.getByRole("button", { name: producto, exact: true }).click();
+    }
+  }
   if (otro != null) await p.getByLabel("Nombre de la muestra " + n).fill(otro);
   if (cantidad != null) { await p.getByLabel("Cantidad de la muestra " + n).fill(""); await p.getByLabel("Cantidad de la muestra " + n).pressSequentially(cantidad); }
   if (unidad != null) await p.getByLabel("Unidad de la muestra " + n).selectOption(unidad);
@@ -79,7 +91,14 @@ test("alta: certificado con número correlativo, cliente de la lista, varias mue
     await elegirCliente(h, CLIENTE);
     await boton(h, "✓ Guardar certificado").click();
     await toast(h, "Cargá al menos una muestra").waitFor();
-    await fila(h, 1, { producto: "Jamón Cocido Natural Sublime" });
+    // El producto se busca por nombre, sin acentos ni mayúsculas: quedan solo los que coinciden.
+    await p.getByRole("button", { name: "Producto de la muestra 1", exact: true }).click();
+    await p.getByRole("button", { name: "Queso Mozzarella", exact: true }).waitFor();
+    await p.getByLabel("Buscar producto de la muestra 1").fill("jamon cocido nat");
+    await p.getByRole("button", { name: "Jamón Cocido Natural Sublime", exact: true }).waitFor();
+    assert.equal(await p.getByRole("button", { name: "Queso Mozzarella", exact: true }).count(), 0);
+    await p.getByRole("button", { name: "Jamón Cocido Natural Sublime", exact: true }).click();
+    assert.equal(await p.getByLabel("Buscar producto de la muestra 1").count(), 0, "al elegir se cierra el buscador");
     await boton(h, "✓ Guardar certificado").click();
     await toast(h, "Poné la cantidad de Jamón Cocido Natural Sublime").waitFor();
     assert.deepEqual(muestrasDe(await h.dump()), [], "todavía no se guardó nada");
