@@ -67,7 +67,12 @@ sigue con la versión anterior a todo este trabajo:
   clientes del CRM), ítem, kilos o rango de kilos (`kg` y `kgHasta`), precio por
   kg, seña, fecha de retiro, contacto. Hoja "Reservas" en el backup.
 
-Hecho en la rama y **sin publicar en ningún sitio** (24/11/2026):
+**Publicado en el sitio real y en el de prueba el 24/11/2026, versión
+`1c00eda3253a`** (con OK del dueño, después de probarlo en el de prueba). Se
+publica con `netlify deploy --no-build --dir crm/dist --site <id> --prod`
+(Netlify CLI autorizado en la PC del dueño); el armado en Netlify falla por su
+control de claves, que detecta la clave web pública de Firebase. Volver atrás:
+en Netlify → Deploys, republicar el deploy anterior. Incluye:
 
 - **Seguridad del acceso, etapa 1** (`crm/docs/SEGURIDAD.md`): cada teléfono
   ingresa con una cuenta de Firebase (`crm/src/js/cuenta.js`), PIN del depósito
