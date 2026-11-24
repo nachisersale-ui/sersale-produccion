@@ -78,7 +78,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 <li>📒 Movimientos CC</li><li>💰 Ventas Diarias</li><li>🏭 Stock</li><li>🐖 Faenas</li>
 <li>🏷️ Lotes</li><li>💲 Precios por Cliente</li>
 <li>↩️ Devoluciones</li><li>📊 Movimientos de Stock</li><li>📝 Reportes de Producción</li>
-<li>🎄 Reservas de fin de año</li>
+<li>🎄 Reservas de fin de año</li><li>🧾 Muestras entregadas</li>
 </ul>
 <button class="btn btn-primary" id="btnBackup" onclick="generarBackup()">💾 Generar Backup Excel</button>
 <button class="btn btn-back" onclick="location.href='index.html'">← Volver al CRM</button>
@@ -95,7 +95,7 @@ try{db=window.sersaleDbCompat();estado_index('✅ Conectado a Firebase');}catch(
 function fbGet(p){return db.collection(p).get({source:'server'}).then(function(s){return s.docs.map(function(d){return{id:d.id,data:d.data()};});});}
 
 // Colecciones que entran en el backup (todas las que usa el CRM, menos usuarios y configuración).
-var COLECCIONES_index=['pedidos','remitos','clientes','cuentas_corrientes','cc_movimientos','devoluciones','ventas_diarias','stock_produccion','stock_movimientos','reportes','faenas','trazabilidad_lotes','precios_cliente','reservas'];
+var COLECCIONES_index=['pedidos','remitos','clientes','cuentas_corrientes','cc_movimientos','devoluciones','ventas_diarias','stock_produccion','stock_movimientos','reportes','faenas','trazabilidad_lotes','precios_cliente','reservas','muestras'];
 
 // Lo que va a una celda: texto o número. Una fecha guardada como Timestamp sale
 // como día y hora de Buenos Aires; cualquier otro objeto, como texto.
@@ -118,7 +118,10 @@ function kgItem_index(it){if(it.kgReal!=null&&it.kgReal!=='')return Number(it.kg
 // Antes, por esa sola colección no se generaba ningún archivo. Cualquier otro error
 // (sin señal, lectura cortada) sigue frenando el backup, como en el resto.
 var reservasSinPermiso_index=false;
+// Lo mismo para Muestras (colección nueva).
+var muestrasSinPermiso_index=false;
 function leerColeccion_index(n){
+  if(n==='muestras'){muestrasSinPermiso_index=false;return fbGet(n).catch(function(e){if(e&&e.code==='permission-denied'){console.error('Backup: la base no permite leer las muestras',e);muestrasSinPermiso_index=true;return [];}throw e;});}
   if(n!=='reservas')return fbGet(n);
   reservasSinPermiso_index=false;
   return fbGet(n).catch(function(e){if(e&&e.code==='permission-denied'){console.error('Backup: la base no permite leer las reservas',e);reservasSinPermiso_index=true;return [];}throw e;});
@@ -230,6 +233,10 @@ async function generarBackup(){
     // total es válida (cubre hasta el tope): resta 0, no un importe negativo.
     var reservas=base.reservas.slice().sort(function(a,b){return String(a.data.fechaReserva||'').localeCompare(String(b.data.fechaReserva||''))||String(a.data.creadoEn||'').localeCompare(String(b.data.creadoEn||''));});
     conteos.Reservas=crearHoja('Reservas','RESERVAS DE FIN DE AÑO'+(reservasSinPermiso_index?' — ⚠ NO SE PUDIERON LEER: la base de datos no lo permite':''),['ID','Fecha del pedido','Cliente','Contacto','Ítem','Kg','Kg hasta','Precio por kg ($)','Total estimado ($)','Seña ($)','Resta cobrar ($)','Fecha de retiro','Estado','Observaciones'],filas(reservas,function(d){var v=d.data;var kg=Number(v.kg)||0,ha=Number(v.kgHasta)||0,pr=Number(v.precioKg)||0,se=Number(v.sena)||0;var tot=kg>0&&pr>0?Math.round(kg*pr):'';return[d.id,v.fechaReserva||'',v.cliente||'',v.contacto||'',v.item||'',kg,ha>kg?ha:'',pr||'',tot,se,tot===''?'':ha>kg?Math.max(0,tot-se):tot-se,v.fechaRetiro||'',v.estado||'',v.obs||''];}));
+    // Muestras: una fila por muestra entregada, de la entrega más nueva a la más vieja.
+    var ESTADOS_MUESTRA_index={entregada:'Entregada',probada:'Probada',interesa:'Le interesó',pidio_precio:'Pidió precio',compro:'Compró',no_interesa:'No le interesó'};
+    var muestras=base.muestras.slice().sort(function(a,b){return String(b.data.fecha||'').localeCompare(String(a.data.fecha||''))||(Number(b.data.nro)||0)-(Number(a.data.nro)||0);});
+    conteos.Muestras=crearHoja('Muestras','MUESTRAS ENTREGADAS'+(muestrasSinPermiso_index?' — ⚠ NO SE PUDIERON LEER: la base de datos no lo permite':''),['ID','N°','Fecha de entrega','Cliente','Contacto','Entregó','Muestra','Cantidad','Unidad','Nota','Estado','Última novedad','Historial','Firmado por','Observaciones'],filas(muestras,function(d){var v=d.data;var its=lista_index(v.items).length?v.items:[{}];var nro='M-'+('0000'+(Number(v.nro)||0)).slice(-4);return its.map(function(it){var hist=lista_index(it.historial).map(function(h){return dia_index(h.en)+' '+(ESTADOS_MUESTRA_index[h.estado]||h.estado||'')+(h.nota?' ('+h.nota+')':'');}).join(' | ');return[d.id,nro,v.fecha||'',v.cliente||'',v.contacto||'',v.entrega||'',it.producto||'-',it.cantidad!=null?it.cantidad:'',it.unidad||'',it.nota||'',ESTADOS_MUESTRA_index[it.estado]||it.estado||'',dia_index(it.estadoEn),hist,v.firma?(v.aclaracion||'Sí'):'',v.obs||''];});},true));
     var wsRes=XLSX.utils.aoa_to_sheet([]);
     XLSX.utils.sheet_add_aoa(wsRes,[['BACKUP CRM — FRIGORÍFICO SERSALE'],['CUIT 30-70227633-7'],[],['Fecha:',fechaStr],[],['MÓDULO','REGISTROS']],{origin:'A1'});
     var fila=7;Object.entries(conteos).forEach(function(e){XLSX.utils.sheet_add_aoa(wsRes,[[e[0],e[1]]],{origin:'A'+fila});fila++;});
@@ -241,6 +248,7 @@ async function generarBackup(){
     estado_index('✅ Backup generado: '+archivo+' ('+total+' registros)'+(conError?' · ⚠️ '+conError+' registro'+(conError===1?'':'s')+' con formato inesperado: figuran con ⚠ en su hoja':''));
     if(conError)SersaleUI.toast(conError+' registro'+(conError===1?'':'s')+' no se pudieron leer bien. Revisá las filas con ⚠ en el Excel.',{tipo:'error'});
     if(reservasSinPermiso_index){document.getElementById('status').textContent+=' · ⚠️ SIN las reservas de fin de año: la base de datos no permite leerlas. Avisá para que se habilite.';SersaleUI.toast('El backup salió sin las reservas de fin de año: la base de datos no permite leerlas.',{tipo:'error'});}
+    if(muestrasSinPermiso_index){document.getElementById('status').textContent+=' · ⚠️ SIN las muestras: la base de datos no permite leerlas. Avisá para que se habilite.';SersaleUI.toast('El backup salió sin las muestras: la base de datos no permite leerlas.',{tipo:'error'});}
   }catch(e){fallo('No se pudo generar el backup: '+(e&&e.message||e),e);}
   finally{generando_index=false;btn.disabled=false;btn.style.opacity='';}
 }

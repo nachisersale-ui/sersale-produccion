@@ -971,9 +971,15 @@
           try { sessionStorage.setItem("sersale_vista","reservas"); } catch(e) {}
           return "reservas";
         }
+        // Acceso rápido "Muestras" del panel (pedidos.html?muestras=1): vale una sola vez, igual que Reservas.
+        if (new URLSearchParams(window.location.search).get("muestras") === "1") {
+          try { window.history.replaceState(window.history.state, "", window.location.pathname); } catch(e) {}
+          try { sessionStorage.setItem("sersale_vista","muestras"); } catch(e) {}
+          return "muestras";
+        }
         // Una vista recordada que no existe dejaba la página en blanco
         const v = sessionStorage.getItem("sersale_vista");
-        return ["home","productos","comercial","deposito","director","clientes","reservas"].includes(v) ? v : "home";
+        return ["home","productos","comercial","deposito","director","clientes","reservas","muestras"].includes(v) ? v : "home";
       });
       const [nuevosPedidos, setNuevosPedidos] = useState(0);
       const [bannerPedido, setBannerPedido] = useState(null);
@@ -1066,6 +1072,7 @@
           {vista==="director"      && <VistaDirector  onBack={()=>setVista("home")} />}
           {vista==="clientes"      && <GestionClientes onBack={()=>setVista("home")} />}
           {vista==="reservas"      && <Reservas onBack={()=>setVista("home")} />}
+          {vista==="muestras"      && <Muestras onBack={()=>setVista("home")} />}
         </>
       );
     }

@@ -67,6 +67,18 @@ sigue con la versión anterior a todo este trabajo:
   clientes del CRM), ítem, kilos o rango de kilos (`kg` y `kgHasta`), precio por
   kg, seña, fecha de retiro, contacto. Hoja "Reservas" en el backup.
 
+Hecho en la rama y **sin publicar en ningún sitio** (24/11/2026):
+
+- **Seguridad del acceso, etapa 1** (`crm/docs/SEGURIDAD.md`): cada teléfono
+  ingresa con una cuenta de Firebase (`crm/src/js/cuenta.js`), PIN del depósito
+  para el Operario y reglas listas en `crm/firestore.rules`. Las reglas NO
+  están aplicadas: la base real sigue abierta hasta que el dueño lo decida.
+- **Muestras** (`crm/src/pedidos/07-muestras.jsx`, colección `muestras`):
+  certificado de entrega numerado (M-0001), firma con el dedo, PDF con original
+  y duplicado, seguimiento de cada muestra por cliente, hoja en el backup.
+- En esta PC (Windows) la suite completa se cuelga si corren varios archivos a
+  la vez: correr los archivos de a uno (`node tests/run.mjs tests/x.test.mjs`).
+
 Pendiente de que el dueño confirme desde su iPhone:
 
 - Que guardar una reserva funcione contra la base real (las reglas de Firestore
