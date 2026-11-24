@@ -4,7 +4,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { launch, erroresReales } from "./lib/harness.mjs";
+import { launch as lanzar, erroresReales } from "./lib/harness.mjs";
+
+// Estas pruebas son de la vista «Lista» de Reservas (la pantalla abre en «Por día»;
+// las vistas agrupadas tienen sus pruebas en reservas-vistas.test.mjs).
+async function launch(opciones) {
+  const h = await lanzar(opciones);
+  await h.context.addInitScript(() => { try { sessionStorage.setItem("sersale_rsv_modo", "lista"); } catch (e) {} });
+  return h;
+}
 import { buildSeed } from "./lib/seed.mjs";
 
 const boton = (h, t) => h.page.getByRole("button", { name: t, exact: true });

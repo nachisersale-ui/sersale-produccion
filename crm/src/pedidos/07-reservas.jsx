@@ -547,6 +547,171 @@
       );
     }
 
+    // ── Vistas agrupadas (por día de retiro, por producto, por cliente) ──
+    const RSV_DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+    const rsvAtrasada = r => r.estado !== "entregada" && !!r.fechaRetiro && String(r.fechaRetiro) < SersaleBase.hoy();
+    /** "Jueves 24/12/2026", o "Retiro a confirmar" si no tiene fecha. */
+    function rsvDiaTexto(dia) {
+      if (!dia) return "Retiro a confirmar";
+      const n = SersaleBase.diaSemana(dia);
+      return (RSV_DIAS[n] ? RSV_DIAS[n] + " " : "") + (SersaleBase.fmtFecha(dia) || String(dia));
+    }
+    /** Cuántas hay y cuántos kilos suman (mínimo y tope) las reservas de una lista. */
+    function rsvSuma(lista) {
+      return { cantidad: lista.length, kg: lista.reduce((s, r) => s + (Number(r.kg) || 0), 0), kgMax: lista.reduce((s, r) => s + rsvKgMax(r), 0) };
+    }
+    /** Qué hay que tener de cada cosa para una lista de reservas: [{ item, cantidad, kg, kgMax }], de mayor a menor. */
+    function rsvPorItem(lista, deLista) {
+      const mapa = new Map();
+      lista.forEach(r => {
+        const nombre = rsvItemDeLista(r.item, deLista) || "(sin ítem)";
+        const k = SersaleBase.norm(nombre);
+        if (!mapa.has(k)) mapa.set(k, { item: nombre, cantidad: 0, kg: 0, kgMax: 0, reservas: [] });
+        const g = mapa.get(k);
+        g.cantidad += 1; g.kg += Number(r.kg) || 0; g.kgMax += rsvKgMax(r); g.reservas.push(r);
+      });
+      return Array.from(mapa.values()).sort((a, b) => b.kgMax - a.kgMax || b.kg - a.kg || String(a.item).localeCompare(String(b.item), "es"));
+    }
+
+    // ── Planilla para el depósito (PDF) ──
+    // Qué hay que preparar cada día: un resumen por producto y el detalle reserva por
+    // reserva, con una casilla para ir tildando. Sin precios ni señas: es para el depósito.
+    function rsvPlanillaPDF(pendientes, soloDia) {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+      const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+      const mx = 12, pw = W - mx * 2;
+      const deLista = rsvItemsDeLista();
+      const txt = v => String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+      const corto = (t, ancho) => {
+        t = txt(t);
+        if (doc.getTextWidth(t) <= ancho) return t;
+        while (t.length > 1 && doc.getTextWidth(t + "...") > ancho) t = t.slice(0, -1);
+        return t + "...";
+      };
+      const ahora = new Date();
+      const generada = SersaleBase.fmtFecha(SersaleBase.hoy()) + " " + SersaleBase.fmtHora(ahora);
+      const dias = Array.from(new Set(pendientes.map(r => String(r.fechaRetiro || ""))))
+        .filter(d => soloDia === undefined || d === soloDia)
+        .sort((a, b) => (a || "9999").localeCompare(b || "9999"));
+      let y = 0;
+      const cx = [mx, mx + 8, mx + 17, mx + 17 + pw * 0.27, mx + 17 + pw * 0.52, mx + 17 + pw * 0.66];
+      function cabeceraHoja(dia, sigue) {
+        y = 14;
+        doc.setFont("helvetica", "bold"); doc.setFontSize(13); doc.setTextColor(164, 35, 42);
+        doc.text("FRIGORÍFICO SERSALE", mx, y);
+        doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(110);
+        doc.text("Planilla para el depósito  ·  generada el " + generada, W - mx, y, { align: "right" });
+        y += 4;
+        doc.setDrawColor(164, 35, 42); doc.setLineWidth(0.6); doc.line(mx, y, W - mx, y);
+        y += 8;
+        doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(25);
+        doc.text("RESERVAS PARA PREPARAR", mx, y);
+        y += 7;
+        doc.setFontSize(12); doc.setTextColor(164, 35, 42);
+        doc.text(rsvDiaTexto(dia).toUpperCase() + (sigue ? "  (continúa)" : ""), mx, y);
+        y += 6;
+      }
+      function cabeceraDetalle() {
+        doc.setFillColor(42, 51, 59); doc.rect(mx, y, pw, 6.5, "F");
+        doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(255);
+        doc.text("LISTO", cx[0] + 0.6, y + 4.4);
+        doc.text("N°", cx[1] + 2, y + 4.4);
+        doc.text("CLIENTE", cx[2] + 1, y + 4.4);
+        doc.text("QUÉ LLEVA", cx[3] + 1, y + 4.4);
+        doc.text("KILOS", cx[4] + 1, y + 4.4);
+        doc.text("OBSERVACIONES", cx[5] + 1, y + 4.4);
+        y += 6.5;
+      }
+      dias.forEach((dia, n) => {
+        if (n > 0) doc.addPage();
+        const delDia = pendientes.filter(r => String(r.fechaRetiro || "") === dia);
+        cabeceraHoja(dia, false);
+        // Resumen: cuánto hay que tener de cada cosa
+        const suma = rsvSuma(delDia);
+        doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(60);
+        doc.text(suma.cantidad + (suma.cantidad === 1 ? " reserva" : " reservas") + "  ·  " + rsvKgRango(suma.kg, suma.kgMax) + " en total", mx, y);
+        y += 5;
+        doc.setFillColor(237, 238, 240); doc.rect(mx, y, pw * 0.6, 6, "F");
+        doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(60);
+        doc.text("QUÉ HAY QUE TENER", mx + 2, y + 4.1);
+        doc.text("CANTIDAD", mx + pw * 0.34, y + 4.1);
+        doc.text("KILOS", mx + pw * 0.45, y + 4.1);
+        y += 6;
+        const porItem = rsvPorItem(delDia, deLista);
+        porItem.forEach(g => {
+          doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor(25);
+          doc.text(corto(g.item, pw * 0.32), mx + 2, y + 4.6);
+          doc.setFont("helvetica", "normal");
+          doc.text(String(g.cantidad), mx + pw * 0.34, y + 4.6);
+          doc.text(rsvKgRango(g.kg, g.kgMax), mx + pw * 0.45, y + 4.6);
+          doc.setDrawColor(225); doc.setLineWidth(0.2); doc.line(mx, y + 6.4, mx + pw * 0.6, y + 6.4);
+          y += 6.4;
+        });
+        y += 6;
+        // Detalle: por producto y, dentro de cada uno, por orden de reserva
+        cabeceraDetalle();
+        let nro = 0;
+        porItem.forEach(g => {
+          rsvOrdenar(g.reservas, "reserva").forEach(r => {
+            if (y + 8 > H - 12) { doc.addPage(); cabeceraHoja(dia, true); cabeceraDetalle(); }
+            nro += 1;
+            doc.setDrawColor(60); doc.setLineWidth(0.35); doc.rect(cx[0] + 1.6, y + 1.6, 4.2, 4.2);
+            doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(110);
+            doc.text(String(nro), cx[1] + 2, y + 5);
+            doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor(25);
+            doc.text(corto(r.cliente, cx[3] - cx[2] - 3), cx[2] + 1, y + 5);
+            doc.setFont("helvetica", "normal");
+            doc.text(corto(rsvItemDeLista(r.item, deLista), cx[4] - cx[3] - 3), cx[3] + 1, y + 5);
+            doc.setFont("helvetica", "bold");
+            doc.text(corto(rsvKgTexto(r), cx[5] - cx[4] - 2), cx[4] + 1, y + 5);
+            doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(70);
+            doc.text(corto(r.obs, mx + pw - cx[5] - 2), cx[5] + 1, y + 5);
+            doc.setDrawColor(215); doc.setLineWidth(0.2); doc.line(mx, y + 7.6, W - mx, y + 7.6);
+            y += 7.6;
+          });
+        });
+      });
+      return doc;
+    }
+    const rsvPlanillaArchivo = soloDia => "Reservas para preparar - " + (soloDia === undefined ? "todas" : soloDia ? SersaleBase.fmtFecha(soloDia).replace(/\//g, "-") : "retiro a confirmar") + ".pdf";
+
+    // ── Fila compacta de una reserva (vistas agrupadas) ──
+    // Una línea por reserva; al tocarla se abre la tarjeta completa, con los mismos datos
+    // y botones que en la lista.
+    function ReservaFila({ r, vista, abierta, onAbrir, lugar, ocupado, onEditar, onEstado, onEliminar }) {
+      const entregada = r.estado === "entregada";
+      const restaTexto = rsvRestaTexto(r), resta = rsvResta(r);
+      const sena = Number(r.sena) || 0;
+      const retiro = r.fechaRetiro ? SersaleBase.fmtFechaCorta(r.fechaRetiro) : "a confirmar";
+      const dato = { fontFamily:"'IBM Plex Mono',ui-monospace,monospace", fontVariantNumeric:"tabular-nums" };
+      const principal = vista === "cliente" ? r.item : r.cliente;
+      const detalle = vista === "dia" ? r.item : vista === "producto" ? "Retira " + retiro : "Retira " + retiro;
+      if (abierta) {
+        return (
+          <div data-reserva-fila={r.id} style={{margin:"6px 0 2px"}}>
+            <button type="button" onClick={()=>onAbrir(null)} aria-label={"Cerrar el detalle de " + r.cliente} style={{display:"block",width:"100%",minHeight:36,border:"none",background:"transparent",color:"#5C666F",fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"right",padding:"0 4px"}}>Cerrar ▴</button>
+            <ReservaTarjeta r={r} orden={entregada ? "✓" : "#" + (lugar || "")} plegable={false} ocupado={ocupado} onEditar={onEditar} onEstado={onEstado} onEliminar={onEliminar} />
+          </div>
+        );
+      }
+      return (
+        <button type="button" data-reserva-fila={r.id} onClick={()=>onAbrir(r.id)} aria-label={"Ver la reserva de " + r.cliente + ": " + r.item}
+          style={{display:"flex",alignItems:"center",gap:10,width:"100%",minHeight:50,padding:"7px 2px",border:"none",borderTop:"1px solid #EDEEF0",background:"transparent",textAlign:"left",cursor:"pointer",opacity:entregada?0.7:1}}>
+          <span style={{flex:1,minWidth:0}}>
+            <span style={{display:"block",fontWeight:700,fontSize:15,color:"#191E23",overflowWrap:"anywhere"}}>{principal}</span>
+            <span style={{display:"block",fontSize:13,color:rsvAtrasada(r) && vista !== "dia" ? "#A8702A" : "#5C666F",overflowWrap:"anywhere"}}>{detalle}{r.obs ? " · " + r.obs : ""}</span>
+          </span>
+          <span style={{flexShrink:0,textAlign:"right"}}>
+            <strong style={{...dato,display:"block",fontSize:14,color:"#191E23",whiteSpace:"nowrap"}}>{rsvKgTexto(r)}</strong>
+            <span style={{display:"block",fontSize:12,fontWeight:600,whiteSpace:"nowrap",color:entregada ? "#2F6B4F" : !(sena > 0) ? "#784212" : resta != null && !restaTexto ? "#2F6B4F" : "#5C666F"}}>
+              {entregada ? "✓ Entregada" : !(sena > 0) ? "Sin seña" : resta == null ? "A convenir" : restaTexto ? "Resta " + restaTexto : "Pagado"}
+            </span>
+          </span>
+        </button>
+      );
+    }
+
     // ── Pantalla de reservas ──
     function Reservas({ onBack }) {
       const [reservas, setReservas] = useState(null); // null = cargando
@@ -559,6 +724,12 @@
       const [orden, setOrden] = useState(() => (sessionStorage.getItem("sersale_rsv_orden") === "retiro" ? "retiro" : "reserva"));
       const [buscar, setBuscar] = useState("");
       const [verResumen, setVerResumen] = useState(null); // null = según cuántos renglones tenga
+      // Cómo se organiza la pantalla: por día de retiro, por producto, por cliente, o la lista de siempre.
+      const [modo, setModo] = useState(() => { const m = sessionStorage.getItem("sersale_rsv_modo"); return ["dia", "producto", "cliente", "lista"].includes(m) ? m : "dia"; });
+      const [filtro, setFiltro] = useState("pendientes"); // pendientes | sinsena | atrasadas | entregadas | todas
+      const [plegados, setPlegados] = useState({}); // grupos cerrados a mano
+      const [filaAbierta, setFilaAbierta] = useState(null);
+      function elegirModo(m) { setModo(m); setFilaAbierta(null); try { sessionStorage.setItem("sersale_rsv_modo", m); } catch (e) {} }
 
       // La lista se mantiene al día sola (también con lo que carga otro teléfono).
       useEffect(() => {
@@ -674,6 +845,46 @@
       const totalResta = pendientes.reduce((s, r) => s + Math.max(0, rsvResta(r) || 0), 0);
       const totalRestaMax = pendientes.reduce((s, r) => { const max = rsvRestaMax(r); return s + Math.max(0, (max != null ? max : rsvResta(r)) || 0); }, 0);
 
+      // ── Vistas agrupadas ──
+      const agrupada = modo !== "lista";
+      const sinSena = pendientes.filter(r => !(Number(r.sena) > 0));
+      const atrasadas = pendientes.filter(rsvAtrasada);
+      const deFiltro = filtro === "sinsena" ? sinSena : filtro === "atrasadas" ? atrasadas : filtro === "entregadas" ? entregadas : filtro === "todas" ? todas : pendientes;
+      const filtradas = (buscando ? todas : deFiltro).filter(r => !buscando || SersaleBase.coincide([r.cliente, r.item, r.contacto, r.obs].join(" "), buscar));
+      const grupos = [];
+      if (agrupada) {
+        const mapa = new Map();
+        const orden = rsvOrdenar(filtradas, modo === "cliente" ? "retiro" : "reserva");
+        orden.forEach(r => {
+          const k = modo === "dia" ? String(r.fechaRetiro || "") : modo === "producto" ? SersaleBase.norm(rsvItemDeLista(r.item, deLista) || "(sin ítem)") : SersaleBase.norm(r.cliente || "");
+          if (!mapa.has(k)) mapa.set(k, { clave: modo + "|" + k, dia: modo === "dia" ? String(r.fechaRetiro || "") : null, titulo: modo === "dia" ? rsvDiaTexto(r.fechaRetiro) : modo === "producto" ? (rsvItemDeLista(r.item, deLista) || "(sin ítem)") : (r.cliente || "(sin nombre)"), filas: [] });
+          mapa.get(k).filas.push(r);
+        });
+        Array.from(mapa.values()).forEach(g => {
+          // Lo que hay que tener se cuenta sobre lo que todavía no se entregó (si queda algo).
+          const porEntregar = g.filas.filter(r => r.estado !== "entregada");
+          g.suma = rsvSuma(porEntregar.length > 0 ? porEntregar : g.filas);
+          g.pendientes = porEntregar.length;
+          grupos.push(g);
+        });
+        if (modo === "dia") grupos.sort((a, b) => (a.dia || "9999-99-99").localeCompare(b.dia || "9999-99-99"));
+        else if (modo === "producto") grupos.sort((a, b) => b.suma.kgMax - a.suma.kgMax || String(a.titulo).localeCompare(String(b.titulo), "es"));
+        else grupos.sort((a, b) => String(a.titulo).localeCompare(String(b.titulo), "es", { sensitivity: "base" }));
+        // Dentro de cada día, por producto (así el depósito lo ve junto) y después por orden de reserva.
+        if (modo === "dia") grupos.forEach(g => { g.filas = rsvPorItem(g.filas, deLista).reduce((l, x) => l.concat(rsvOrdenar(x.reservas, "reserva")), []); });
+      }
+      function planilla(dia) {
+        try {
+          const para = dia === undefined ? pendientes : pendientes.filter(r => String(r.fechaRetiro || "") === dia);
+          if (para.length === 0) { SersaleUI.toast("No hay reservas pendientes para la planilla.", { tipo: "info" }); return; }
+          rsvPlanillaPDF(pendientes, dia).save(rsvPlanillaArchivo(dia));
+        } catch (e) {
+          console.error(e);
+          SersaleUI.toast("No se pudo armar la planilla. Probá de nuevo.", { tipo: "error" });
+        }
+      }
+      const pestana = activo => ({ flex:"1 0 auto", minHeight:46, padding:"0 10px", border:"none", borderBottom:"3px solid " + (activo ? "#A4232A" : "transparent"), background:"transparent", color:activo ? "#A4232A" : "#5C666F", fontWeight:700, fontSize:14, cursor:"pointer", whiteSpace:"nowrap" });
+
       const resumenAbierto = verResumen == null ? resumen.length <= 4 : verResumen;
       const chip = activo => ({ minHeight:44, padding:"0 14px", borderRadius:20, border:"1.5px solid " + (activo ? "#A4232A" : "#D8DCE0"), background:activo ? "#A4232A" : "#fff", color:activo ? "#fff" : "#3A424A", fontWeight:600, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" });
       const dato = { fontFamily:"'IBM Plex Mono',ui-monospace,monospace", fontVariantNumeric:"tabular-nums" };
@@ -705,15 +916,103 @@
                     en este teléfono todavía no se pudieron traer las reservas ya anotadas{todas.length > 0 ? ", puede haber más de las que se ven" : ""}. Cuando conecte aparecen solas. Lo que cargues mientras tanto queda guardado.
                   </div>
                 )}
-                {(todas.length > 6 || buscando) && (
+                <div role="tablist" aria-label="Cómo ver las reservas" style={{display:"flex",overflowX:"auto",borderBottom:"1px solid #D8DCE0",marginBottom:12,WebkitOverflowScrolling:"touch"}}>
+                  <button role="tab" aria-selected={modo==="dia"} onClick={()=>elegirModo("dia")} style={pestana(modo==="dia")}>Por día</button>
+                  <button role="tab" aria-selected={modo==="producto"} onClick={()=>elegirModo("producto")} style={pestana(modo==="producto")}>Por producto</button>
+                  <button role="tab" aria-selected={modo==="cliente"} onClick={()=>elegirModo("cliente")} style={pestana(modo==="cliente")}>Por cliente</button>
+                  <button role="tab" aria-selected={modo==="lista"} onClick={()=>elegirModo("lista")} style={pestana(modo==="lista")}>Lista</button>
+                </div>
+                {(agrupada ? todas.length > 0 : (todas.length > 6 || buscando)) && (
                   <div style={{position:"relative",marginBottom:12}}>
                     <input style={{...RSV_CAMPO, paddingRight:48}} placeholder="🔍 Buscar cliente, ítem o teléfono" aria-label="Buscar reserva" enterKeyHint="search" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"
                       value={buscar} onChange={e=>setBuscar(e.target.value)} />
                     {buscando && <button onClick={()=>setBuscar("")} aria-label="Borrar la búsqueda" style={{position:"absolute",right:2,top:2,width:44,height:44,border:"none",background:"transparent",color:"#5C666F",fontSize:18,cursor:"pointer"}}>✕</button>}
                   </div>
                 )}
-                {buscando && <div style={{fontSize:12,color:"#5C666F",margin:"-4px 2px 10px"}}>{visibles.length} {visibles.length === 1 ? "reserva encontrada" : "reservas encontradas"} (pendientes y entregadas)</div>}
-                {pendientes.length > 0 && !buscando && (
+                {buscando && <div style={{fontSize:12,color:"#5C666F",margin:"-4px 2px 10px"}}>{(agrupada ? filtradas : visibles).length} {(agrupada ? filtradas : visibles).length === 1 ? "reserva encontrada" : "reservas encontradas"} (pendientes y entregadas)</div>}
+
+                {agrupada && (
+                  <>
+                    {todas.length === 0 ? (
+                      <div style={{textAlign:"center",padding:"36px 16px",color:"#79828B"}}>
+                        {!sinConfirmar && <p style={{fontWeight:700,fontSize:15,color:"#3A424A",marginBottom:6}}>Todavía no hay reservas</p>}
+                        {!sinConfirmar && <p style={{fontSize:13,marginBottom:16}}>Anotá acá lo que los clientes dejan reservado para las fiestas.</p>}
+                        <button onClick={()=>setForm({})} style={{minHeight:48,padding:"0 22px",borderRadius:14,border:"none",background:"#A4232A",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer"}}>+ Nueva reserva</button>
+                      </div>
+                    ) : (
+                      <>
+                        {!buscando && (
+                          <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginBottom:10,WebkitOverflowScrolling:"touch"}}>
+                            <button onClick={()=>setFiltro("pendientes")} aria-pressed={filtro==="pendientes"} style={chip(filtro==="pendientes")}>Pendientes ({pendientes.length})</button>
+                            <button onClick={()=>setFiltro("sinsena")} aria-pressed={filtro==="sinsena"} style={chip(filtro==="sinsena")}>Sin seña ({sinSena.length})</button>
+                            <button onClick={()=>setFiltro("atrasadas")} aria-pressed={filtro==="atrasadas"} style={chip(filtro==="atrasadas")}>Atrasadas ({atrasadas.length})</button>
+                            <button onClick={()=>setFiltro("entregadas")} aria-pressed={filtro==="entregadas"} style={chip(filtro==="entregadas")}>Entregadas ({entregadas.length})</button>
+                            <button onClick={()=>setFiltro("todas")} aria-pressed={filtro==="todas"} style={chip(filtro==="todas")}>Todas ({todas.length})</button>
+                          </div>
+                        )}
+                        {pendientes.length > 0 && (
+                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",background:"#fff",border:"1px solid #D8DCE0",borderRadius:14,padding:"10px 14px",marginBottom:12}}>
+                            <div style={{fontSize:13,color:"#3A424A"}}>
+                              <strong style={dato}>{pendientes.length}</strong> pendientes · <strong style={dato}>{rsvKgRango(totalKg, totalKgMax)}</strong> · <span style={{color:"#2F6B4F"}}><strong style={dato}>{SersaleBase.fmtMonto(totalSenas)}</strong> en señas</span>
+                            </div>
+                            <button onClick={()=>planilla(undefined)} style={{minHeight:44,padding:"0 14px",borderRadius:10,border:"none",background:"#2A333B",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>🖨️ Planilla para el depósito</button>
+                          </div>
+                        )}
+                        {grupos.length === 0 && (
+                          <p style={{textAlign:"center",color:"#79828B",padding:"30px 0"}}>
+                            {buscando ? "Ninguna reserva coincide con la búsqueda." : filtro === "pendientes" ? "No quedan reservas pendientes." : filtro === "sinsena" ? "Todas las pendientes dejaron seña." : filtro === "atrasadas" ? "No hay reservas atrasadas." : filtro === "entregadas" ? "Todavía no se entregó ninguna reserva." : "No hay reservas."}
+                          </p>
+                        )}
+                        {grupos.map(g => {
+                          const cerrado = !!plegados[g.clave];
+                          const n = g.dia ? SersaleBase.diasEntre(SersaleBase.hoy(), g.dia) : null;
+                          const colorDia = !g.dia ? "#79828B" : n < 0 ? (g.pendientes > 0 ? "#C33039" : "#79828B") : n === 0 ? "#2F6B4F" : n === 1 ? "#A8702A" : "#26536E";
+                          const color = modo === "dia" ? colorDia : modo === "producto" ? "#A8702A" : "#2A333B";
+                          const porItem = modo === "dia" ? rsvPorItem(g.filas.filter(r => r.estado !== "entregada"), deLista) : [];
+                          const sub = modo === "dia" ? (g.dia ? (n < 0 && g.pendientes > 0 ? "sin retirar (" + rsvCuando(g.dia) + ")" : rsvCuando(g.dia)) : "")
+                            : modo === "cliente" ? (() => {
+                                const pend = g.filas.filter(r => r.estado !== "entregada");
+                                const senas = pend.reduce((s, r) => s + (Number(r.sena) || 0), 0);
+                                const resta = pend.reduce((s, r) => s + Math.max(0, rsvResta(r) || 0), 0);
+                                const restaMax = pend.reduce((s, r) => { const max = rsvRestaMax(r); return s + Math.max(0, (max != null ? max : rsvResta(r)) || 0); }, 0);
+                                if (pend.length === 0) return "todo entregado";
+                                return "seña " + SersaleBase.fmtMonto(senas) + (restaMax > 0 ? " · resta " + (resta > 0 ? rsvMontoRango(resta, restaMax) : "hasta " + SersaleBase.fmtMonto(restaMax)) : "");
+                              })()
+                            : "";
+                          return (
+                            <div key={g.clave} data-rsv-grupo={g.titulo} style={{background:"#fff",border:"1px solid #D8DCE0",borderRadius:14,marginBottom:12,overflow:"hidden"}}>
+                              <div style={{display:"flex",alignItems:"stretch",background:color}}>
+                                <button type="button" onClick={()=>setPlegados(p => ({ ...p, [g.clave]: !p[g.clave] }))} aria-expanded={!cerrado} aria-label={(cerrado ? "Abrir " : "Cerrar ") + g.titulo}
+                                  style={{flex:1,minWidth:0,minHeight:50,padding:"8px 12px",border:"none",background:"transparent",color:"#fff",textAlign:"left",cursor:"pointer"}}>
+                                  <span style={{display:"block",fontWeight:800,fontSize:15,overflowWrap:"anywhere"}}>{g.titulo}{sub ? <span style={{fontWeight:600,fontSize:12,opacity:0.9}}> — {sub}</span> : null}</span>
+                                  <span style={{display:"block",fontSize:12,fontWeight:600,opacity:0.92}}>{g.suma.cantidad} {g.suma.cantidad === 1 ? "reserva" : "reservas"} · {rsvKgRango(g.suma.kg, g.suma.kgMax)} {cerrado ? "▾" : "▴"}</span>
+                                </button>
+                                {modo === "dia" && g.pendientes > 0 && (
+                                  <button type="button" onClick={()=>planilla(g.dia)} aria-label={"Planilla de " + g.titulo} style={{minWidth:48,border:"none",borderLeft:"1px solid rgba(255,255,255,0.25)",background:"transparent",color:"#fff",fontSize:18,cursor:"pointer"}}>🖨️</button>
+                                )}
+                              </div>
+                              {!cerrado && (
+                                <div style={{padding:"4px 12px 8px"}}>
+                                  {porItem.length > 1 && (
+                                    <div style={{display:"flex",gap:6,flexWrap:"wrap",padding:"8px 0 6px"}}>
+                                      {porItem.map(x => <span key={x.item} style={{padding:"3px 9px",borderRadius:99,background:"#EDEEF0",color:"#3A424A",fontSize:12,fontWeight:600}}>{x.item} ×{x.cantidad} · {rsvKgRango(x.kg, x.kgMax)}</span>)}
+                                    </div>
+                                  )}
+                                  {g.filas.map(r => (
+                                    <ReservaFila key={r.id} r={r} vista={modo} abierta={filaAbierta === r.id} onAbrir={setFilaAbierta} lugar={lugar[r.id]}
+                                      ocupado={cambiando || eliminando} onEditar={x=>setForm(x)} onEstado={cambiarEstado} onEliminar={eliminar} />
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </>
+                )}
+
+                {!agrupada && pendientes.length > 0 && !buscando && (
                   <div style={{background:"#fff",borderRadius:14,border:"1px solid #D8DCE0",padding:"12px 14px",marginBottom:14}}>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:8,textAlign:"center"}}>
                       <div><div style={{...dato,fontWeight:700,fontSize:18,color:"#191E23"}}>{pendientes.length}</div><div style={{fontSize:11,color:"#79828B"}}>pendientes</div></div>
@@ -735,18 +1034,18 @@
                   </div>
                 )}
 
-                {!buscando && <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginBottom:8,WebkitOverflowScrolling:"touch"}}>
+                {!agrupada && !buscando && <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginBottom:8,WebkitOverflowScrolling:"touch"}}>
                   <button onClick={()=>setVer("pendiente")} style={chip(ver==="pendiente")}>Pendientes ({pendientes.length})</button>
                   <button onClick={()=>setVer("entregada")} style={chip(ver==="entregada")}>Entregadas ({entregadas.length})</button>
                   <button onClick={()=>setVer("todas")} style={chip(ver==="todas")}>Todas ({todas.length})</button>
                 </div>}
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                {!agrupada && <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                   <span style={{fontSize:12,color:"#79828B"}}>Ordenar por fecha de</span>
                   <button onClick={()=>elegirOrden("reserva")} aria-pressed={orden==="reserva"} style={{...chip(orden==="reserva"),background:orden==="reserva"?"#2A333B":"#fff",borderColor:orden==="reserva"?"#2A333B":"#D8DCE0"}}>Reserva</button>
                   <button onClick={()=>elegirOrden("retiro")} aria-pressed={orden==="retiro"} style={{...chip(orden==="retiro"),background:orden==="retiro"?"#2A333B":"#fff",borderColor:orden==="retiro"?"#2A333B":"#D8DCE0"}}>Retiro</button>
-                </div>
+                </div>}
 
-                {visibles.length === 0 && (
+                {!agrupada && visibles.length === 0 && (
                   <div style={{textAlign:"center",padding:"36px 16px",color:"#79828B"}}>
                     {todas.length === 0 ? (
                       <>
@@ -758,7 +1057,7 @@
                   </div>
                 )}
 
-                {visibles.map((r, i) => {
+                {!agrupada && visibles.map((r, i) => {
                   const f = r.fechaRetiro || "";
                   const cabecera = orden === "retiro" && (i === 0 || (visibles[i - 1].fechaRetiro || "") !== f);
                   const delDia = cabecera ? visibles.filter(x => (x.fechaRetiro || "") === f) : [];
