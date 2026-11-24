@@ -67,7 +67,7 @@ sigue con la versión anterior a todo este trabajo:
   clientes del CRM), ítem, kilos o rango de kilos (`kg` y `kgHasta`), precio por
   kg, seña, fecha de retiro, contacto. Hoja "Reservas" en el backup.
 
-**Publicado en el sitio real y en el de prueba el 24/11/2026, versión
+**Publicado en el sitio real y en el de prueba el 24/11/2026, versión `7d169bef5df7`** (reemplaza a `1c00eda3253a`, de la mañana; suma Reservas por día, por producto y por cliente, la planilla para el depósito y el formateo rápido de números). Primera publicación del día, versión
 `1c00eda3253a`** (con OK del dueño, después de probarlo en el de prueba). Se
 publica con `netlify deploy --no-build --dir crm/dist --site <id> --prod`
 (Netlify CLI autorizado en la PC del dueño); el armado en Netlify falla por su
