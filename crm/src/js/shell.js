@@ -301,6 +301,53 @@
   }
   if (!document.documentElement.hasAttribute("data-sin-nav")) nav();
 
+  // ── iPhone: la barra de abajo quedaba flotando en el medio de la pantalla ──
+  //
+  // En la app instalada, cuando se cierra el teclado (o se vuelve de otra app, de
+  // compartir un PDF, etc.) iOS a veces deja lo que va fijo abajo (la barra, el
+  // botón de venta rápida, los avisos) anclado a la altura que tenía la pantalla
+  // con el teclado abierto, hasta que la persona desplaza la página. Acá se lo
+  // obliga a acomodar: se mueve la página un punto y se la devuelve a su lugar,
+  // que es lo que hace que iOS vuelva a calcular dónde va cada cosa.
+  var reacomodando = null;
+  function reacomodar() {
+    if (reacomodando) clearTimeout(reacomodando);
+    // Se espera a que el teclado termine de bajar; si el foco pasó a otro campo, no se toca nada.
+    reacomodando = setTimeout(function () {
+      reacomodando = null;
+      var a = document.activeElement;
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+      var x = window.pageXOffset || 0;
+      var y = window.pageYOffset || 0;
+      window.scrollTo(x, y > 0 ? y - 1 : y + 1); // al final de la página no se puede bajar más: se sube
+      var volver = function () {
+        window.scrollTo(x, y);
+      };
+      if (window.requestAnimationFrame) requestAnimationFrame(volver);
+      else setTimeout(volver, 16);
+    }, 250);
+  }
+  window.__sersaleReacomodar = reacomodar;
+  // Se cerró el teclado: el campo perdió el foco.
+  document.addEventListener("focusout", function (ev) {
+    var t = ev.target;
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) reacomodar();
+  });
+  // Se volvió a la app (desde otra app, la hoja de compartir o la vista de un PDF).
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") reacomodar();
+  });
+  window.addEventListener("pageshow", reacomodar);
+  // La parte visible de la pantalla cambió de alto (el teclado subió o bajó).
+  if (window.visualViewport && window.visualViewport.addEventListener) {
+    var altoVisible = window.visualViewport.height;
+    window.visualViewport.addEventListener("resize", function () {
+      var alto = window.visualViewport.height;
+      if (alto > altoVisible + 40) reacomodar(); // creció: el teclado bajó
+      altoVisible = alto;
+    });
+  }
+
   // ── La base rechazó a este teléfono ──────────────────────────────────────
   //
   // Pasa cuando a la cuenta se le quitó el acceso (usuario desactivado, clave o
