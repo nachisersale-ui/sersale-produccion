@@ -15,7 +15,7 @@ const imagenes = (t) => (t.match(/\/Subtype\s*\/Image/g) || []).length;
 async function abrir(presupuestos = null, opts = {}) {
   const seed = buildSeed();
   if (presupuestos) seed.presupuestos = presupuestos;
-  const h = await launch({ rol: "director", etiqueta: "cot", seed, ...opts });
+  const h = await launch({ rol: "director", etiqueta: "cot", seed, compartir: false, ...opts }); // sin menú de compartir: el PDF se descarga
   await h.ir("presupuestos.html");
   await h.page.locator("#cot-cli").waitFor();
   return h;
@@ -280,6 +280,55 @@ test("guardados: historial de lo enviado, volver a sacar el PDF, modificar con e
     await toast(p, "Presupuesto eliminado").waitFor();
     await esperar(h, (ps) => ps.length === 1);
     assert.deepEqual(await tarjetas(), ["P-0007"]);
+    assert.deepEqual(erroresReales(h.errores), []);
+  } finally {
+    await h.close();
+  }
+});
+
+test("en el teléfono el PDF se comparte como archivo solo: sin link del CRM, sin texto y sin título", async () => {
+  const h = await abrir(null, { compartir: true });
+  const p = h.page;
+  try {
+    await p.locator("#cot-cli").fill("Parrilla Don Tito");
+    await agregar(p, "mortadela bocha", "MORTADELA BOCHA");
+    await escribir(campo(p, "Kilos", "MORTADELA BOCHA"), "5");
+    await p.locator("#cot-generar").click();
+    await toast(p, "Presupuesto P-0001 guardado y PDF generado").waitFor();
+    let c = await h.compartidos();
+    assert.equal(c.length, 1);
+    assert.deepEqual({ titulo: c[0].titulo, texto: c[0].texto, url: c[0].url }, { titulo: null, texto: null, url: null }, "al cliente le llega solo el PDF");
+    assert.deepEqual(c[0].archivos.map((a) => [a.nombre, a.tipo]), [["Presupuesto_P-0001_Parrilla_Don_Tito_10-11-2026.pdf", "application/pdf"]]);
+    assert.ok(c[0].archivos[0].bytes > 5000);
+    assert.equal(h.llamadas.descargas.length, 0, "no se descarga: se comparte");
+
+    // Desde Guardados y desde la lista de precios, lo mismo.
+    await p.getByRole("tab", { name: "Guardados" }).click();
+    await p.getByRole("button", { name: "PDF del presupuesto P-0001" }).click();
+    await p.waitForFunction(() => window.__compartidos.length === 2);
+    await p.getByRole("tab", { name: "Lista de precios" }).click();
+    await p.locator("#cli").fill("Parrilla Don Tito");
+    await p.locator("#btnGen").click();
+    await p.waitForFunction(() => window.__compartidos.length === 3);
+    c = await h.compartidos();
+    for (const x of c) assert.deepEqual([x.titulo, x.texto, x.url, x.archivos.length], [null, null, null, 1]);
+    assert.equal(c[2].archivos[0].nombre, "Presupuesto_Sersale_Parrilla_Don_Tito_10-11-2026.pdf");
+
+    // Si el iPhone no deja abrir el menú porque el toque "venció" (el guardado tardó), se pide
+    // un toque más en vez de descargar (que era lo que terminaba mandando el link).
+    await p.evaluate(() => {
+      const real = navigator.share;
+      let primera = true;
+      navigator.share = (d) => {
+        if (primera) { primera = false; return Promise.reject(new DOMException("hace falta un toque", "NotAllowedError")); }
+        return real(d);
+      };
+    });
+    await p.locator("#btnGen").click();
+    await p.getByText("El PDF está listo").waitFor();
+    await p.locator(".ss-hoja .ss-btn", { hasText: "Compartir" }).tap();
+    await p.waitForFunction(() => window.__compartidos.length === 4);
+    assert.equal(h.llamadas.descargas.length, 0);
     assert.deepEqual(erroresReales(h.errores), []);
   } finally {
     await h.close();

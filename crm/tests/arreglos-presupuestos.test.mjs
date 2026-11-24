@@ -11,7 +11,7 @@ import { buildSeed } from "./lib/seed.mjs";
 const NOCHE = "2026-11-10T22:30:00-03:00"; // en UTC ya es 11/11
 
 async function abrir(opts = {}) {
-  const h = await launch({ rol: "director", etiqueta: "presup", seed: buildSeed(), ...opts });
+  const h = await launch({ rol: "director", etiqueta: "presup", seed: buildSeed(), compartir: false, ...opts }); // sin menú de compartir: el PDF se descarga
   await h.ir("presupuestos.html");
   // Estas pruebas son de la «Lista de precios»; la página abre en «Cotización»
   // (sus pruebas están en presupuestos-cotizacion.test.mjs).

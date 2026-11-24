@@ -1027,8 +1027,7 @@ async function generarPDF(){
     pdf.text('@sersalefrigorifico  ·  Atención por Mayor y Menor',M+16,cboxY+80);
 
     const fecha=SersaleBase.fmtFecha(SersaleBase.hoy()).replace(/\//g,'-');
-    pdf.save(`Presupuesto_Sersale_${nombreArchivo(cli)}_${fecha}.pdf`);
-    SersaleUI.toast('PDF generado',{tipo:'ok'});
+    if((await entregarPDF(pdf,`Presupuesto_Sersale_${nombreArchivo(cli)}_${fecha}.pdf`))==='descargado') SersaleUI.toast('PDF generado',{tipo:'ok'});
   }
 }
 // El nombre del cliente va en el nombre del archivo: sin acentos, barras ni signos que
@@ -1406,7 +1405,7 @@ async function cotGenerar(){
       if(!seguir) return;
     }
     const pdf=await cotPDF(Object.assign({},datos,{nro}));
-    pdf.save(cotArchivo(Object.assign({},datos,{nro})));
+    await entregarPDF(pdf,cotArchivo(Object.assign({},datos,{nro})));
     if(guardado){
       const aviso=document.getElementById('cot-editando');
       aviso.textContent='Guardado como '+cotNro(nro)+'. Si cambiás algo y volvés a generar, se actualiza ese mismo presupuesto.';
@@ -1424,6 +1423,44 @@ async function cotGenerar(){
   }
 }
 const cotArchivo=p=>'Presupuesto_'+(p.nro?cotNro(p.nro)+'_':'')+nombreArchivo(p.cliente||'Cliente')+'_'+SersaleBase.fmtFecha(p.fecha||SersaleBase.hoy()).replace(/\//g,'-')+'.pdf';
+
+// ── Entregar un PDF ──
+// En el teléfono se abre el menú de compartir (WhatsApp, Mail…) SOLO con el archivo.
+// Antes se "descargaba": el iPhone lo mostraba en una vista previa y, al compartir
+// desde ahí, el mensaje salía con el link del CRM. Sin título, texto ni dirección: al
+// cliente le llega nada más que el PDF. En la computadora (o si el teléfono no deja
+// compartir archivos) se descarga, como siempre.
+async function entregarPDF(pdf,nombre){
+  const ua=navigator.userAgent||'';
+  const esMovil=/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)||(/Mac/i.test(ua)&&navigator.maxTouchPoints>1);
+  if(esMovil&&navigator.share&&navigator.canShare){
+    try{
+      const archivo=new File([pdf.output('blob')],nombre,{type:'application/pdf'});
+      if(navigator.canShare({files:[archivo]})){
+        await navigator.share({files:[archivo]});
+        return 'compartido';
+      }
+    }catch(e){
+      // La persona cerró el menú de compartir: no se baja un archivo que no pidió.
+      if(e&&e.name==='AbortError') return 'cancelado';
+      // El iPhone solo deja abrir el menú de compartir como respuesta a un toque. Si el
+      // presupuesto tardó en guardarse, ese toque ya "venció": se pide uno más.
+      if(e&&e.name==='NotAllowedError'){
+        const seguir=await SersaleUI.confirmar({titulo:'El PDF está listo',cuerpo:'Tocá «Compartir» para enviarlo por WhatsApp, mail u otra aplicación.',aceptar:'Compartir',cancelar:'Cerrar'});
+        if(!seguir) return 'cancelado';
+        try{
+          await navigator.share({files:[new File([pdf.output('blob')],nombre,{type:'application/pdf'})]});
+          return 'compartido';
+        }catch(e2){
+          if(e2&&e2.name==='AbortError') return 'cancelado';
+          console.warn('No se pudo compartir, se descarga:',e2&&e2.message);
+        }
+      }else console.warn('No se pudo compartir, se descarga:',e&&e.message);
+    }
+  }
+  pdf.save(nombre);
+  return 'descargado';
+}
 
 // ── PDF de la cotización ──
 const cotFotos={};
@@ -1597,7 +1634,7 @@ document.getElementById('gua-lista').addEventListener('click',async function(e){
   if(accion==='abrir'){ cotAbrir(p); return; }
   guaOcupado=true;
   try{
-    if(accion==='pdf'){ (await cotPDF(p)).save(cotArchivo(p)); SersaleUI.toast('PDF generado',{tipo:'ok'}); }
+    if(accion==='pdf'){ if((await entregarPDF(await cotPDF(p),cotArchivo(p)))==='descargado') SersaleUI.toast('PDF generado',{tipo:'ok'}); }
     else{
       const ok=await SersaleUI.confirmar({titulo:'Eliminar el presupuesto '+cotNro(p.nro),cuerpo:(p.cliente||'')+' · '+SersaleBase.fmtMonto(p.total)+'\nNo se puede deshacer.',aceptar:'Eliminar',peligro:true});
       if(!ok) return;
