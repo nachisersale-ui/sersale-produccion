@@ -1657,6 +1657,26 @@ cotPintarLineas();
   try{ const g=sessionStorage.getItem('sersale_pre_vista'); if(['cot','lista','guardados'].includes(g)) v=g; }catch(e){}
   if(v!=='cot') verVista(v);
 })();
+// Precios base fijados desde Catálogo («Dejar estos precios como los nuevos precios base»):
+// le ganan a los del catálogo cargado en el sistema, así Presupuestos y Catálogo coinciden.
+conBase().then(async function(){
+  try{
+    const f=fbPre();
+    const snap=await f.getDoc(f.doc(f.db,'config','catalogo_precios'));
+    const g=snap.exists()?snap.data():null;
+    if(!g||!g.precios) return;
+    let cambio=false;
+    CATS.forEach(c=>c.prods.forEach(p=>{ const v=g.precios[p.artN]; if(typeof v==='number'&&v>0&&v!==p.p){ p.p=v; cambio=true; } }));
+    // El buscador de la cotización trabaja sobre su propia copia.
+    COT_PRODUCTOS.forEach(p=>{ const v=g.precios[p.artN]; if(typeof v==='number'&&v>0) p.p=v; });
+    if(!cambio) return;
+    window.__preciosBase=g.precios;
+    if(g.vigencia) document.getElementById('cot-vigencia').textContent='Catálogo '+g.vigencia;
+    // La lista se vuelve a dibujar solo si todavía no se eligió nada en ella.
+    if(!document.querySelector('#lista input[type=checkbox]:checked')) render();
+    cotBuscar(); // si ya había una búsqueda a la vista, que muestre los precios nuevos
+  }catch(e){ console.warn('No se pudieron leer los precios base del catálogo:',e&&e.message); }
+});
 // Clientes del CRM para elegir en el campo (igual se puede escribir uno que no esté).
 conBase().then(async function(){
   try{

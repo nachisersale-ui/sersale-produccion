@@ -13,6 +13,7 @@ const PAGINAS = [
   ["ventas.html", "director"],
   ["dashboard.html", "director"],
   ["presupuestos.html", "director"],
+  ["catalogo.html", "director"],
   ["backup.html", "director"],
   ["migracion.html", "director"],
 ];

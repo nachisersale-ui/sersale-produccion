@@ -140,11 +140,14 @@ for (const f of archivos) {
   huella.update(f);
   huella.update(fs.readFileSync(path.join(DIST, f)));
 }
+// Las fotos y tipografías del catálogo en PDF (unos 4 MB) no se guardan en cada
+// teléfono: solo las baja quien emite un catálogo, en el momento.
+const enTelefono = archivos.filter((f) => !f.startsWith("catalogo-pdf/"));
 const plantilla = leer(path.join(SRC, "sw.js"));
 huella.update(plantilla);
 const version = huella.digest("hex").slice(0, 12);
 if (!plantilla.includes('"__VERSION__"') || !plantilla.includes("__ARCHIVOS__")) throw new Error("sw.js perdió sus marcadores");
-escribir(path.join(DIST, "sw.js"), plantilla.replace('"__VERSION__"', JSON.stringify(version)).replace("__ARCHIVOS__", JSON.stringify(archivos)));
+escribir(path.join(DIST, "sw.js"), plantilla.replace('"__VERSION__"', JSON.stringify(version)).replace("__ARCHIVOS__", JSON.stringify(enTelefono)));
 escribir(path.join(DIST, "version.json"), JSON.stringify({ version, archivos: archivos.length }) + "\n");
 
 // Control: ninguna página debe depender de servidores externos para arrancar.

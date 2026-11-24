@@ -84,6 +84,27 @@ en Netlify → Deploys, republicar el deploy anterior. Incluye:
 - En esta PC (Windows) la suite completa se cuelga si corren varios archivos a
   la vez: correr los archivos de a uno (`node tests/run.mjs tests/x.test.mjs`).
 
+**Catálogo en el CRM** (hecho el 24/11/2026; ver más abajo si ya se publicó):
+`crm/src/catalogo.html` (solo Director, se entra desde Inicio) emite el catálogo
+mayorista en PDF desde el teléfono, con el mismo diseño que el de la computadora.
+
+- Aumento por porcentaje a todos o a algunos productos, redondeo, precio puntual
+  por producto, versión sin precios, solo algunos productos, con o sin páginas de
+  presentación. Cada emisión queda en la colección `catalogos` (hoja "Catalogos"
+  en el backup).
+- "Dejar estos precios como los nuevos precios base" escribe
+  `config/catalogo_precios` {precios, vigencia}. Desde ahí esos precios le ganan a
+  los del código, tanto en Catálogo como en Presupuestos: **los precios se
+  cambian desde el CRM**, ya no hace falta resincronizar por un cambio de precios.
+- El PDF lo dibuja `crm/src/js/catalogo-pdf.js` (jsPDF con Poppins y Montserrat
+  incrustadas). Las páginas de presentación son imágenes ya armadas y las de
+  productos se dibujan en el momento. Todo eso (`crm/src/catalogo-pdf/`, 4,4 MB) y
+  `crm/src/js/catalogo-completo.js` se regeneran con
+  `node tools/catalogo-recursos.mjs "<carpeta catalogo>" "<carpeta con subset-font y @expo-google-fonts>"`
+  cuando cambian productos, fotos, textos o diseño del catálogo original.
+- `catalogo-pdf/` se publica pero NO entra en la lista del service worker: para
+  emitir un catálogo hace falta señal.
+
 Pendiente de que el dueño confirme desde su iPhone:
 
 - Que guardar una reserva funcione contra la base real (las reglas de Firestore

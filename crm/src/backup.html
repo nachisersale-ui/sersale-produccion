@@ -78,7 +78,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 <li>📒 Movimientos CC</li><li>💰 Ventas Diarias</li><li>🏭 Stock</li><li>🐖 Faenas</li>
 <li>🏷️ Lotes</li><li>💲 Precios por Cliente</li>
 <li>↩️ Devoluciones</li><li>📊 Movimientos de Stock</li><li>📝 Reportes de Producción</li>
-<li>🎄 Reservas de fin de año</li><li>🧾 Muestras entregadas</li><li>📄 Presupuestos enviados</li>
+<li>🎄 Reservas de fin de año</li><li>🧾 Muestras entregadas</li><li>📄 Presupuestos enviados</li><li>📕 Catálogos emitidos</li>
 </ul>
 <button class="btn btn-primary" id="btnBackup" onclick="generarBackup()">💾 Generar Backup Excel</button>
 <button class="btn btn-back" onclick="location.href='index.html'">← Volver al CRM</button>
@@ -95,7 +95,7 @@ try{db=window.sersaleDbCompat();estado_index('✅ Conectado a Firebase');}catch(
 function fbGet(p){return db.collection(p).get({source:'server'}).then(function(s){return s.docs.map(function(d){return{id:d.id,data:d.data()};});});}
 
 // Colecciones que entran en el backup (todas las que usa el CRM, menos usuarios y configuración).
-var COLECCIONES_index=['pedidos','remitos','clientes','cuentas_corrientes','cc_movimientos','devoluciones','ventas_diarias','stock_produccion','stock_movimientos','reportes','faenas','trazabilidad_lotes','precios_cliente','reservas','muestras','presupuestos'];
+var COLECCIONES_index=['pedidos','remitos','clientes','cuentas_corrientes','cc_movimientos','devoluciones','ventas_diarias','stock_produccion','stock_movimientos','reportes','faenas','trazabilidad_lotes','precios_cliente','reservas','muestras','presupuestos','catalogos'];
 
 // Lo que va a una celda: texto o número. Una fecha guardada como Timestamp sale
 // como día y hora de Buenos Aires; cualquier otro objeto, como texto.
@@ -121,7 +121,9 @@ var reservasSinPermiso_index=false;
 // Lo mismo para Muestras (colección nueva).
 var muestrasSinPermiso_index=false;
 var presupuestosSinPermiso_index=false;
+var catalogosSinPermiso_index=false;
 function leerColeccion_index(n){
+  if(n==='catalogos'){catalogosSinPermiso_index=false;return fbGet(n).catch(function(e){if(e&&e.code==='permission-denied'){console.error('Backup: la base no permite leer los catálogos emitidos',e);catalogosSinPermiso_index=true;return [];}throw e;});}
   if(n==='presupuestos'){presupuestosSinPermiso_index=false;return fbGet(n).catch(function(e){if(e&&e.code==='permission-denied'){console.error('Backup: la base no permite leer los presupuestos',e);presupuestosSinPermiso_index=true;return [];}throw e;});}
   if(n==='muestras'){muestrasSinPermiso_index=false;return fbGet(n).catch(function(e){if(e&&e.code==='permission-denied'){console.error('Backup: la base no permite leer las muestras',e);muestrasSinPermiso_index=true;return [];}throw e;});}
   if(n!=='reservas')return fbGet(n);
@@ -242,6 +244,9 @@ async function generarBackup(){
     // Presupuestos enviados: una fila por producto, del más nuevo al más viejo.
     var presupuestos=base.presupuestos.slice().sort(function(a,b){return (Number(b.data.nro)||0)-(Number(a.data.nro)||0);});
     conteos.Presupuestos=crearHoja('Presupuestos','PRESUPUESTOS ENVIADOS'+(presupuestosSinPermiso_index?' — ⚠ NO SE PUDIERON LEER: la base de datos no lo permite':''),['ID','N°','Fecha','Cliente','Producto','Artículo','Unidades','Kilos','Precio por kg ($)','Subtotal ($)','Ajuste','Total del presupuesto ($)','IVA','Validez (días)','Observaciones'],filas(presupuestos,function(d){var v=d.data;var its=lista_index(v.items).length?v.items:[{}];var nro='P-'+('0000'+(Number(v.nro)||0)).slice(-4);var aj=v.ajuste&&v.ajuste.tipo?((v.ajuste.tipo==='bonif'?'Bonificación ':'Recargo ')+v.ajuste.pct+'%'):'';return its.map(function(it){return[d.id,nro,v.fecha||'',v.cliente||'',it.nombre||'-',it.art||'',it.unidades||'',it.kg!=null?it.kg:'',it.precio!=null?it.precio:'A confirmar',it.subtotal!=null?it.subtotal:'',aj,v.total!=null?v.total:'',v.iva==='mas'?'Más IVA':'Final',v.validezDias||'',v.obs||''];});},true));
+    // Catálogos emitidos: una fila por producto con el precio que salió, del más nuevo al más viejo.
+    var catalogos=base.catalogos.slice().sort(function(a,b){return String(b.data.creadoEn||'').localeCompare(String(a.data.creadoEn||''));});
+    conteos.Catalogos=crearHoja('Catalogos','CATÁLOGOS EMITIDOS'+(catalogosSinPermiso_index?' — ⚠ NO SE PUDIERON LEER: la base de datos no lo permite':''),['ID','Fecha','Vigencia','Aumento (%)','Aumento a','Con precios','Páginas','Artículo','Precio por kg ($)','Precio puntual'],filas(catalogos,function(d){var v=d.data;var pr=v.precios&&typeof v.precios==='object'?v.precios:{};var arts=lista_index(v.arts).length?v.arts.map(String):Object.keys(pr);if(!arts.length)arts=[''];var au=v.aumento||{};var man=v.manuales&&typeof v.manuales==='object'?v.manuales:{};return arts.map(function(a){return[d.id,v.fecha||'',v.vigencia||'',au.pct||'',au.pct?(au.alcance==='algunos'?'Algunos productos':'Todos'):'',v.sinPrecios?'No':'Sí',v.presentacion===false?'Solo productos':'Catálogo completo',a,typeof pr[a]==='number'?pr[a]:(a?'Consultar':''),man[a]!=null?'Sí':''];});},true));
     var wsRes=XLSX.utils.aoa_to_sheet([]);
     XLSX.utils.sheet_add_aoa(wsRes,[['BACKUP CRM — FRIGORÍFICO SERSALE'],['CUIT 30-70227633-7'],[],['Fecha:',fechaStr],[],['MÓDULO','REGISTROS']],{origin:'A1'});
     var fila=7;Object.entries(conteos).forEach(function(e){XLSX.utils.sheet_add_aoa(wsRes,[[e[0],e[1]]],{origin:'A'+fila});fila++;});

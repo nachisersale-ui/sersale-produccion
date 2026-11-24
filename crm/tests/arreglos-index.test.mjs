@@ -447,7 +447,7 @@ test("backup: si la lectura de una colección queda colgada, reintenta solo y el
     });
     const espera = p.waitForEvent("download", { timeout: 150000 }).catch(() => null);
     await p.locator("#btnBackup").tap();
-    await estado(p, "(15 de 16)").waitFor(); // el resto ya se leyó; pedidos no llega
+    await estado(p, "(16 de 17)").waitFor(); // el resto ya se leyó; pedidos no llega
     assert.equal(h.llamadas.descargas.length, 0);
     await p.clock.fastForward("00:46"); // pasan los 45 segundos sin avance
     const descarga = await espera;
@@ -489,7 +489,7 @@ test("backup a las 22:30: archivo y fechas con el día de Buenos Aires, todas la
 
     assert.equal(nombre, `Backup_CRM_Sersale_${HOY}.xlsx`, "el archivo lleva la fecha de hoy, no la de mañana");
     assert.match(H.Pedidos.generado, /^Generado: 10\/11\/2026 22:3\d$/);
-    assert.deepEqual(libro.orden, ["Resumen", "Pedidos", "Remitos", "Clientes", "CC Saldos", "CC Movimientos", "Ventas Diarias", "Stock", "Faenas", "Lotes", "Precios", "Devoluciones", "Stock Movimientos", "Reportes Producción", "Reservas", "Muestras", "Presupuestos"]);
+    assert.deepEqual(libro.orden, ["Resumen", "Pedidos", "Remitos", "Clientes", "CC Saldos", "CC Movimientos", "Ventas Diarias", "Stock", "Faenas", "Lotes", "Precios", "Devoluciones", "Stock Movimientos", "Reportes Producción", "Reservas", "Muestras", "Presupuestos", "Catalogos"]);
 
     // Pedidos: todos, con el día local en que se cargaron y del más nuevo al más viejo.
     const porId = (hoja) => Object.fromEntries(H[hoja].filas.map((f) => [f.ID, f]));
@@ -568,7 +568,7 @@ test("backup a las 22:30: archivo y fechas con el día de Buenos Aires, todas la
       "CC Saldos": H["CC Saldos"].filas.length, "CC Mov": H["CC Movimientos"].filas.length, Ventas: H["Ventas Diarias"].filas.length,
       Stock: H.Stock.filas.length, Faenas: H.Faenas.filas.length, Lotes: H.Lotes.filas.length, Precios: H.Precios.filas.length,
       Devoluciones: H.Devoluciones.filas.length, "Stock Mov": H["Stock Movimientos"].filas.length, Reportes: H["Reportes Producción"].filas.length, Reservas: H.Reservas.filas.length,
-      Muestras: 0, Presupuestos: 0,
+      Muestras: 0, Presupuestos: 0, Catalogos: 0,
     });
     assert.equal(H.Resumen.matriz[3][1], H.Pedidos.generado.replace("Generado: ", ""));
 

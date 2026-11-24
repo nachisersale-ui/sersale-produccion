@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<script src="js/sesion.js"></script>
+<script src="js/cuenta.js"></script>
+<script>
+  (function(){
+    var role = sessionStorage.getItem("sersale_role");
+    if (role === "director") return;
+    if (role === "operario") { window.location.href = "pedidos.html"; return; }
+    window.location.href = "index.html";
+  })();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="Sersale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/fonts.css" />
+<link rel="stylesheet" href="css/shell.css" />
+<script src="js/base.js"></script>
+<script src="js/shell.js"></script>
+<title>Catálogo — Frigorífico Sersale</title>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="js/catalogo-completo.js"></script>
+<script src="js/catalogo-pdf.js"></script>
+<script type="module">
+  // Conexión a la base: los precios base viven en config/catalogo_precios y cada
+  // catálogo emitido queda guardado en la colección "catalogos".
+  import { db, collection, doc, getDoc, setDoc, deleteDoc, onSnapshot } from "./js/fb.js";
+  window.__db = db;
+  window.__fb = { collection, doc, getDoc, setDoc, deleteDoc, onSnapshot };
+  window.__fbReady = true;
+  document.dispatchEvent(new Event("fbReady"));
+</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#F2F3F5;min-height:100vh;font-family:'IBM Plex Sans','Inter',system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;color:#12161A}
+button,input,select{font-family:inherit}
+.hdr{background:#12161A;border-bottom:2px solid #A4232A;color:#EFEAE1;padding:18px 20px;position:sticky;top:0;z-index:100;box-shadow:0 6px 22px rgba(18,22,26,.28);display:flex;align-items:center}
+.hdr img{height:46px;width:auto;margin-right:12px}
+.hdr-t{font-family:'Barlow Condensed','IBM Plex Sans',sans-serif;letter-spacing:.035em;font-size:21px;font-weight:800;text-transform:uppercase}
+.hdr-s{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;opacity:.75;margin-top:2px;letter-spacing:.04em}
+.tabs{display:flex;max-width:680px;margin:0 auto;padding:0 16px;border-bottom:1px solid #D8DCE0}
+.tab{flex:1;min-height:48px;border:none;border-bottom:3px solid transparent;background:transparent;color:#5C666F;font-weight:700;font-size:14px;cursor:pointer}
+.tab.on{color:#A4232A;border-bottom-color:#A4232A}
+.con{max-width:680px;margin:0 auto;padding:16px 16px 120px}
+.card{background:#fff;border-radius:16px;border:1px solid #D8DCE0;box-shadow:0 2px 10px rgba(0,0,0,.05);padding:18px;margin-bottom:14px}
+.ct{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#A4232A;margin-bottom:12px}
+.ayuda{font-size:12.5px;color:#5C666F;line-height:1.45;margin-bottom:12px}
+label.et{display:block;font-size:12px;font-weight:700;color:#555;margin:12px 0 5px}
+input[type=text],input[type=search],select{width:100%;min-height:46px;padding:10px 14px;border-radius:10px;border:1.5px solid #D8DCE0;font-size:16px;background:#fff;color:#12161A}
+input:focus,select:focus{outline:none;border-color:#A4232A}
+.seg{display:flex;gap:8px}
+.seg button{flex:1;min-height:46px;border-radius:10px;border:2px solid #D8DCE0;background:#fff;font-weight:700;font-size:13.5px;color:#3E4A55;cursor:pointer;padding:6px 8px}
+.seg button.on{border-color:#A4232A;background:#F7EAEA;color:#A4232A}
+.fila2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pct{position:relative}.pct input{padding-right:38px;font-weight:700}.pct span{position:absolute;right:14px;top:50%;transform:translateY(-50%);font-weight:800;color:#5C666F}
+.btn{display:block;width:100%;min-height:50px;border-radius:12px;border:none;font-weight:800;font-size:15px;cursor:pointer;padding:10px 14px}
+.btn-p{background:#A4232A;color:#fff}.btn-p:disabled{opacity:.55}
+.btn-s{background:#fff;color:#12161A;border:2px solid #D8DCE0}
+.btn-l{background:transparent;color:#A4232A;border:1.5px dashed #D9A5A8;min-height:44px;font-size:13.5px;margin-top:10px}
+.fam{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#5C666F;padding:14px 0 6px;border-bottom:1px solid #E4E7EA}
+.pr{display:grid;grid-template-columns:1fr 118px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid #EEF0F2}
+.pr-n{font-size:14px;font-weight:700;line-height:1.25}
+.pr-d{font-size:12px;color:#5C666F;margin-top:3px;font-variant-numeric:tabular-nums}
+.pr-d b{color:#A4232A}
+.pr-d .tag{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;background:#F7EAEA;color:#A4232A;border-radius:5px;padding:1px 6px;margin-left:4px}
+.pr input{min-height:44px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums;padding:8px 10px}
+.pr input.manual{border-color:#A4232A;background:#FDF6F6}
+.resumen{font-size:13px;font-weight:700;color:#3E4A55;background:#F7F8F9;border:1px solid #E4E7EA;border-radius:10px;padding:10px 12px;margin-top:12px}
+.vacio{font-size:13.5px;color:#5C666F;text-align:center;padding:26px 10px;line-height:1.5}
+.barra{height:8px;border-radius:6px;background:#E4E7EA;overflow:hidden;margin-top:10px}.barra i{display:block;height:100%;width:0;background:#A4232A;transition:width .2s}
+.listo{border:2px solid #2F6B4F;background:#F1F8F4}
+.listo .ct{color:#2F6B4F}
+.listo-t{font-size:16px;font-weight:800;margin-bottom:4px}.listo-d{font-size:13px;color:#3E4A55;margin-bottom:12px}
+.emi{background:#fff;border:1px solid #D8DCE0;border-radius:14px;padding:14px;margin-bottom:10px}
+.emi-c{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.emi-v{font-weight:800;font-size:15px}.emi-f{font-size:12px;color:#5C666F;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.emi-d{font-size:12.5px;color:#3E4A55;margin:6px 0 10px;line-height:1.45}
+.emi-b{display:flex;gap:8px}.emi-b button{flex:1;min-height:42px;border-radius:10px;border:1.5px solid #D8DCE0;background:#fff;font-weight:700;font-size:13px;cursor:pointer;color:#12161A}
+.emi-b button.borrar{flex:none;width:46px;color:#A4232A}
+/* selector de productos */
+.sel{position:fixed;inset:0;z-index:20000;background:#F2F3F5;display:none;flex-direction:column}
+.sel.on{display:flex}
+.sel-h{background:#12161A;color:#EFEAE1;padding:calc(14px + env(safe-area-inset-top)) 16px 12px}
+.sel-t{font-weight:800;font-size:16px;margin-bottom:10px}
+.sel-l{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 16px 16px}
+.sel-f{display:flex;justify-content:space-between;align-items:center;padding:14px 0 6px;border-bottom:1px solid #D8DCE0;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#5C666F}
+.sel-f button{border:none;background:none;color:#A4232A;font-weight:800;font-size:12px;padding:6px 0 6px 12px;cursor:pointer}
+.sel-p{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #E4E7EA;cursor:pointer;font-size:14px;font-weight:600}
+.sel-p input{width:22px;height:22px;accent-color:#A4232A;flex:none}
+.sel-p small{display:block;font-weight:500;color:#5C666F;font-size:12px}
+.sel-b{padding:12px 16px calc(12px + env(safe-area-inset-bottom));background:#fff;border-top:1px solid #D8DCE0}
+@media (prefers-reduced-motion:reduce){*{transition:none !important}}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <img src="assets/logo.png" alt="Sersale" />
+  <div><div class="hdr-t">Catálogo</div><div class="hdr-s">Catálogo mayorista en PDF</div></div>
+</div>
+<div class="tabs" role="tablist">
+  <button type="button" role="tab" id="tab-nuevo" class="tab on" onclick="verVista('nuevo')">Nueva versión</button>
+  <button type="button" role="tab" id="tab-emitidos" class="tab" onclick="verVista('emitidos')">Emitidos</button>
+</div>
+
+<div class="con" id="vista-nuevo">
+  <div class="card">
+    <div class="ct">1 · Aumento</div>
+    <p class="ayuda">Dejalo vacío para emitir con los precios de hoy. El aumento se calcula sobre el precio base de cada producto.</p>
+    <div class="fila2">
+      <div><label class="et" for="cat-pct" style="margin-top:0">Porcentaje</label><div class="pct"><input type="text" id="cat-pct" inputmode="decimal" autocomplete="off" placeholder="0" oninput="catCambio()"><span>%</span></div></div>
+      <div><label class="et" for="cat-redondeo" style="margin-top:0">Redondear a</label>
+        <select id="cat-redondeo" onchange="catCambio()"><option value="1">Sin redondeo</option><option value="10" selected>$10</option><option value="50">$50</option><option value="100">$100</option></select></div>
+    </div>
+    <label class="et">Aplicarlo a</label>
+    <div class="seg" id="cat-alcance">
+      <button type="button" data-v="todos" class="on" onclick="catAlcance('todos')">Todos los productos</button>
+      <button type="button" data-v="algunos" onclick="catAlcance('algunos')">Algunos</button>
+    </div>
+    <button type="button" class="btn btn-l" id="cat-elegir-aumento" style="display:none" onclick="selAbrir('aumento')">Elegir productos</button>
+  </div>
+
+  <div class="card">
+    <div class="ct">2 · Precio puntual</div>
+    <p class="ayuda">Si querés un valor exacto, escribilo al lado del producto. Lo escrito a mano le gana al aumento. Borralo para volver al precio calculado.</p>
+    <input type="search" id="cat-buscar" placeholder="Buscar producto o artículo" autocomplete="off" oninput="catPintarPrecios()">
+    <div id="cat-precios"></div>
+    <div class="resumen" id="cat-resumen"></div>
+    <button type="button" class="btn btn-l" id="cat-limpiar" onclick="catLimpiar()">Volver todo a los precios base</button>
+  </div>
+
+  <div class="card">
+    <div class="ct">3 · Qué sale</div>
+    <label class="et" for="cat-vigencia" style="margin-top:0">Vigencia (sale en la tapa y en cada página)</label>
+    <input type="text" id="cat-vigencia" maxlength="40" autocomplete="off">
+    <label class="et">Precios</label>
+    <div class="seg" id="cat-conprecios">
+      <button type="button" data-v="si" class="on" onclick="catOpcion('conPrecios',true)">Con precios</button>
+      <button type="button" data-v="no" onclick="catOpcion('conPrecios',false)">Sin precios</button>
+    </div>
+    <label class="et">Páginas</label>
+    <div class="seg" id="cat-presentacion">
+      <button type="button" data-v="si" class="on" onclick="catOpcion('presentacion',true)">Catálogo completo</button>
+      <button type="button" data-v="no" onclick="catOpcion('presentacion',false)">Solo productos</button>
+    </div>
+    <label class="et">Productos</label>
+    <div class="seg" id="cat-cuales">
+      <button type="button" data-v="todos" class="on" onclick="catCuales('todos')">Todos</button>
+      <button type="button" data-v="algunos" onclick="catCuales('algunos')">Algunos</button>
+    </div>
+    <button type="button" class="btn btn-l" id="cat-elegir-salen" style="display:none" onclick="selAbrir('salen')">Elegir productos</button>
+  </div>
+
+  <div class="card" id="cat-progreso" style="display:none">
+    <div class="ct">Armando el catálogo</div>
+    <div id="cat-progreso-t" class="ayuda" style="margin:0"></div>
+    <div class="barra"><i id="cat-progreso-b"></i></div>
+  </div>
+  <div class="card listo" id="cat-listo" style="display:none">
+    <div class="ct">Catálogo listo</div>
+    <div class="listo-t" id="cat-listo-t"></div>
+    <div class="listo-d" id="cat-listo-d"></div>
+    <button type="button" class="btn btn-p" id="cat-compartir" onclick="catEntregar()">Compartir PDF</button>
+  </div>
+
+  <button type="button" class="btn btn-p" id="cat-generar" onclick="catGenerar()">Generar catálogo en PDF</button>
+  <button type="button" class="btn btn-s" id="cat-fijar" style="margin-top:10px" onclick="catFijar()">Dejar estos precios como los nuevos precios base</button>
+  <p class="ayuda" style="margin:10px 4px 0">Emitir una versión no cambia nada más. «Dejar como precios base» sí: actualiza el catálogo y también los precios de Presupuestos.</p>
+</div>
+
+<div class="con" id="vista-emitidos" style="display:none">
+  <div id="emi-lista"></div>
+</div>
+
+<div class="sel" id="sel" role="dialog" aria-modal="true">
+  <div class="sel-h"><div class="sel-t" id="sel-t"></div><input type="search" id="sel-buscar" placeholder="Buscar producto o artículo" autocomplete="off" oninput="selPintar()"></div>
+  <div class="sel-l" id="sel-l"></div>
+  <div class="sel-b"><button type="button" class="btn btn-p" id="sel-listo" onclick="selCerrar()">Listo</button></div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════
+//  Catálogo mayorista: versiones con los precios que se quieran.
+//
+//  Precio base de un producto = el del catálogo cargado en el sistema, salvo que
+//  en config/catalogo_precios haya uno más nuevo (botón «Dejar como precios base»).
+//  Precio de la versión = puntual si se escribió; si no, base + aumento
+//  (redondeado) cuando el aumento le toca; si no, el base.
+//
+//  Colección "catalogos" (un documento por catálogo emitido):
+//    fecha (AAAA-MM-DD), vigencia, sinPrecios, presentacion, arts [art…] | null,
+//    aumento {pct, alcance: "todos"|"algunos", arts [art…]}, redondeo,
+//    manuales {art: precio}, precios {art: precio|null}, paginas, creadoEn, creadoPor
+// ══════════════════════════════════════════════════════════════════════════
+const C=window.SersaleCatalogoCompleto;
+const esc=SersaleBase.esc;
+const PRODUCTOS=[]; // {art,nombre,familia,peso,precio}
+(function(){
+  const vistos={};
+  C.paginas.forEach(pg=>pg.forEach(f=>f.productos.forEach(p=>{ if(!vistos[p.art]){ vistos[p.art]=1; PRODUCTOS.push({art:p.art,nombre:p.nombre,familia:f.nombre,peso:p.peso,precio:p.precio}); } })));
+})();
+const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const est={alcance:'todos',artsAumento:new Set(),manuales:{},conPrecios:true,presentacion:true,cuales:'todos',artsSalen:new Set(),
+  baseGuardada:null, // {precios, vigencia} de config/catalogo_precios
+  resultado:null};
+
+const catNumero=t=>{ const s=String(t==null?'':t).replace(/[^\d]/g,''); return s?Number(s):null; };
+function catPct(){
+  const t=document.getElementById('cat-pct').value.trim().replace(',','.');
+  const n=Number(t);
+  return t&&isFinite(n)?n:0;
+}
+function catBase(art){
+  const g=est.baseGuardada&&est.baseGuardada.precios;
+  if(g&&typeof g[art]==='number') return g[art];
+  const p=PRODUCTOS.find(x=>x.art===art);
+  return p&&typeof p.precio==='number'?p.precio:null;
+}
+// Precio calculado sin contar lo escrito a mano.
+function catCalculado(art){
+  const b=catBase(art), pct=catPct();
+  if(b==null) return null;
+  if(!pct||(est.alcance==='algunos'&&!est.artsAumento.has(art))) return b;
+  const r=Number(document.getElementById('cat-redondeo').value)||1;
+  return Math.max(0,Math.round(b*(1+pct/100)/r)*r);
+}
+function catPrecio(art){
+  return typeof est.manuales[art]==='number'?est.manuales[art]:catCalculado(art);
+}
+const catMonto=n=>n==null?'Consultar':SersaleBase.fmtMonto(n);
+
+function catSeg(id,valor){
+  document.querySelectorAll('#'+id+' button').forEach(b=>b.classList.toggle('on',b.dataset.v===valor));
+}
+function catAlcance(v){
+  est.alcance=v; catSeg('cat-alcance',v);
+  if(v==='algunos'&&!est.artsAumento.size) selAbrir('aumento');
+  catCambio();
+}
+function catCuales(v){
+  est.cuales=v; catSeg('cat-cuales',v);
+  if(v==='algunos'&&!est.artsSalen.size) selAbrir('salen');
+  catCambio();
+}
+function catOpcion(k,v){
+  est[k]=v; catSeg(k==='conPrecios'?'cat-conprecios':'cat-presentacion',v?'si':'no');
+  catCambio();
+}
+function catCambio(){
+  const ba=document.getElementById('cat-elegir-aumento'), bs=document.getElementById('cat-elegir-salen');
+  ba.style.display=est.alcance==='algunos'?'block':'none';
+  ba.textContent=est.artsAumento.size?'Aumento a '+est.artsAumento.size+(est.artsAumento.size===1?' producto':' productos')+' · cambiar':'Elegir productos';
+  bs.style.display=est.cuales==='algunos'?'block':'none';
+  bs.textContent=est.artsSalen.size?'Salen '+est.artsSalen.size+(est.artsSalen.size===1?' producto':' productos')+' · cambiar':'Elegir productos';
+  catOcultarListo();
+  catPintarPrecios();
+}
+function catOcultarListo(){
+  est.resultado=null;
+  document.getElementById('cat-listo').style.display='none';
+}
+
+function catPintarPrecios(){
+  const q=document.getElementById('cat-buscar').value.trim();
+  let html='', familia=null, cambian=0, puntuales=0;
+  PRODUCTOS.forEach(p=>{
+    const base=catBase(p.art), nuevo=catPrecio(p.art), manual=typeof est.manuales[p.art]==='number';
+    if(nuevo!==base) cambian++;
+    if(manual) puntuales++;
+    if(q&&!SersaleBase.coincide(p.nombre+' '+p.art+' '+p.familia,q)) return;
+    if(p.familia!==familia){ familia=p.familia; html+='<div class="fam">'+esc(familia)+'</div>'; }
+    const calc=catCalculado(p.art);
+    html+='<div class="pr" data-art="'+p.art+'"><div><div class="pr-n">'+esc(p.nombre)+'</div>'
+      +'<div class="pr-d">Art. '+p.art+' · base '+esc(catMonto(base))+(nuevo!==base?' → <b>'+esc(catMonto(nuevo))+'</b>':'')+(manual?'<span class="tag">puntual</span>':'')+'</div></div>'
+      +'<input type="text" inputmode="numeric" autocomplete="off" aria-label="Precio puntual de '+esc(p.nombre)+'" class="'+(manual?'manual':'')+'" value="'+(manual?esc(SersaleBase.fmtNumero(est.manuales[p.art])):'')+'" placeholder="'+esc(calc==null?'Consultar':SersaleBase.fmtNumero(calc))+'" onchange="catManual('+p.art+',this.value)"></div>';
+  });
+  document.getElementById('cat-precios').innerHTML=html||'<p class="vacio">Ningún producto coincide con la búsqueda.</p>';
+  const partes=[];
+  partes.push(cambian?('Cambian '+cambian+' de '+PRODUCTOS.length+' precios'):'Sin cambios: salen los precios base');
+  if(puntuales) partes.push(puntuales+(puntuales===1?' puntual':' puntuales'));
+  document.getElementById('cat-resumen').textContent=partes.join(' · ');
+  document.getElementById('cat-limpiar').style.display=cambian||puntuales?'block':'none';
+  document.getElementById('cat-fijar').style.display=cambian?'block':'none';
+}
+function catManual(art,texto){
+  const n=catNumero(texto);
+  if(n==null||n<=0) delete est.manuales[art]; else est.manuales[art]=n;
+  catOcultarListo();
+  catPintarPrecios();
+}
+async function catLimpiar(){
+  const ok=await SersaleUI.confirmar({titulo:'¿Volver a los precios base?',cuerpo:'Se borran el aumento y los precios puntuales que cargaste en esta pantalla.',aceptar:'Sí, volver',cancelar:'No'});
+  if(!ok) return;
+  est.manuales={}; document.getElementById('cat-pct').value='';
+  catCambio();
+}
+
+// ── Selector de productos (para el aumento y para qué productos salen) ──
+let selCual=null, selSoltar=null;
+const selConjunto=()=>selCual==='aumento'?est.artsAumento:est.artsSalen;
+function selAbrir(cual){
+  selCual=cual;
+  document.getElementById('sel-t').textContent=cual==='aumento'?'¿A qué productos va el aumento?':'¿Qué productos salen en el catálogo?';
+  document.getElementById('sel-buscar').value='';
+  document.getElementById('sel').classList.add('on');
+  selPintar();
+  selSoltar=SersaleBase.abrirAtras(()=>{ selSoltar=null; selCerrar(); });
+}
+function selCerrar(){
+  document.getElementById('sel').classList.remove('on');
+  if(selSoltar){ const s=selSoltar; selSoltar=null; s(); }
+  // Sin nada elegido, "Algunos" no tiene sentido: vuelve a "Todos".
+  if(selCual==='aumento'&&!est.artsAumento.size){ est.alcance='todos'; catSeg('cat-alcance','todos'); }
+  if(selCual==='salen'&&!est.artsSalen.size){ est.cuales='todos'; catSeg('cat-cuales','todos'); }
+  catCambio();
+}
+function selPintar(){
+  const q=document.getElementById('sel-buscar').value.trim(), set=selConjunto();
+  let html='', familia=null;
+  PRODUCTOS.forEach(p=>{
+    if(q&&!SersaleBase.coincide(p.nombre+' '+p.art+' '+p.familia,q)) return;
+    if(p.familia!==familia){
+      familia=p.familia;
+      const deLaFamilia=PRODUCTOS.filter(x=>x.familia===familia), todos=deLaFamilia.every(x=>set.has(x.art));
+      html+='<div class="sel-f"><span>'+esc(familia)+'</span><button type="button" data-familia="'+esc(familia)+'" onclick="selFamilia(this.dataset.familia)">'+(todos?'Quitar toda la línea':'Toda la línea')+'</button></div>';
+    }
+    html+='<label class="sel-p"><input type="checkbox" data-art="'+p.art+'" '+(set.has(p.art)?'checked':'')+' onchange="selTocar('+p.art+',this.checked)"><span>'+esc(p.nombre)+'<small>Art. '+p.art+' · '+esc(catMonto(catBase(p.art)))+'</small></span></label>';
+  });
+  document.getElementById('sel-l').innerHTML=html||'<p class="vacio">Ningún producto coincide con la búsqueda.</p>';
+  document.getElementById('sel-listo').textContent='Listo · '+set.size+(set.size===1?' elegido':' elegidos');
+}
+function selTocar(art,si){
+  const set=selConjunto();
+  if(si) set.add(art); else set.delete(art);
+  selPintar();
+}
+function selFamilia(familia){
+  const set=selConjunto(), deLaFamilia=PRODUCTOS.filter(x=>x.familia===familia), todos=deLaFamilia.every(x=>set.has(x.art));
+  deLaFamilia.forEach(x=>{ if(todos) set.delete(x.art); else set.add(x.art); });
+  selPintar();
+}
+
+// ── Generar ──
+function catOpciones(){
+  const precios={};
+  PRODUCTOS.forEach(p=>{ precios[p.art]=catPrecio(p.art); });
+  return {
+    vigencia:document.getElementById('cat-vigencia').value.trim().replace(/\s+/g,' ')||C.vigencia,
+    precios, sinPrecios:!est.conPrecios, presentacion:est.presentacion,
+    arts:est.cuales==='algunos'&&est.artsSalen.size?PRODUCTOS.filter(p=>est.artsSalen.has(p.art)).map(p=>p.art):null,
+  };
+}
+const catArchivo=o=>'Catalogo_Mayorista_Sersale_'+String(o.vigencia).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9]+/g,'_').replace(/^_|_$/g,'')+(o.sinPrecios?'_Sin_Precios':'')+'.pdf';
+function catAvance(a){
+  const caja=document.getElementById('cat-progreso');
+  caja.style.display='block';
+  document.getElementById('cat-progreso-t').textContent=a.paso==='recursos'?'Bajando fotos y tipografías… '+a.hecho+' de '+a.total:'Dibujando páginas… '+a.hecho+' de '+a.total;
+  document.getElementById('cat-progreso-b').style.width=Math.round((a.paso==='recursos'?a.hecho/a.total*0.6:0.6+a.hecho/a.total*0.4)*100)+'%';
+}
+let catOcupado=false;
+async function catArmar(o,alGuardar){
+  if(catOcupado) return;
+  catOcupado=true;
+  if(document.activeElement&&document.activeElement.blur) document.activeElement.blur();
+  const boton=document.getElementById('cat-generar');
+  boton.disabled=true; boton.textContent='Armando el catálogo…';
+  catOcultarListo();
+  try{
+    const r=await SersaleCatalogoPDF.generar(o,catAvance);
+    const blob=r.pdf.output('blob');
+    est.resultado={blob,nombre:catArchivo(o),paginas:r.paginas.length,pdf:r.pdf};
+    window.__catUltimo={opciones:o,paginas:r.paginas.map(p=>p.tipo),textos:r.textos,bytes:blob.size,nombre:est.resultado.nombre};
+    document.getElementById('cat-listo-t').textContent='Catálogo '+o.vigencia+(o.sinPrecios?' · sin precios':'');
+    document.getElementById('cat-listo-d').textContent=r.paginas.length+' páginas · '+SersaleBase.fmtNumero(blob.size/1048576,1)+' MB';
+    document.getElementById('cat-listo').style.display='block';
+    document.getElementById('cat-listo').scrollIntoView({block:'center',behavior:'smooth'});
+    if(alGuardar) alGuardar(r);
+  }catch(e){
+    console.error(e);
+    SersaleUI.toast(navigator.onLine===false?'Sin conexión: para armar el catálogo hace falta señal.':'No se pudo armar el catálogo. Revisá la señal y probá de nuevo.',{tipo:'error'});
+  }finally{
+    document.getElementById('cat-progreso').style.display='none';
+    boton.disabled=false; boton.textContent='Generar catálogo en PDF';
+    catOcupado=false;
+  }
+}
+function catGenerar(){
+  const o=catOpciones();
+  return catArmar(o,r=>catGuardarEmitido(o,r.paginas.length));
+}
+// En el teléfono abre el menú de compartir solo con el archivo (sin texto ni link);
+// en la computadora lo descarga.
+async function catEntregar(){
+  const r=est.resultado;
+  if(!r) return;
+  const ua=navigator.userAgent||'';
+  const esMovil=/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)||(/Mac/i.test(ua)&&navigator.maxTouchPoints>1);
+  if(esMovil&&navigator.share&&navigator.canShare){
+    try{
+      const archivo=new File([r.blob],r.nombre,{type:'application/pdf'});
+      if(navigator.canShare({files:[archivo]})){ await navigator.share({files:[archivo]}); return; }
+    }catch(e){
+      if(e&&e.name==='AbortError') return;
+      console.warn('No se pudo compartir, se descarga:',e&&e.message);
+    }
+  }
+  r.pdf.save(r.nombre);
+}
+
+// ── Base de datos ──
+function conBase(){
+  return new Promise(ok=>{ if(window.__fbReady) ok(); else document.addEventListener('fbReady',()=>ok(),{once:true}); });
+}
+const fbCat=()=>Object.assign({db:window.__db},window.__fb);
+const conTope=(p,ms)=>Promise.race([p,new Promise(ok=>setTimeout(()=>ok('tope'),ms))]);
+
+async function catGuardarEmitido(o,paginas){
+  try{
+    await conBase();
+    const f=fbCat(), ref=f.doc(f.collection(f.db,'catalogos'));
+    const manuales={};
+    Object.keys(est.manuales).forEach(a=>{ manuales[a]=est.manuales[a]; });
+    const datos={fecha:SersaleBase.hoy(),vigencia:o.vigencia,sinPrecios:o.sinPrecios,presentacion:o.presentacion,arts:o.arts,
+      aumento:{pct:catPct(),alcance:est.alcance,arts:est.alcance==='algunos'?Array.from(est.artsAumento):[]},
+      redondeo:Number(document.getElementById('cat-redondeo').value)||1,manuales,precios:o.precios,paginas,
+      creadoEn:new Date().toISOString(),creadoPor:sessionStorage.getItem('sersale_usuario')||''};
+    // Queda en el teléfono al instante y sube sola cuando hay señal.
+    f.setDoc(ref,datos).catch(e=>{ console.error(e); SersaleUI.toast('El catálogo se armó, pero no quedó guardado en «Emitidos».',{tipo:'error'}); });
+  }catch(e){ console.error(e); }
+}
+
+async function catFijar(){
+  const o=catOpciones();
+  const cambian=PRODUCTOS.filter(p=>o.precios[p.art]!==catBase(p.art)).length;
+  if(!cambian) return SersaleUI.toast('No hay precios distintos de los base.');
+  const ok=await SersaleUI.confirmar({titulo:'¿Dejar estos precios como base?',cuerpo:'Cambian '+cambian+(cambian===1?' precio':' precios')+'. Desde ahora el catálogo y Presupuestos usan estos valores.',aceptar:'Sí, actualizar',cancelar:'No'});
+  if(!ok) return;
+  await conBase();
+  const f=fbCat(), precios={};
+  PRODUCTOS.forEach(p=>{ if(typeof o.precios[p.art]==='number') precios[p.art]=o.precios[p.art]; });
+  const datos={precios,vigencia:o.vigencia,actualizadoEn:new Date().toISOString(),actualizadoPor:sessionStorage.getItem('sersale_usuario')||''};
+  try{
+    const r=await conTope(f.setDoc(f.doc(f.db,'config','catalogo_precios'),datos),6000);
+    est.baseGuardada=datos;
+    est.manuales={}; document.getElementById('cat-pct').value='';
+    catCambio();
+    SersaleUI.toast(r==='tope'?'Precios base actualizados en este teléfono. Suben solos cuando haya señal.':'Precios base actualizados.',{tipo:'ok'});
+  }catch(e){
+    console.error(e);
+    SersaleUI.toast(e&&e.code==='permission-denied'?'La base de datos no permite guardar los precios. Avisá para que se habilite.':'No se pudieron guardar los precios. Probá de nuevo.',{tipo:'error'});
+  }
+}
+
+let emiLista=null, emiError=null;
+async function catEscuchar(){
+  await conBase();
+  const f=fbCat();
+  f.onSnapshot(f.doc(f.db,'config','catalogo_precios'),snap=>{
+    est.baseGuardada=snap.exists()?snap.data():null;
+    catPintarPrecios();
+    if(document.getElementById('sel').classList.contains('on')) selPintar();
+  },e=>console.error(e));
+  f.onSnapshot(f.collection(f.db,'catalogos'),
+    snap=>{ emiError=null; emiLista=snap.docs.map(d=>Object.assign({id:d.id},d.data())); emiPintar(); },
+    e=>{ console.error(e); emiError=e&&e.code==='permission-denied'?'permiso':'otro'; emiPintar(); });
+}
+function emiResumen(c){
+  const partes=[];
+  const a=c.aumento||{};
+  if(a.pct) partes.push((a.pct>0?'Aumento ':'Baja ')+SersaleBase.fmtNumero(Math.abs(a.pct),2)+'% '+(a.alcance==='algunos'?'a '+(a.arts||[]).length+' productos':'a todos'));
+  const m=Object.keys(c.manuales||{}).length;
+  if(m) partes.push(m+(m===1?' precio puntual':' precios puntuales'));
+  if(!a.pct&&!m) partes.push('Precios base');
+  if(c.sinPrecios) partes.push('sin precios');
+  partes.push(c.arts&&c.arts.length?c.arts.length+' productos':'todos los productos');
+  if(c.presentacion===false) partes.push('solo productos');
+  return partes.join(' · ');
+}
+function emiPintar(){
+  const caja=document.getElementById('emi-lista');
+  if(emiError){ caja.innerHTML='<p class="vacio">'+(emiError==='permiso'?'La base de datos no permite ver los catálogos emitidos. Avisá para que se habilite.':'No se pudieron cargar los catálogos emitidos. Revisá la señal y volvé a entrar.')+'</p>'; return; }
+  if(emiLista===null){ caja.innerHTML='<p class="vacio">Cargando…</p>'; return; }
+  if(!emiLista.length){ caja.innerHTML='<p class="vacio">Todavía no emitiste ningún catálogo desde acá. Los que generes en «Nueva versión» quedan guardados con sus precios.</p>'; return; }
+  caja.innerHTML=emiLista.slice().sort((a,b)=>String(b.creadoEn||'').localeCompare(String(a.creadoEn||''))).map(c=>
+    '<div class="emi" data-id="'+esc(c.id)+'"><div class="emi-c"><span class="emi-v">'+esc(c.vigencia||'Catálogo')+'</span><span class="emi-f">'+esc(SersaleBase.fmtFecha(c.fecha))+(c.creadoEn?' '+esc(SersaleBase.fmtHora(c.creadoEn)):'')+'</span></div>'
+    +'<div class="emi-d">'+esc(emiResumen(c))+'</div>'
+    +'<div class="emi-b"><button type="button" onclick="emiReemitir(\''+esc(c.id)+'\')">Volver a emitir</button><button type="button" onclick="emiUsar(\''+esc(c.id)+'\')">Usar de base</button><button type="button" class="borrar" aria-label="Borrar" onclick="emiBorrar(\''+esc(c.id)+'\')">✕</button></div></div>').join('');
+}
+const emiDe=id=>(emiLista||[]).find(c=>c.id===id);
+function emiPrecios(c){
+  // Las claves de un mapa guardado vuelven como texto.
+  const precios={};
+  PRODUCTOS.forEach(p=>{ const v=(c.precios||{})[p.art]; precios[p.art]=typeof v==='number'?v:null; });
+  return precios;
+}
+async function emiReemitir(id){
+  const c=emiDe(id); if(!c) return;
+  verVista('nuevo');
+  await catArmar({vigencia:c.vigencia,precios:emiPrecios(c),sinPrecios:!!c.sinPrecios,presentacion:c.presentacion!==false,arts:c.arts&&c.arts.length?c.arts:null});
+}
+function emiUsar(id){
+  const c=emiDe(id); if(!c) return;
+  // Se cargan sus precios como puntuales (solo los que difieren del base de hoy).
+  const precios=emiPrecios(c);
+  est.manuales={};
+  PRODUCTOS.forEach(p=>{ if(typeof precios[p.art]==='number'&&precios[p.art]!==catBase(p.art)) est.manuales[p.art]=precios[p.art]; });
+  document.getElementById('cat-pct').value='';
+  est.alcance='todos'; est.artsAumento=new Set(); catSeg('cat-alcance','todos');
+  est.conPrecios=!c.sinPrecios; catSeg('cat-conprecios',est.conPrecios?'si':'no');
+  est.presentacion=c.presentacion!==false; catSeg('cat-presentacion',est.presentacion?'si':'no');
+  est.artsSalen=new Set(c.arts||[]); est.cuales=est.artsSalen.size?'algunos':'todos'; catSeg('cat-cuales',est.cuales);
+  document.getElementById('cat-vigencia').value=c.vigencia||'';
+  verVista('nuevo'); catCambio();
+  window.scrollTo(0,0);
+  SersaleUI.toast('Cargué los precios de ese catálogo. Cambiá lo que quieras y generalo.');
+}
+async function emiBorrar(id){
+  const c=emiDe(id); if(!c) return;
+  const ok=await SersaleUI.confirmar({titulo:'¿Borrar este registro?',cuerpo:'Se borra de «Emitidos» el catálogo '+(c.vigencia||'')+' del '+SersaleBase.fmtFecha(c.fecha)+'. Los PDF que ya enviaste no cambian.',aceptar:'Sí, borrar',cancelar:'No'});
+  if(!ok) return;
+  const f=fbCat();
+  f.deleteDoc(f.doc(f.db,'catalogos',id)).catch(e=>{ console.error(e); SersaleUI.toast('No se pudo borrar.',{tipo:'error'}); });
+}
+
+function verVista(v){
+  ['nuevo','emitidos'].forEach(k=>{
+    document.getElementById('vista-'+k).style.display=k===v?'block':'none';
+    document.getElementById('tab-'+k).classList.toggle('on',k===v);
+  });
+}
+
+(function(){
+  const hoy=SersaleBase.hoy().split('-'); // AAAA-MM-DD
+  const campo=document.getElementById('cat-vigencia');
+  campo.value=MESES[Number(hoy[1])-1]?MESES[Number(hoy[1])-1]+' '+hoy[0]:C.vigencia;
+  campo.addEventListener('input',catOcultarListo);
+  catCambio();
+  emiPintar();
+  catEscuchar();
+})();
+</script>
+</body>
+</html>
