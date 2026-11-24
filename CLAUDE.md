@@ -84,7 +84,8 @@ en Netlify → Deploys, republicar el deploy anterior. Incluye:
 - En esta PC (Windows) la suite completa se cuelga si corren varios archivos a
   la vez: correr los archivos de a uno (`node tests/run.mjs tests/x.test.mjs`).
 
-**Catálogo en el CRM** (hecho el 24/11/2026; ver más abajo si ya se publicó):
+**Catálogo en el CRM** (publicado en el sitio real y en el de prueba el
+24/11/2026, versión `8196102ca389`, con OK del dueño tras probarlo en su iPhone):
 `crm/src/catalogo.html` (solo Director, se entra desde Inicio) emite el catálogo
 mayorista en PDF desde el teléfono, con el mismo diseño que el de la computadora.
 
