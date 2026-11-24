@@ -40,7 +40,7 @@
     // al cambiar de vista los datos ya están en el teléfono.
     precalentar(sessionStorage.getItem("sersale_role") === "operario"
       ? ["pedidos"]
-      : ["pedidos", "clientes", "cuentas_corrientes", "cc_movimientos", "precios_cliente"]);
+      : ["pedidos", "clientes", "cuentas_corrientes", "cc_movimientos", "precios_cliente", "reservas"]);
     window.__db = db;
     window.__fb = { collection, addDoc, getDocs, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot, increment, runTransaction, writeBatch, getDocsFromServer };
     window.__fbReady = true;

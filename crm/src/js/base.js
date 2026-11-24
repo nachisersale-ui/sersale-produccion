@@ -118,20 +118,40 @@
     return Math.round((x + Math.sign(x) * Number.EPSILON) * f) / f;
   }
 
+  // Formateadores de números, armados una sola vez por cantidad de decimales.
+  // toLocaleString() arma uno nuevo en cada llamada, y en un teléfono eso es
+  // lento: una pantalla con cientos de kilos e importes tardaba en dibujarse.
+  // El resultado es el mismo, letra por letra.
+  var formateadores = {};
+  function formateador(min, max) {
+    var k = min + "|" + max;
+    var f = formateadores[k];
+    if (!f) {
+      try {
+        f = new Intl.NumberFormat("es-AR", { minimumFractionDigits: min, maximumFractionDigits: max });
+      } catch (e) {
+        f = { format: function (x) { return x.toLocaleString("es-AR", { minimumFractionDigits: min, maximumFractionDigits: max }); } };
+      }
+      formateadores[k] = f;
+    }
+    return f;
+  }
+
   /** "$8.990". Con signo: "-$1.200". `dec` decimales (0 por defecto). */
   function fmtMonto(n, dec) {
     var x = Number(n);
     if (!isFinite(x)) x = 0;
     dec = dec || 0;
     var abs = Math.abs(redondear(x, dec));
-    var txt = abs.toLocaleString("es-AR", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    var txt = formateador(dec, dec).format(abs);
     return (x < 0 && abs !== 0 ? "-$" : "$") + txt;
   }
   /** Número con separador de miles y hasta `dec` decimales: "1.234,5". */
   function fmtNumero(n, dec) {
     var x = Number(n);
     if (!isFinite(x)) x = 0;
-    return x.toLocaleString("es-AR", { maximumFractionDigits: dec == null ? 2 : dec });
+    dec = dec == null ? 2 : dec;
+    return formateador(Math.min(0, dec), dec).format(x);
   }
 
   /** Para comparar o buscar nombres: minúsculas, sin acentos, sin espacios de más. */

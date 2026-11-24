@@ -361,9 +361,12 @@
       rol = sessionStorage.getItem("sersale_role");
     } catch (e) {}
     if (!rol) return; // en la pantalla de ingreso no hay sesión que cerrar
-    // Usuarios y permisos son solo de Directores: que a otro rol se los nieguen es lo esperado.
+    // Solo cuenta si la base niega lo que cualquier sesión válida puede leer (pedidos y
+    // clientes; usuarios, para un Director). Que niegue una colección puntual (una nueva
+    // que las reglas todavía no habilitan, o los usuarios a un Operario) no es "te
+    // quitaron el acceso": esa pantalla avisa por su cuenta.
     var coleccion = ev && ev.detail && ev.detail.coleccion;
-    if (rol !== "director" && (coleccion === "usuarios" || coleccion === "accesos" || coleccion === "ingreso")) return;
+    if (!(coleccion === "pedidos" || coleccion === "clientes" || (rol === "director" && coleccion === "usuarios"))) return;
     echado = true;
     try {
       if (window.SersaleCuenta) SersaleCuenta.salir();

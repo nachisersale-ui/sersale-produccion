@@ -472,7 +472,8 @@
     }
 
     // ── Tarjeta de una reserva ──
-    function ReservaTarjeta({ r, orden, plegable, onEditar, onEstado, onEliminar, ocupado }) {
+    // `alTocar`: en las vistas agrupadas, tocar el encabezado de la tarjeta abierta la vuelve a cerrar.
+    function ReservaTarjeta({ r, orden, plegable, onEditar, onEstado, onEliminar, ocupado, alTocar }) {
       const [abierta, setAbierta] = useState(false);
       const ver = !plegable || abierta;
       const total = rsvTotal(r), resta = rsvResta(r);
@@ -488,7 +489,7 @@
       const sinSena = <span style={{display:"inline-block",padding:"1px 8px",borderRadius:10,background:"#F0E7D9",color:"#784212",fontWeight:700,fontSize:12}}>Sin seña</span>;
       return (
         <div data-reserva={r.id} style={{background:"#fff",borderRadius:14,border:"1px solid #D8DCE0",borderLeft:"4px solid " + (entregada ? "#2F6B4F" : vencida ? "#A8702A" : "#A4232A"),padding:"14px 14px 12px",marginBottom:12,opacity:entregada?0.82:1}}>
-          <div onClick={plegable ? ()=>setAbierta(x=>!x) : undefined} role={plegable ? "button" : undefined} aria-expanded={plegable ? abierta : undefined} style={{cursor:plegable?"pointer":"default"}}>
+          <div onClick={plegable ? ()=>setAbierta(x=>!x) : alTocar} role={plegable || alTocar ? "button" : undefined} aria-expanded={plegable ? abierta : alTocar ? true : undefined} style={{cursor:plegable || alTocar?"pointer":"default"}}>
             <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
               <span style={{...dato,flexShrink:0,minWidth:30,textAlign:"center",padding:"4px 6px",borderRadius:8,background:"#EDEEF0",color:"#3A424A",fontSize:12,fontWeight:600}}>{orden}</span>
               <div style={{flex:1,minWidth:0}}>
@@ -571,6 +572,61 @@
         g.cantidad += 1; g.kg += Number(r.kg) || 0; g.kgMax += rsvKgMax(r); g.reservas.push(r);
       });
       return Array.from(mapa.values()).sort((a, b) => b.kgMax - a.kgMax || b.kg - a.kg || String(a.item).localeCompare(String(b.item), "es"));
+    }
+
+    /**
+     * Arma una vista agrupada: qué reservas entran (filtro o búsqueda) y sus bloques, con
+     * todo lo que se muestra de cada uno ya calculado. `hoy` es el día de hoy ("AAAA-MM-DD").
+     */
+    function rsvAgrupar(todas, modo, filtro, buscar, hoy) {
+      const deLista = rsvItemsDeLista();
+      const pendientes = todas.filter(r => r.estado !== "entregada");
+      const entregadas = todas.filter(r => r.estado === "entregada");
+      const sinSena = pendientes.filter(r => !(Number(r.sena) > 0));
+      const atrasadas = pendientes.filter(r => !!r.fechaRetiro && String(r.fechaRetiro) < hoy);
+      const buscando = String(buscar || "").trim() !== "";
+      const deFiltro = filtro === "sinsena" ? sinSena : filtro === "atrasadas" ? atrasadas : filtro === "entregadas" ? entregadas : filtro === "todas" ? todas : pendientes;
+      const filtradas = buscando ? todas.filter(r => SersaleBase.coincide([r.cliente, r.item, r.contacto, r.obs].join(" "), buscar)) : deFiltro;
+      const mapa = new Map();
+      rsvOrdenar(filtradas, modo === "cliente" ? "retiro" : "reserva").forEach(r => {
+        const item = modo === "producto" ? rsvItemDeLista(r.item, deLista) || "(sin ítem)" : "";
+        const k = modo === "dia" ? String(r.fechaRetiro || "") : modo === "producto" ? SersaleBase.norm(item) : SersaleBase.norm(r.cliente || "");
+        if (!mapa.has(k)) mapa.set(k, { clave: modo + "|" + k, dia: modo === "dia" ? String(r.fechaRetiro || "") : null, titulo: modo === "dia" ? rsvDiaTexto(r.fechaRetiro) : modo === "producto" ? item : (r.cliente || "(sin nombre)"), filas: [] });
+        mapa.get(k).filas.push(r);
+      });
+      const grupos = Array.from(mapa.values());
+      grupos.forEach(g => {
+        // Lo que hay que tener se cuenta sobre lo que todavía no se entregó (si queda algo).
+        const porEntregar = g.filas.filter(r => r.estado !== "entregada");
+        g.suma = rsvSuma(porEntregar.length > 0 ? porEntregar : g.filas);
+        g.pendientes = porEntregar.length;
+        g.totales = g.suma.cantidad + (g.suma.cantidad === 1 ? " reserva" : " reservas") + " · " + rsvKgRango(g.suma.kg, g.suma.kgMax);
+        g.porItem = [];
+        g.sub = "";
+        if (modo === "dia") {
+          const n = g.dia ? SersaleBase.diasEntre(hoy, g.dia) : null;
+          g.color = !g.dia ? "#79828B" : n < 0 ? (g.pendientes > 0 ? "#C33039" : "#79828B") : n === 0 ? "#2F6B4F" : n === 1 ? "#A8702A" : "#26536E";
+          g.sub = g.dia ? (n < 0 && g.pendientes > 0 ? "sin retirar (" + rsvCuando(g.dia) + ")" : rsvCuando(g.dia)) : "";
+          g.porItem = rsvPorItem(porEntregar, deLista).map(x => ({ item: x.item, texto: x.item + " ×" + x.cantidad + " · " + rsvKgRango(x.kg, x.kgMax) }));
+          // Dentro de cada día, por producto (así el depósito lo ve junto) y después por orden de reserva.
+          g.filas = rsvPorItem(g.filas, deLista).reduce((l, x) => l.concat(rsvOrdenar(x.reservas, "reserva")), []);
+        } else if (modo === "producto") {
+          g.color = "#A8702A";
+        } else {
+          g.color = "#2A333B";
+          if (porEntregar.length === 0) g.sub = "todo entregado";
+          else {
+            const senas = porEntregar.reduce((s, r) => s + (Number(r.sena) || 0), 0);
+            const resta = porEntregar.reduce((s, r) => s + Math.max(0, rsvResta(r) || 0), 0);
+            const restaMax = porEntregar.reduce((s, r) => { const max = rsvRestaMax(r); return s + Math.max(0, (max != null ? max : rsvResta(r)) || 0); }, 0);
+            g.sub = "seña " + SersaleBase.fmtMonto(senas) + (restaMax > 0 ? " · resta " + (resta > 0 ? rsvMontoRango(resta, restaMax) : "hasta " + SersaleBase.fmtMonto(restaMax)) : "");
+          }
+        }
+      });
+      if (modo === "dia") grupos.sort((a, b) => (a.dia || "9999-99-99").localeCompare(b.dia || "9999-99-99"));
+      else if (modo === "producto") grupos.sort((a, b) => b.suma.kgMax - a.suma.kgMax || String(a.titulo).localeCompare(String(b.titulo), "es"));
+      else grupos.sort((a, b) => String(a.titulo).localeCompare(String(b.titulo), "es", { sensitivity: "base" }));
+      return { sinSena, atrasadas, filtradas, grupos };
     }
 
     // ── Planilla para el depósito (PDF) ──
@@ -679,8 +735,11 @@
     // ── Fila compacta de una reserva (vistas agrupadas) ──
     // Una línea por reserva; al tocarla se abre la tarjeta completa, con los mismos datos
     // y botones que en la lista.
-    function ReservaFila({ r, vista, abierta, onAbrir, lugar, ocupado, onEditar, onEstado, onEliminar }) {
+    // (React.memo: al abrir una fila, escribir en el buscador o plegar un bloque, las demás
+    // filas no se vuelven a dibujar.)
+    const ReservaFila = React.memo(function ReservaFila({ r, vista, abierta, onAbrir, lugar, hoy, ocupado, onEditar, onEstado, onEliminar }) {
       const entregada = r.estado === "entregada";
+      const atrasada = !entregada && !!r.fechaRetiro && String(r.fechaRetiro) < hoy;
       const restaTexto = rsvRestaTexto(r), resta = rsvResta(r);
       const sena = Number(r.sena) || 0;
       const retiro = r.fechaRetiro ? SersaleBase.fmtFechaCorta(r.fechaRetiro) : "a confirmar";
@@ -691,7 +750,7 @@
         return (
           <div data-reserva-fila={r.id} style={{margin:"6px 0 2px"}}>
             <button type="button" onClick={()=>onAbrir(null)} aria-label={"Cerrar el detalle de " + r.cliente} style={{display:"block",width:"100%",minHeight:36,border:"none",background:"transparent",color:"#5C666F",fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"right",padding:"0 4px"}}>Cerrar ▴</button>
-            <ReservaTarjeta r={r} orden={entregada ? "✓" : "#" + (lugar || "")} plegable={false} ocupado={ocupado} onEditar={onEditar} onEstado={onEstado} onEliminar={onEliminar} />
+            <ReservaTarjeta r={r} orden={entregada ? "✓" : "#" + (lugar || "")} plegable={false} ocupado={ocupado} onEditar={onEditar} onEstado={onEstado} onEliminar={onEliminar} alTocar={()=>onAbrir(null)} />
           </div>
         );
       }
@@ -700,7 +759,7 @@
           style={{display:"flex",alignItems:"center",gap:10,width:"100%",minHeight:50,padding:"7px 2px",border:"none",borderTop:"1px solid #EDEEF0",background:"transparent",textAlign:"left",cursor:"pointer",opacity:entregada?0.7:1}}>
           <span style={{flex:1,minWidth:0}}>
             <span style={{display:"block",fontWeight:700,fontSize:15,color:"#191E23",overflowWrap:"anywhere"}}>{principal}</span>
-            <span style={{display:"block",fontSize:13,color:rsvAtrasada(r) && vista !== "dia" ? "#A8702A" : "#5C666F",overflowWrap:"anywhere"}}>{detalle}{r.obs ? " · " + r.obs : ""}</span>
+            <span style={{display:"block",fontSize:13,color:atrasada && vista !== "dia" ? "#A8702A" : "#5C666F",overflowWrap:"anywhere"}}>{detalle}{r.obs ? " · " + r.obs : ""}</span>
           </span>
           <span style={{flexShrink:0,textAlign:"right"}}>
             <strong style={{...dato,display:"block",fontSize:14,color:"#191E23",whiteSpace:"nowrap"}}>{rsvKgTexto(r)}</strong>
@@ -710,7 +769,7 @@
           </span>
         </button>
       );
-    }
+    });
 
     // ── Pantalla de reservas ──
     function Reservas({ onBack }) {
@@ -804,6 +863,19 @@
         }
       });
 
+      // Las vistas agrupadas se arman una sola vez por cambio de datos, de vista, de filtro o
+      // de búsqueda (no en cada toque), y las filas no se vuelven a dibujar si no cambiaron.
+      const hoyDia = SersaleBase.hoy();
+      const agrupado = React.useMemo(
+        () => (modo === "lista" ? { sinSena: [], atrasadas: [], filtradas: [], grupos: [] } : rsvAgrupar(reservas || [], modo, filtro, buscar, hoyDia)),
+        [reservas, modo, filtro, buscar, hoyDia]
+      );
+      const acciones = React.useRef({});
+      acciones.current = { editar: x => setForm(x), estado: cambiarEstado, eliminar };
+      const alEditar = React.useCallback(x => acciones.current.editar(x), []);
+      const alCambiarEstado = React.useCallback((r, estado) => acciones.current.estado(r, estado), []);
+      const alEliminar = React.useCallback(r => acciones.current.eliminar(r), []);
+
       if (form) {
         return <ReservaForm key={form.id || "nueva"} reserva={form} anteriores={reservas || []} onCerrar={()=>setForm(null)} onGuardada={cerrar => { if (cerrar) setForm(null); }} />;
       }
@@ -820,7 +892,7 @@
       // Al buscar se mira en todas (pendientes y entregadas): si no, una ya entregada "no existe".
       const buscando = buscar.trim() !== "";
       const base = buscando ? todas : ver === "pendiente" ? pendientes : ver === "entregada" ? entregadas : todas;
-      const visibles = rsvOrdenar(base, orden).filter(r => !buscando || SersaleBase.coincide([r.cliente, r.item, r.contacto, r.obs].join(" "), buscar));
+      const visibles = modo !== "lista" ? [] : rsvOrdenar(base, orden).filter(r => !buscando || SersaleBase.coincide([r.cliente, r.item, r.contacto, r.obs].join(" "), buscar));
       const plegable = visibles.length > 8;
 
       // Resumen de lo pendiente: cuánto hay que tener de cada cosa.
@@ -828,7 +900,7 @@
       // separados y ninguno decía cuánto lechón hay que tener).
       const deLista = rsvItemsDeLista();
       const porItem = new Map();
-      rsvOrdenar(pendientes, "reserva").forEach(r => {
+      (modo !== "lista" ? [] : rsvOrdenar(pendientes, "reserva")).forEach(r => {
         const nombre = rsvItemDeLista(r.item, deLista) || "(sin ítem)";
         const k = SersaleBase.norm(nombre);
         if (!porItem.has(k)) porItem.set(k, { item: nombre, cantidad: 0, kg: 0, kgMax: 0 });
@@ -847,32 +919,7 @@
 
       // ── Vistas agrupadas ──
       const agrupada = modo !== "lista";
-      const sinSena = pendientes.filter(r => !(Number(r.sena) > 0));
-      const atrasadas = pendientes.filter(rsvAtrasada);
-      const deFiltro = filtro === "sinsena" ? sinSena : filtro === "atrasadas" ? atrasadas : filtro === "entregadas" ? entregadas : filtro === "todas" ? todas : pendientes;
-      const filtradas = (buscando ? todas : deFiltro).filter(r => !buscando || SersaleBase.coincide([r.cliente, r.item, r.contacto, r.obs].join(" "), buscar));
-      const grupos = [];
-      if (agrupada) {
-        const mapa = new Map();
-        const orden = rsvOrdenar(filtradas, modo === "cliente" ? "retiro" : "reserva");
-        orden.forEach(r => {
-          const k = modo === "dia" ? String(r.fechaRetiro || "") : modo === "producto" ? SersaleBase.norm(rsvItemDeLista(r.item, deLista) || "(sin ítem)") : SersaleBase.norm(r.cliente || "");
-          if (!mapa.has(k)) mapa.set(k, { clave: modo + "|" + k, dia: modo === "dia" ? String(r.fechaRetiro || "") : null, titulo: modo === "dia" ? rsvDiaTexto(r.fechaRetiro) : modo === "producto" ? (rsvItemDeLista(r.item, deLista) || "(sin ítem)") : (r.cliente || "(sin nombre)"), filas: [] });
-          mapa.get(k).filas.push(r);
-        });
-        Array.from(mapa.values()).forEach(g => {
-          // Lo que hay que tener se cuenta sobre lo que todavía no se entregó (si queda algo).
-          const porEntregar = g.filas.filter(r => r.estado !== "entregada");
-          g.suma = rsvSuma(porEntregar.length > 0 ? porEntregar : g.filas);
-          g.pendientes = porEntregar.length;
-          grupos.push(g);
-        });
-        if (modo === "dia") grupos.sort((a, b) => (a.dia || "9999-99-99").localeCompare(b.dia || "9999-99-99"));
-        else if (modo === "producto") grupos.sort((a, b) => b.suma.kgMax - a.suma.kgMax || String(a.titulo).localeCompare(String(b.titulo), "es"));
-        else grupos.sort((a, b) => String(a.titulo).localeCompare(String(b.titulo), "es", { sensitivity: "base" }));
-        // Dentro de cada día, por producto (así el depósito lo ve junto) y después por orden de reserva.
-        if (modo === "dia") grupos.forEach(g => { g.filas = rsvPorItem(g.filas, deLista).reduce((l, x) => l.concat(rsvOrdenar(x.reservas, "reserva")), []); });
-      }
+      const { sinSena, atrasadas, filtradas, grupos } = agrupado;
       function planilla(dia) {
         try {
           const para = dia === undefined ? pendientes : pendientes.filter(r => String(r.fechaRetiro || "") === dia);
@@ -965,27 +1012,14 @@
                         )}
                         {grupos.map(g => {
                           const cerrado = !!plegados[g.clave];
-                          const n = g.dia ? SersaleBase.diasEntre(SersaleBase.hoy(), g.dia) : null;
-                          const colorDia = !g.dia ? "#79828B" : n < 0 ? (g.pendientes > 0 ? "#C33039" : "#79828B") : n === 0 ? "#2F6B4F" : n === 1 ? "#A8702A" : "#26536E";
-                          const color = modo === "dia" ? colorDia : modo === "producto" ? "#A8702A" : "#2A333B";
-                          const porItem = modo === "dia" ? rsvPorItem(g.filas.filter(r => r.estado !== "entregada"), deLista) : [];
-                          const sub = modo === "dia" ? (g.dia ? (n < 0 && g.pendientes > 0 ? "sin retirar (" + rsvCuando(g.dia) + ")" : rsvCuando(g.dia)) : "")
-                            : modo === "cliente" ? (() => {
-                                const pend = g.filas.filter(r => r.estado !== "entregada");
-                                const senas = pend.reduce((s, r) => s + (Number(r.sena) || 0), 0);
-                                const resta = pend.reduce((s, r) => s + Math.max(0, rsvResta(r) || 0), 0);
-                                const restaMax = pend.reduce((s, r) => { const max = rsvRestaMax(r); return s + Math.max(0, (max != null ? max : rsvResta(r)) || 0); }, 0);
-                                if (pend.length === 0) return "todo entregado";
-                                return "seña " + SersaleBase.fmtMonto(senas) + (restaMax > 0 ? " · resta " + (resta > 0 ? rsvMontoRango(resta, restaMax) : "hasta " + SersaleBase.fmtMonto(restaMax)) : "");
-                              })()
-                            : "";
+                          const { color, porItem, sub } = g;
                           return (
                             <div key={g.clave} data-rsv-grupo={g.titulo} style={{background:"#fff",border:"1px solid #D8DCE0",borderRadius:14,marginBottom:12,overflow:"hidden"}}>
                               <div style={{display:"flex",alignItems:"stretch",background:color}}>
                                 <button type="button" onClick={()=>setPlegados(p => ({ ...p, [g.clave]: !p[g.clave] }))} aria-expanded={!cerrado} aria-label={(cerrado ? "Abrir " : "Cerrar ") + g.titulo}
                                   style={{flex:1,minWidth:0,minHeight:50,padding:"8px 12px",border:"none",background:"transparent",color:"#fff",textAlign:"left",cursor:"pointer"}}>
                                   <span style={{display:"block",fontWeight:800,fontSize:15,overflowWrap:"anywhere"}}>{g.titulo}{sub ? <span style={{fontWeight:600,fontSize:12,opacity:0.9}}> — {sub}</span> : null}</span>
-                                  <span style={{display:"block",fontSize:12,fontWeight:600,opacity:0.92}}>{g.suma.cantidad} {g.suma.cantidad === 1 ? "reserva" : "reservas"} · {rsvKgRango(g.suma.kg, g.suma.kgMax)} {cerrado ? "▾" : "▴"}</span>
+                                  <span style={{display:"block",fontSize:12,fontWeight:600,opacity:0.92}}>{g.totales} {cerrado ? "▾" : "▴"}</span>
                                 </button>
                                 {modo === "dia" && g.pendientes > 0 && (
                                   <button type="button" onClick={()=>planilla(g.dia)} aria-label={"Planilla de " + g.titulo} style={{minWidth:48,border:"none",borderLeft:"1px solid rgba(255,255,255,0.25)",background:"transparent",color:"#fff",fontSize:18,cursor:"pointer"}}>🖨️</button>
@@ -995,12 +1029,12 @@
                                 <div style={{padding:"4px 12px 8px"}}>
                                   {porItem.length > 1 && (
                                     <div style={{display:"flex",gap:6,flexWrap:"wrap",padding:"8px 0 6px"}}>
-                                      {porItem.map(x => <span key={x.item} style={{padding:"3px 9px",borderRadius:99,background:"#EDEEF0",color:"#3A424A",fontSize:12,fontWeight:600}}>{x.item} ×{x.cantidad} · {rsvKgRango(x.kg, x.kgMax)}</span>)}
+                                      {porItem.map(x => <span key={x.item} style={{padding:"3px 9px",borderRadius:99,background:"#EDEEF0",color:"#3A424A",fontSize:12,fontWeight:600}}>{x.texto}</span>)}
                                     </div>
                                   )}
                                   {g.filas.map(r => (
-                                    <ReservaFila key={r.id} r={r} vista={modo} abierta={filaAbierta === r.id} onAbrir={setFilaAbierta} lugar={lugar[r.id]}
-                                      ocupado={cambiando || eliminando} onEditar={x=>setForm(x)} onEstado={cambiarEstado} onEliminar={eliminar} />
+                                    <ReservaFila key={r.id} r={r} vista={modo} abierta={filaAbierta === r.id} onAbrir={setFilaAbierta} lugar={lugar[r.id]} hoy={hoyDia}
+                                      ocupado={cambiando || eliminando} onEditar={alEditar} onEstado={alCambiarEstado} onEliminar={alEliminar} />
                                   ))}
                                 </div>
                               )}

@@ -67,6 +67,11 @@ test("abre «Por día»: un bloque por fecha de retiro con lo que hay que tener,
     await p.locator("[data-reserva]").getByText("Marta Gómez").waitFor();
     await p.getByRole("button", { name: "Cerrar el detalle de Marta Gómez" }).click();
     assert.equal(await p.locator("[data-reserva]").count(), 0);
+    // Tocar la reserva abierta (su nombre) la vuelve a cerrar, igual que en la lista.
+    await p.getByRole("button", { name: "Ver la reserva de Marta Gómez: LECHÓN" }).click();
+    await p.locator("[data-reserva]").getByText("Marta Gómez").click();
+    assert.equal(await p.locator("[data-reserva]").count(), 0);
+    await p.getByRole("button", { name: "Ver la reserva de Marta Gómez: LECHÓN" }).waitFor();
 
     // Marcar entregada desde la fila: sale del día y bajan sus totales.
     await p.getByRole("button", { name: "Ver la reserva de Pedro Ruiz: lechon" }).click();
@@ -81,6 +86,50 @@ test("abre «Por día»: un bloque por fecha de retiro con lo que hay que tener,
     assert.deepEqual(await filasDe(p, "Jueves 24/12/2026"), []);
     await p.getByRole("button", { name: "Abrir Jueves 24/12/2026" }).click();
     assert.equal((await filasDe(p, "Jueves 24/12/2026")).length, 2);
+    assert.deepEqual(erroresReales(h.errores), []);
+  } finally {
+    await h.close();
+  }
+});
+
+test("editar una reserva desde una fila guarda los cambios y vuelve a la misma vista, ya actualizada", async () => {
+  const h = await abrir();
+  const p = h.page;
+  try {
+    await p.getByRole("button", { name: "Ver la reserva de Marta Gómez: LECHÓN" }).click();
+    await p.locator("[data-reserva]").getByRole("button", { name: "Editar" }).click();
+    await p.getByText("Editar reserva").waitFor();
+    assert.equal(await p.locator("#rsv-cliente").inputValue(), "Marta Gómez");
+    await p.getByLabel("Kilos").fill("");
+    await p.getByLabel("Kilos").pressSequentially("11,5");
+    await p.locator("#rsv-obs").fill("Lo quiere abierto");
+    await p.locator("#rsv-retiro").fill("2026-12-31");
+    await p.getByRole("button", { name: "✓ Guardar cambios" }).click();
+    await p.locator(".ss-toast", { hasText: "Reserva actualizada" }).waitFor();
+    // Vuelve a «Por día», con la reserva en su día nuevo y con los kilos nuevos.
+    await p.getByRole("tab", { name: "Por día" }).waitFor();
+    assert.equal(await p.getByRole("tab", { name: "Por día" }).getAttribute("aria-selected"), "true");
+    const r = (await h.dump()).reservas.r1;
+    assert.deepEqual([r.kg, r.obs, r.fechaRetiro, r.cliente, r.sena], [11.5, "Lo quiere abierto", "2026-12-31", "Marta Gómez", 50000]);
+    assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(r.actualizadoEn));
+    // La reserva queda abierta, en su día nuevo, mostrando lo recién guardado.
+    const abierta = grupo(p, "Jueves 31/12/2026").locator("[data-reserva]");
+    await abierta.getByText("Lo quiere abierto").waitFor();
+    await abierta.getByText("11,5").first().waitFor();
+    assert.equal(await grupo(p, "Jueves 24/12/2026").locator("[data-reserva]").count(), 0);
+    await p.getByRole("button", { name: "Cerrar el detalle de Marta Gómez" }).click();
+    assert.ok((await filasDe(p, "Jueves 31/12/2026")).includes("Marta Gómez | LECHÓN · Lo quiere abierto | 11,5 kg | Resta $116.750"));
+    assert.equal((await filasDe(p, "Jueves 24/12/2026")).filter((f) => f.startsWith("Marta Gómez | LECHÓN")).length, 0);
+
+    // Una segunda edición seguida, de la misma reserva, también se guarda.
+    await p.getByRole("button", { name: "Ver la reserva de Marta Gómez: LECHÓN" }).click();
+    await p.locator("[data-reserva]").getByRole("button", { name: "Editar" }).click();
+    assert.equal(await p.locator("#rsv-obs").inputValue(), "Lo quiere abierto", "el formulario abre con lo último guardado");
+    await p.locator("#rsv-obs").fill("Abierto y sin cabeza");
+    await p.getByRole("button", { name: "✓ Guardar cambios" }).click();
+    await p.locator(".ss-toast", { hasText: "Reserva actualizada" }).first().waitFor();
+    await p.getByRole("tab", { name: "Por día" }).waitFor();
+    assert.equal((await h.dump()).reservas.r1.obs, "Abierto y sin cabeza");
     assert.deepEqual(erroresReales(h.errores), []);
   } finally {
     await h.close();
