@@ -301,6 +301,34 @@
   }
   if (!document.documentElement.hasAttribute("data-sin-nav")) nav();
 
+  // ── La base rechazó a este teléfono ──────────────────────────────────────
+  //
+  // Pasa cuando a la cuenta se le quitó el acceso (usuario desactivado, clave o
+  // PIN cambiados) o la sesión dejó de valer: se cierra la sesión de este
+  // teléfono y se vuelve al ingreso, en vez de dejar pantallas vacías.
+  var echado = false;
+  window.addEventListener("sersale:sin-permiso", function (ev) {
+    if (echado) return;
+    var rol = null;
+    try {
+      rol = sessionStorage.getItem("sersale_role");
+    } catch (e) {}
+    if (!rol) return; // en la pantalla de ingreso no hay sesión que cerrar
+    // Usuarios y permisos son solo de Directores: que a otro rol se los nieguen es lo esperado.
+    var coleccion = ev && ev.detail && ev.detail.coleccion;
+    if (rol !== "director" && (coleccion === "usuarios" || coleccion === "accesos" || coleccion === "ingreso")) return;
+    echado = true;
+    try {
+      if (window.SersaleCuenta) SersaleCuenta.salir();
+      if (window.SersaleSesion) SersaleSesion.olvidar();
+      ["sersale_role", "sersale_usuario", "sersale_nombre", "sersale_auth"].forEach(function (k) {
+        sessionStorage.removeItem(k);
+      });
+      sessionStorage.setItem("sersale_aviso_ingreso", "Tu acceso ya no es válido en este teléfono. Ingresá de nuevo.");
+    } catch (e) {}
+    location.replace("index.html");
+  });
+
   // ── Sin conexión y cambios sin enviar ────────────────────────────────────
 
   var cartel = null;

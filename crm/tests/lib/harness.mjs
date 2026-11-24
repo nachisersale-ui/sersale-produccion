@@ -6,7 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "./playwright.mjs";
 import { startServer } from "./server.mjs";
-import { startEmulator, newProjectId, seedDb, dumpDb, clearDb, getDocument } from "./emulator.mjs";
+import { startEmulator, newProjectId, seedDb, dumpDb, clearDb, getDocument, setRules } from "./emulator.mjs";
+import { startAuth, tokenFalso } from "./auth-falso.mjs";
 
 export const AHORA = "2026-11-10T10:30:00-03:00"; // martes, media mañana
 const IPHONE = {
@@ -41,6 +42,8 @@ export async function launch(opts = {}) {
   const emu = await startEmulator();
   const projectId = newProjectId(etiqueta);
   if (seed) await seedDb(projectId, seed);
+  if (opts.reglas) await setRules(projectId, opts.reglas); // sin esto, base abierta (como hoy la real)
+  const auth = await startAuth({ projectId }); // servidor de cuentas simulado
   const server = await startServer(root ? { root } : {});
   const browser = await chromium.launch();
   const context = await browser.newContext({ ...IPHONE, ...(viewport ? { viewport } : {}), acceptDownloads: true });
@@ -74,12 +77,12 @@ export async function launch(opts = {}) {
         navigator.canShare = undefined;
       }
     },
-    { test: { projectId, emulatorHost: emu.host, emulatorPort: emu.port, persistencia, sw }, compartir }
+    { test: { projectId, emulatorHost: emu.host, emulatorPort: emu.port, authUrl: auth.url, persistencia, sw }, compartir }
   );
 
   await context.route("**/*", async (route) => {
     const url = route.request().url();
-    if (url.startsWith(server.origin) || url.startsWith(`http://${emu.hostPort}`) || url.startsWith("data:") || url.startsWith("blob:")) return route.continue();
+    if (url.startsWith(server.origin) || url.startsWith(`http://${emu.hostPort}`) || url.startsWith(auth.url) || url.startsWith("data:") || url.startsWith("blob:")) return route.continue();
     for (const t of TERCEROS) {
       const m = t.re.exec(url);
       if (m) {
@@ -99,6 +102,9 @@ export async function launch(opts = {}) {
       // simulado y pueden diferir en 1 ms; Firestore (que comparte la copia local entre pestañas)
       // lo anota como error. En un teléfono real hay un solo reloj.
       if (/Detected an update time that is in the future/.test(m.text())) return;
+      // El servicio de cuentas contesta 400 a "clave incorrecta" o "esa cuenta no existe" (lo
+      // normal la primera vez que alguien ingresa): el navegador lo anota solo, no es un error de la app.
+      if (/status of 400/.test(m.text()) && String(m.location().url || "").startsWith(auth.url)) return;
       errores.push({ tipo: "console.error", texto: m.text(), url: p.url() });
     });
     p.on("dialog", async (d) => {
@@ -113,9 +119,16 @@ export async function launch(opts = {}) {
   context.on("page", preparar);
   const page = await context.newPage();
 
-  async function sesion(r, { usuario = "nacho", nombre = "Nacho" } = {}) {
+  // `cuenta: false` deja la sesión como la de un teléfono que todavía no pasó
+  // por el ingreso nuevo: recordada, pero sin cuenta de Firebase.
+  async function sesion(r, { usuario = "nacho", nombre = "Nacho", cuenta = true } = {}) {
+    // Un teléfono que ya ingresó tiene también la sesión de su cuenta (js/cuenta.js).
+    const uid = r === "director" ? "uid-" + usuario : "uid-operario";
+    const guardada = cuenta
+      ? { uid, email: uid + "@prueba.test", idToken: tokenFalso(projectId, uid), refreshToken: "prueba-" + uid, vence: Date.parse("2099-01-01T00:00:00Z"), usuario: r === "director" ? usuario : "operario", rol: r }
+      : null;
     await context.addInitScript(
-      ({ r, usuario, nombre }) => {
+      ({ r, usuario, nombre, guardada, clave }) => {
         if (sessionStorage.getItem("__sesion_puesta")) return;
         sessionStorage.setItem("__sesion_puesta", "1");
         sessionStorage.setItem("sersale_role", r);
@@ -124,9 +137,11 @@ export async function launch(opts = {}) {
           sessionStorage.setItem("sersale_usuario", usuario);
           sessionStorage.setItem("sersale_nombre", nombre);
         }
+        if (guardada) localStorage.setItem(clave, JSON.stringify(guardada));
       },
-      { r, usuario, nombre }
+      { r, usuario, nombre, guardada, clave: "sersale_cuenta_" + projectId }
     );
+    return uid;
   }
   if (rol) await sesion(rol);
 
@@ -186,7 +201,8 @@ export async function launch(opts = {}) {
 
   return {
     redQueSeCorta, cortarEscucha,
-    browser, context, page, origin: server.origin, projectId, llamadas, errores, inesperados,
+    browser, context, page, origin: server.origin, projectId, llamadas, errores, inesperados, auth,
+    reglas: (fuente) => setRules(projectId, fuente),
     ir, sesion, esperarApp, sincronizar,
     abiertos: (p = page) => p.evaluate(() => window.__abiertos),
     compartidos: (p = page) => p.evaluate(() => window.__compartidos),
@@ -204,6 +220,7 @@ export async function launch(opts = {}) {
       await context.close().catch(() => {});
       await browser.close().catch(() => {});
       await server.close();
+      await auth.close();
     },
   };
 }

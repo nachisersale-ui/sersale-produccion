@@ -2,6 +2,7 @@
 <html lang="es">
 <head>
 <script src="js/sesion.js"></script>
+<script src="js/cuenta.js"></script>
   <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#12161A" />
@@ -124,9 +125,9 @@
   </style>
 
   <script type="module">
-    import { db, collection, addDoc, getDocs, getDocsFromServer, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot } from "./js/fb.js";
+    import { db, collection, addDoc, getDocs, getDocsFromServer, getDoc, getDocFromServer, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot } from "./js/fb.js";
     window.__db = db;
-    window.__fb = { collection, addDoc, getDocs, getDocsFromServer, getDoc, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot };
+    window.__fb = { collection, addDoc, getDocs, getDocsFromServer, getDoc, getDocFromServer, setDoc, doc, updateDoc, deleteDoc, query, orderBy, where, Timestamp, onSnapshot };
     window.__fbReady = true;
     document.dispatchEvent(new Event("fbReady"));
   </script>
@@ -152,6 +153,148 @@
     function waitForFirebase(callback) {
       if (window.__fbReady) callback();
       else document.addEventListener("fbReady", callback);
+    }
+
+    // ===== CUENTA DE FIREBASE (js/cuenta.js, firestore.rules, docs/SEGURIDAD.md) =====
+    // Cada usuario tiene una cuenta de Firebase. accesos/{uid} dice qué puede hacer
+    // esa cuenta; ingreso/{id} dice qué cuenta le toca hoy a cada usuario (cambia
+    // cada vez que se le cambia la clave, y así la anterior deja de servir).
+    function conTope_index(promesa, ms) {
+      return Promise.race([promesa, new Promise(function(r){ setTimeout(function(){ r(undefined); }, ms); })]);
+    }
+    // Número de la cuenta vigente: 0 si todavía no tiene, null si no se pudo saber.
+    async function genDe_index(id) {
+      try {
+        var f = fb();
+        var snap = await conTope_index(f.getDocFromServer(f.doc(f.db, "ingreso", id)), 8000);
+        if (!snap) return null;
+        return snap.exists() ? (Number(snap.data().gen) || 1) : 0;
+      } catch (e) {
+        return null;
+      }
+    }
+    // Permiso de una cuenta: sus datos, false si no figura, null si no se pudo saber.
+    async function accesoDe_index(uid, ms) {
+      try {
+        var f = fb();
+        var snap = await conTope_index(f.getDocFromServer(f.doc(f.db, "accesos", uid)), ms || 8000);
+        if (!snap) return null;
+        return snap.exists() ? snap.data() : false;
+      } catch (e) {
+        return null;
+      }
+    }
+    // Aplica un cambio a todas las cuentas de un usuario. `cambio(uid, datos)` devuelve
+    // los campos a cambiar, "borrar" o null.
+    async function cambiarAccesos_index(usuario, rol, cambio) {
+      var f = fb();
+      var snap = await f.getDocsFromServer(f.query(f.collection(f.db, "accesos"), f.where("usuario", "==", usuario)));
+      var tareas = [];
+      snap.forEach(function(x){
+        var a = x.data();
+        if (a.rol !== rol) return;
+        var c = cambio(x.id, a);
+        if (c === "borrar") tareas.push(f.deleteDoc(x.ref));
+        else if (c) tareas.push(f.updateDoc(x.ref, c));
+      });
+      await Promise.all(tareas);
+    }
+    // Deja la cuenta d.uid como la vigente del usuario y les quita el acceso a las
+    // anteriores. `alDarPermiso` corre apenas la cuenta nueva tiene permiso.
+    async function anotarAcceso_index(d, alDarPermiso) {
+      var f = fb();
+      await f.setDoc(f.doc(f.db, "accesos", d.uid), {
+        usuario: d.usuario, mostrar: d.mostrar || d.usuario, rol: d.rol, nombre: d.nombre || "", activo: true, gen: d.gen, creado: f.Timestamp.now()
+      });
+      if (alDarPermiso) await alDarPermiso();
+      await f.setDoc(f.doc(f.db, "ingreso", d.id), { gen: d.gen });
+      await cambiarAccesos_index(d.usuario, d.rol, function(uid, a){ return uid !== d.uid && a.activo !== false ? { activo: false } : null; });
+    }
+    // Crea la cuenta siguiente (alta de usuario, cambio de clave o de PIN) y la deja
+    // vigente. No cambia la sesión de este teléfono, salvo que sea la cuenta propia.
+    // d: { usuario, mostrar, rol, clave, nombre, propia }
+    async function prepararCuenta_index(d) {
+      var C = window.SersaleCuenta;
+      if (!C) return;
+      var esOperario = d.rol === "operario";
+      var id = esOperario ? C.ID_OPERARIO : C.idDe(d.usuario);
+      var correo = function(g){ return esOperario ? C.correoOperario(g) : C.correo(d.usuario, g); };
+      var gen = await genDe_index(id);
+      if (gen === null) throw new Error("No se pudo consultar la cuenta de " + d.usuario);
+      var creada = null;
+      for (var i = 0; i < 6 && !creada; i++) {
+        gen++;
+        try { creada = await C.crear(correo(gen), C.claveCuenta(d.clave)); }
+        catch (e) { if (e.code !== "existe") throw e; }
+      }
+      if (!creada) throw new Error("No se pudo crear la cuenta de " + d.usuario);
+      await anotarAcceso_index(
+        { uid: creada.uid, id: id, usuario: d.usuario, mostrar: d.mostrar, rol: d.rol, nombre: d.nombre, gen: gen },
+        d.propia ? function(){ return C.ingresar(correo(gen), C.claveCuenta(d.clave), { usuario: d.usuario, rol: d.rol }); } : null
+      );
+    }
+    // Ingreso con la cuenta del usuario. Devuelve { estado, gen, ... }:
+    //   "ok"          entró (nombre, mostrar)
+    //   "inactivo"    la cuenta ya no tiene acceso
+    //   "sin-acceso"  la cuenta existe y quedó la sesión, pero falta anotarle el permiso
+    //   "clave"       no hay cuenta con ese usuario y esa clave
+    //   "red"         no se pudo saber (sin señal, sin respuesta)
+    async function ingresarConCuenta_index(usuario, clave) {
+      var C = window.SersaleCuenta;
+      if (!C) return { estado: "red", gen: null };
+      var gen = await genDe_index(C.idDe(usuario));
+      if (gen === null) return { estado: "red", gen: null };
+      try {
+        await C.ingresar(C.correo(usuario, gen || 1), C.claveCuenta(clave), { usuario: usuario, rol: "director" });
+      } catch (e) {
+        return { estado: e.code === "clave" ? "clave" : "red", gen: e.code === "clave" ? gen : null };
+      }
+      var a = await accesoDe_index(C.actual().uid);
+      if (a === null) { C.salir(); return { estado: "red", gen: null }; }
+      if (a === false) return { estado: "sin-acceso", gen: gen || 1 };
+      if (a.activo !== true || a.rol !== "director") { C.salir(); return { estado: "inactivo", gen: gen }; }
+      return { estado: "ok", gen: gen, nombre: a.nombre || "", mostrar: a.mostrar || usuario };
+    }
+    // Cómo figura un usuario en la lista de usuarios: "activo", "inactivo", "no-esta"
+    // o "nose" (no se pudo leer, o la lista vino vacía y no se puede afirmar nada).
+    async function estadoEnLista_index(usuario) {
+      try {
+        var f = fb();
+        var snap = await conTope_index(f.getDocs(f.collection(f.db, "usuarios")), 8000);
+        if (!snap || snap.empty) return "nose";
+        var estado = "no-esta";
+        snap.forEach(function(d){
+          var u = d.data();
+          if (d.id === usuario || String(u.usuario || "").toLowerCase() === usuario) estado = u.activo === false ? "inactivo" : "activo";
+        });
+        return estado;
+      } catch (e) {
+        return "nose";
+      }
+    }
+    // Primer ingreso con el sistema nuevo: el usuario y la clave ya se comprobaron
+    // contra la lista de usuarios; acá se le crea (o se le completa) la cuenta. Si no
+    // se puede (sin señal), entra igual y se vuelve a intentar en el próximo ingreso.
+    async function migrarCuenta_index(usuario, mostrar, clave, nombre, r) {
+      var C = window.SersaleCuenta;
+      if (!C || !r || r.estado === "red" || r.gen === null) return;
+      try {
+        var gen = r.gen || 1, uid = null;
+        if (r.estado === "sin-acceso") uid = C.actual() && C.actual().uid;
+        else {
+          for (var i = 0; i < 6 && !uid; i++) {
+            try { uid = (await C.crear(C.correo(usuario, gen), C.claveCuenta(clave), { ingresar: true, usuario: usuario, rol: "director" })).uid; }
+            catch (e) { if (e.code !== "existe") throw e; gen++; }
+          }
+        }
+        if (!uid) return;
+        await anotarAcceso_index({ uid: uid, id: C.idDe(usuario), usuario: usuario, mostrar: mostrar, rol: "director", nombre: nombre, gen: gen });
+      } catch (e) {
+        console.warn("No se pudo preparar la cuenta de " + usuario + ":", e && (e.code || e.message));
+        // La base ya está protegida y este usuario nunca ingresó con el sistema
+        // nuevo: no se puede dar el permiso solo. No entra (ver intentarLogin).
+        if (e && e.code === "permission-denied") { C.salir(); return "denegado"; }
+      }
     }
 
 
@@ -228,14 +371,108 @@
     }
 
     // ===== ACCIÓN: ENTRAR COMO OPERARIO =====
-    window.entrarOperario = function() {
+    function pasarOperario_index() {
       sessionStorage.setItem("sersale_role", "operario");
       sessionStorage.removeItem("sersale_usuario");
       sessionStorage.removeItem("sersale_nombre");
       // Compatibilidad: muchos módulos aún chequean sersale_auth
       sessionStorage.setItem("sersale_auth", "ok");
       window.location.href = "pedidos.html";
+    }
+
+    // El depósito entra con un PIN compartido que fija un Director (Usuarios → PIN
+    // del depósito). Se pide una sola vez por teléfono: queda la sesión de la cuenta.
+    // Mientras no haya un PIN cargado, el Operario entra sin clave, como siempre.
+    var entrandoOperario_index = false;
+    window.entrarOperario = async function() {
+      if (entrandoOperario_index) return; // doble toque
+      entrandoOperario_index = true;
+      try {
+        var C = window.SersaleCuenta;
+        if (!C || navigator.onLine === false || !window.__fbReady) return pasarOperario_index();
+        var ses = C.actual();
+        if (ses && ses.rol === "operario") {
+          // Este teléfono ya puso el PIN. Si después se cambió, hay que ponerlo de nuevo.
+          var a = await accesoDe_index(ses.uid, 2500);
+          if (a === null || (a && a.activo === true)) return pasarOperario_index();
+          C.salir();
+        }
+        var gen = await conTope_index(genDe_index(C.ID_OPERARIO), 4000);
+        if (!gen) return pasarOperario_index(); // todavía no hay PIN (o no se pudo saber)
+        abrirPinOperario_index(gen);
+      } finally {
+        entrandoOperario_index = false;
+      }
     };
+
+    function abrirPinOperario_index(gen) {
+      if (document.getElementById("__pin_modal")) return;
+      var abierto = Date.now();
+      var modal = document.createElement("div");
+      modal.className = "modal-bg";
+      modal.id = "__pin_modal";
+      modal.innerHTML =
+        '<div class="modal-box fade-in" onclick="event.stopPropagation()">' +
+          '<div style="margin-bottom:18px">' +
+            '<p class="eyebrow" style="margin-bottom:5px">Depósito</p>' +
+            '<h2 class="display" style="font-size:27px;color:var(--tinta)">Operario</h2>' +
+            '<p style="font-size:12.5px;color:var(--acero);margin-top:4px">PIN del depósito. Se pide una sola vez en este teléfono.</p>' +
+          '</div>' +
+          '<form id="__pin_form" autocomplete="off">' +
+            '<input type="password" id="__pin_campo" class="input-field" placeholder="PIN" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" enterkeyhint="go" autofocus />' +
+            '<div id="__pin_msg" class="err-msg"></div>' +
+            '<button type="submit" class="btn-primary" id="__pin_btn">Ingresar</button>' +
+            '<button type="button" class="btn-secondary" onclick="cerrarPinOperario()">Cancelar</button>' +
+          '</form>' +
+        '</div>';
+      modal.onclick = function(){ if (Date.now() - abierto > 400) window.cerrarPinOperario(); };
+      document.body.appendChild(modal);
+      document.getElementById("__pin_form").onsubmit = function(e) {
+        e.preventDefault();
+        intentarPin_index(gen);
+      };
+      setTimeout(function(){ var c = document.getElementById("__pin_campo"); if (c) c.focus(); }, 100);
+    }
+
+    window.cerrarPinOperario = function() {
+      var m = document.getElementById("__pin_modal");
+      if (m) m.remove();
+    };
+
+    async function intentarPin_index(gen) {
+      var C = window.SersaleCuenta;
+      var campo = document.getElementById("__pin_campo");
+      var msg = document.getElementById("__pin_msg");
+      var btn = document.getElementById("__pin_btn");
+      if (btn.disabled) return; // ya hay un intento en curso
+      var pin = campo.value.trim();
+      msg.textContent = "";
+      if (!pin) { msg.textContent = "Escribí el PIN del depósito"; return; }
+      function soltar(texto, conShake) {
+        msg.textContent = texto;
+        if (conShake) {
+          var box = document.querySelector("#__pin_modal .modal-box");
+          if (box) { box.classList.add("shake"); setTimeout(function(){ box.classList.remove("shake"); }, 400); }
+        }
+        btn.disabled = false;
+        btn.textContent = "Ingresar";
+      }
+      btn.disabled = true;
+      btn.textContent = "Verificando...";
+      try {
+        await C.ingresar(C.correoOperario(gen), C.claveCuenta(pin), { usuario: "operario", rol: "operario" });
+      } catch (e) {
+        if (e.code === "clave") soltar("PIN incorrecto", true);
+        else if (e.code === "intentos") soltar("Demasiados intentos. Esperá unos minutos y probá de nuevo.");
+        else soltar("Sin conexión con el servidor. Probá de nuevo cuando haya señal.");
+        return;
+      }
+      var a = await accesoDe_index(C.actual().uid);
+      if (!btn.isConnected) { C.salir(); return; } // tocó "Cancelar" mientras se verificaba
+      if (a === null) { C.salir(); soltar("Sin conexión con el servidor. Probá de nuevo cuando haya señal."); return; }
+      if (!a || a.activo !== true || a.rol !== "operario") { C.salir(); soltar("Ese PIN ya no es válido. Pedile el nuevo a un director.", true); return; }
+      pasarOperario_index();
+    }
 
     // ===== ACCIÓN: ABRIR MODAL DE LOGIN DIRECTOR =====
     window.abrirLoginDirector = function() {
@@ -296,7 +533,9 @@
         return;
       }
       // Deja el formulario listo para otro intento, con lo que la persona escribió.
+      var cuentaTocada = false; // este intento dejó una sesión de cuenta que hay que cerrar si no entra
       function soltar(texto, conShake) {
+        if (cuentaTocada && window.SersaleCuenta) SersaleCuenta.salir();
         msg.className = "err-msg";
         msg.textContent = texto;
         if (conShake) shake();
@@ -314,12 +553,33 @@
         if (!conectado) { soltar("No se pudo conectar. Revisá la conexión y volvé a abrir la app."); return; }
         msg.textContent = "";
       }
+      var rc = { estado: "red", gen: null };
       try {
         var f = fb();
+        // 1) Con la cuenta de Firebase del usuario: lo normal una vez que ingresó
+        //    con el sistema nuevo, y lo único que vale con la base protegida.
+        rc = await ingresarConCuenta_index(usuario, pwd);
+        cuentaTocada = rc.estado === "ok" || rc.estado === "sin-acceso";
+        if (!btn.isConnected) { if (cuentaTocada) SersaleCuenta.salir(); return; } // tocó "Cancelar" mientras se verificaba
+        if (rc.estado === "ok") {
+          // La lista de usuarios sigue mandando: un teléfono con la versión anterior
+          // pudo desactivarlo o eliminarlo sin tocar el permiso de su cuenta.
+          var enLista = await estadoEnLista_index(usuario);
+          if (!btn.isConnected) { SersaleCuenta.salir(); return; }
+          if (enLista === "inactivo" || enLista === "no-esta") {
+            soltar(enLista === "inactivo" ? "Usuario desactivado" : "Usuario o contraseña incorrectos", true);
+            return;
+          }
+          loginExitoso(rc.mostrar || usuario, rc.nombre || (usuario.charAt(0).toUpperCase() + usuario.slice(1)));
+          return;
+        }
+        if (rc.estado === "inactivo") { soltar("Usuario desactivado", true); return; }
+
+        // 2) Lista de usuarios: los que todavía no pasaron al sistema nuevo.
         var col = f.collection(f.db, "usuarios");
         var snap = await f.getDocs(col);
         var pwdHash = await hashPassword(pwd);
-        if (!btn.isConnected) return; // tocó "Cancelar" mientras se verificaba
+        if (!btn.isConnected) { if (cuentaTocada) SersaleCuenta.salir(); return; }
 
         // Una lista de usuarios vacía solo vale si la contestó el servidor. Con mala
         // señal en un teléfono sin datos guardados la copia local viene vacía, y acá
@@ -349,6 +609,7 @@
             creado: f.Timestamp.now()
           };
           await f.setDoc(f.doc(f.db, "usuarios", usuario), nuevo);
+          await migrarCuenta_index(usuario, usuario, pwd, nuevo.nombre, rc);
           // Loguearlo
           loginExitoso(usuario, nuevo.nombre);
           return;
@@ -369,8 +630,29 @@
           soltar("Usuario desactivado", true);
           return;
         }
+        // Primer ingreso con el sistema nuevo: se le deja lista su cuenta.
+        var canon = String(encontrado.usuario || encontrado.id).toLowerCase();
+        if (canon !== usuario) {
+          if (cuentaTocada) SersaleCuenta.salir();
+          rc = await ingresarConCuenta_index(canon, pwd);
+          cuentaTocada = rc.estado === "ok" || rc.estado === "sin-acceso";
+          if (rc.estado === "inactivo") { soltar("Usuario desactivado", true); return; }
+        }
+        if (rc.estado !== "ok" && (await migrarCuenta_index(canon, encontrado.usuario || encontrado.id, pwd, encontrado.nombre || encontrado.id, rc)) === "denegado") {
+          cuentaTocada = false;
+          soltar("Tu usuario todavía no tiene acceso con el sistema nuevo. Pedile a otro director que te cambie la clave.");
+          return;
+        }
+        if (!btn.isConnected) { if (window.SersaleCuenta) SersaleCuenta.salir(); return; }
         loginExitoso(encontrado.usuario || encontrado.id, encontrado.nombre || encontrado.id);
       } catch(err) {
+        // Con la base protegida la lista de usuarios no se puede leer sin haber
+        // ingresado: lo que valió fue el intento con la cuenta.
+        if (err && err.code === "permission-denied") {
+          if (rc.estado === "red") soltar("Sin conexión con el servidor. Probá de nuevo cuando haya señal.");
+          else soltar("Usuario o contraseña incorrectos", true);
+          return;
+        }
         console.error(err);
         // "unavailable": el servidor no respondió y en este teléfono no hay usuarios guardados.
         if (err && err.code === "unavailable") soltar("Sin conexión con el servidor. Probá de nuevo cuando haya señal.");
@@ -405,9 +687,27 @@
       sessionStorage.removeItem("sersale_nombre");
       sessionStorage.removeItem("sersale_auth");
       if (window.SersaleSesion) SersaleSesion.olvidar();
+      if (window.SersaleCuenta) SersaleCuenta.salir();
       sesionRole = null; sesionUsuario = ""; sesionNombre = "";
       render();
     };
+
+    // Un Director con la sesión recordada de antes, que todavía no tiene cuenta en
+    // este teléfono: tiene que ingresar una vez con su usuario y clave para que se
+    // le cree. Se le pide como mucho dos veces por día, y solo con conexión.
+    function pedirReingreso_index() {
+      var C = window.SersaleCuenta;
+      if (!C || sesionRole !== "director" || navigator.onLine === false) return;
+      var ses = C.actual();
+      if (ses && ses.rol === "director") return;
+      try {
+        var k = "sersale_reingreso";
+        if (Date.now() - Number(localStorage.getItem(k) || 0) < 12 * 60 * 60 * 1000) return;
+        localStorage.setItem(k, String(Date.now()));
+      } catch (e) { return; }
+      window.cerrarSesion();
+      SersaleUI.toast("Mejoramos la seguridad del sistema: ingresá de nuevo con tu usuario y clave.", { tipo: "info", ms: 9000 });
+    }
 
     // ===== SESIÓN VIGENTE =====
     // "Desactivar" o "Eliminar" un usuario no le cortaba el acceso: la sesión
@@ -556,13 +856,42 @@
             '<h2 style="font-size:18px;font-weight:800;color:#191E23">👥 Gestión de Usuarios</h2>' +
             '<button onclick="cerrarUsrModal()" aria-label="Cerrar" style="background:none;border:none;font-size:22px;cursor:pointer;color:#79828B;line-height:1;min-width:44px;min-height:44px">×</button>' +
           '</div>' +
-          '<button onclick="abrirFormUsuario()" class="btn-primary" style="margin-bottom:14px">➕ Nuevo Director</button>' +
+          '<button onclick="abrirFormUsuario()" class="btn-primary" style="margin-bottom:10px">➕ Nuevo Director</button>' +
+          '<button onclick="cambiarPinDeposito()" class="btn-secondary" id="__pin_dep_btn" style="margin-bottom:6px">🔢 PIN del depósito</button>' +
+          '<p id="__pin_dep_estado" style="font-size:12px;color:#79828B;text-align:center;margin-bottom:14px;min-height:16px"></p>' +
           '<div id="__usr_lista" style="min-height:80px"><p style="text-align:center;color:#79828B;font-size:13px">Cargando...</p></div>' +
           '<button class="btn-secondary" onclick="cerrarUsrModal()">Cerrar</button>' +
         '</div>';
       modal.onclick = function(){ if (Date.now() - abierto > 400) window.cerrarUsrModal(); };
       document.body.appendChild(modal);
+      mostrarEstadoPin_index();
       await cargarListaUsuarios();
+    };
+
+    // ===== PIN DEL DEPÓSITO (acceso del Operario) =====
+    async function mostrarEstadoPin_index() {
+      var C = window.SersaleCuenta;
+      var gen = C ? await genDe_index(C.ID_OPERARIO) : null;
+      var p = document.getElementById("__pin_dep_estado");
+      if (!p) return;
+      p.textContent = gen === null ? "" : (gen ? "El Operario entra con el PIN del depósito." : "Sin PIN: hoy el Operario entra sin clave.");
+    }
+
+    window.cambiarPinDeposito = async function() {
+      if (sesionRole !== "director") return;
+      var pin = await SersaleUI.pedirTexto({
+        titulo: "PIN del depósito",
+        etiqueta: "6 números. Cada teléfono del depósito lo pone una sola vez; si lo cambiás, se lo vuelve a pedir a todos.",
+        inputMode: "numeric", aceptar: "Guardar"
+      });
+      if (pin == null) return;
+      pin = String(pin).trim();
+      if (!/^[0-9]{6}$/.test(pin)) { SersaleUI.toast("El PIN tiene que tener 6 números. No se cambió.", { tipo: "error" }); return; }
+      var ok = await usrOperacion_index(async function() {
+        await prepararCuenta_index({ usuario: "operario", rol: "operario", clave: pin, nombre: "Depósito" });
+      }, "No se pudo guardar el PIN. Probá de nuevo.");
+      if (ok) SersaleUI.toast("PIN del depósito guardado", { tipo: "ok" });
+      mostrarEstadoPin_index();
     };
 
     window.cerrarUsrModal = function() {
@@ -612,7 +941,7 @@
           var accion = b.getAttribute("data-usr-accion");
           if (accion === "clave") window.cambiarPwdUsuario(id, etiqueta);
           else if (accion === "eliminar") window.eliminarUsuario(id, etiqueta);
-          else window.toggleActivoUsuario(id, accion === "activar");
+          else window.toggleActivoUsuario(id, accion === "activar", etiqueta);
         };
       } catch(err) {
         console.error(err);
@@ -669,6 +998,8 @@
           if (!repetido) repetido = (await f.getDoc(ref)).exists();
           if (repetido) { msg.textContent = "Ya existe un usuario con ese nombre"; return; }
           var pwdHash = await hashPassword(p1);
+          // Primero su cuenta: si eso falla no queda un usuario que no puede entrar.
+          await prepararCuenta_index({ usuario: usr, mostrar: usr, rol: "director", clave: p1, nombre: nombre });
           await f.setDoc(ref, {
             usuario: usr, passwordHash: pwdHash, nombre: nombre, activo: true, creado: f.Timestamp.now()
           });
@@ -715,14 +1046,35 @@
       if (nueva.length < 4) { SersaleUI.toast("La contraseña debe tener al menos 4 caracteres. No se cambió.", { tipo: "error" }); return; }
       var ok = await usrOperacion_index(async function(f) {
         var pwdHash = await hashPassword(nueva);
+        // Cuenta nueva con la clave nueva: la anterior deja de tener acceso.
+        var u = (await f.getDoc(f.doc(f.db, "usuarios", id))).data() || {};
+        var canon = claveUsuario_index(id, etiqueta);
+        await prepararCuenta_index({
+          usuario: canon, mostrar: u.usuario || etiqueta || id, rol: "director", clave: nueva, nombre: u.nombre || etiqueta || id,
+          propia: canon === String(sesionUsuario).toLowerCase()
+        });
         await f.updateDoc(f.doc(f.db, "usuarios", id), { passwordHash: pwdHash });
       }, "No se pudo cambiar la contraseña. Probá de nuevo.");
       if (ok) SersaleUI.toast("Contraseña de @" + (etiqueta || id) + " actualizada", { tipo: "ok" });
     };
 
-    window.toggleActivoUsuario = async function(id, nuevoEstado) {
+    // Nombre con el que el usuario ingresa (y con el que se anotan sus cuentas).
+    function claveUsuario_index(id, etiqueta) {
+      return String(etiqueta || id).toLowerCase();
+    }
+
+    window.toggleActivoUsuario = async function(id, nuevoEstado, etiqueta) {
       await usrOperacion_index(async function(f) {
         await f.updateDoc(f.doc(f.db, "usuarios", id), { activo: nuevoEstado });
+        // Su cuenta pierde (o recupera) el acceso: al activar, solo la vigente.
+        var C = window.SersaleCuenta;
+        if (!C) return;
+        var canon = claveUsuario_index(id, etiqueta);
+        var gen = nuevoEstado ? await genDe_index(C.idDe(canon)) : null;
+        await cambiarAccesos_index(canon, "director", function(uid, a){
+          if (!nuevoEstado) return a.activo !== false ? { activo: false } : null;
+          return gen && a.gen === gen && a.activo !== true ? { activo: true } : null;
+        });
       }, "No se pudo actualizar el usuario. Probá de nuevo.");
       await cargarListaUsuarios();
     };
@@ -736,6 +1088,10 @@
       if (!si) return;
       var ok = await usrOperacion_index(async function(f) {
         await f.deleteDoc(f.doc(f.db, "usuarios", id));
+        // Sus cuentas quedan sin acceso (no se borran: así no se puede volver a usar la misma).
+        if (window.SersaleCuenta) {
+          await cambiarAccesos_index(claveUsuario_index(id, etiqueta), "director", function(uid, a){ return a.activo !== false ? { activo: false } : null; });
+        }
       }, "No se pudo eliminar el usuario. Probá de nuevo.");
       if (ok) SersaleUI.toast("Usuario @" + (etiqueta || id) + " eliminado", { tipo: "ok" });
       await cargarListaUsuarios();
@@ -744,6 +1100,17 @@
     // ===== INIT =====
     var LOGO = "assets/logo.png";
     render();
+    // Aviso que dejó otra pantalla al mandar al ingreso (js/shell.js).
+    try {
+      var avisoIngreso_index = sessionStorage.getItem("sersale_aviso_ingreso");
+      if (avisoIngreso_index) {
+        sessionStorage.removeItem("sersale_aviso_ingreso");
+        document.addEventListener("DOMContentLoaded", function(){ SersaleUI.toast(avisoIngreso_index, { tipo: "error", ms: 9000 }); });
+      }
+    } catch (e) {}
+    // Sin sesión de Director a la vista no queda su cuenta abierta en el teléfono.
+    if (sesionRole !== "director" && window.SersaleCuenta && (SersaleCuenta.actual() || {}).rol === "director") SersaleCuenta.salir();
+    document.addEventListener("DOMContentLoaded", pedirReingreso_index);
     waitForFirebase(verificarSesion_index);
   </script>
 

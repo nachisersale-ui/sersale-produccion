@@ -14,6 +14,14 @@
   var db = null;
   window.sersaleDbCompat = function () {
     if (db) return db;
+    // La cuenta de este teléfono (js/cuenta.js): Firestore manda su pase en cada pedido.
+    if (window.SersaleCuenta && !firebase.apps.length) {
+      try {
+        firebase.INTERNAL.registerComponent(window.SersaleCuenta.componente());
+      } catch (e) {
+        console.warn("No se pudo registrar la cuenta en Firestore:", e);
+      }
+    }
     var app = firebase.apps.length ? firebase.app() : firebase.initializeApp(config);
     db = firebase.firestore(app);
     if (PRUEBA) db.useEmulator(PRUEBA.emulatorHost, PRUEBA.emulatorPort);

@@ -1,0 +1,55 @@
+rules_version = '2';
+
+// Reglas de seguridad de Firestore del CRM Sersale.
+//
+// OJO: este archivo NO se aplica solo. Hoy la base real sigue abierta
+// (allow read, write: if true). Estas reglas se pegan en la consola de
+// Firebase recién cuando todos los teléfonos ya ingresan con su cuenta
+// (ver crm/docs/SEGURIDAD.md). Las pruebas (tests/reglas.test.mjs) las
+// cargan en el emulador.
+//
+// Quién entra: cada persona inicia sesión con una cuenta de Firebase. La
+// cuenta sola no alcanza (cualquiera puede crearse una): tiene que existir
+// accesos/{uid} con activo == true, y eso solo lo escribe un Director.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function hayAcceso() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/accesos/$(request.auth.uid));
+    }
+    function acceso() {
+      return get(/databases/$(database)/documents/accesos/$(request.auth.uid)).data;
+    }
+    function activo() {
+      return hayAcceso() && acceso().activo == true;
+    }
+    function director() {
+      return activo() && acceso().rol == "director";
+    }
+
+    // Qué cuenta le corresponde hoy a cada usuario (cambia al cambiar la
+    // clave). Se consulta antes de ingresar, por eso se puede leer de a uno
+    // sin sesión; listar todos los usuarios, no.
+    match /ingreso/{usuario} {
+      allow get: if true;
+      allow list, write: if director();
+    }
+
+    // Permisos de cada cuenta. Cada uno lee solo el suyo.
+    match /accesos/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
+      allow read, write: if director();
+    }
+
+    // Usuarios del sistema: solo Directores.
+    match /usuarios/{usuario} {
+      allow read, write: if director();
+    }
+
+    // Todo lo demás (pedidos, clientes, cuentas corrientes, reservas,
+    // producción, etc.): cualquier cuenta con acceso activo.
+    match /{coleccion}/{documento=**} {
+      allow read, write: if activo() && !(coleccion in ["usuarios", "accesos", "ingreso"]);
+    }
+  }
+}

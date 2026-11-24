@@ -13,8 +13,19 @@
 //
 //  3. En las pruebas automáticas se conecta al emulador local en vez de a la
 //     base real (solo si la página corre en localhost).
-import { initializeApp } from "../vendor/firebase-app.js";
+import { initializeApp, _registerComponent } from "../vendor/firebase-app.js";
 import * as fs from "../vendor/firebase-firestore.js";
+
+// La cuenta de este teléfono (js/cuenta.js): Firestore manda su pase en cada
+// pedido, y con eso la base decide quién puede leer y escribir. Tiene que
+// registrarse antes de crear la conexión a Firestore.
+if (window.SersaleCuenta) {
+  try {
+    _registerComponent(window.SersaleCuenta.componente());
+  } catch (e) {
+    console.warn("No se pudo registrar la cuenta en Firestore:", e);
+  }
+}
 
 export * from "../vendor/firebase-firestore.js";
 
@@ -172,6 +183,9 @@ function vigilar(nombre) {
         // Sin permiso o error del servidor: se deja de usar la copia local
         // para esta colección y las lecturas vuelven al camino normal.
         console.warn("Escucha de " + nombre + " caída:", err && err.code);
+        // La base rechazó a este teléfono (acceso quitado o sesión vencida):
+        // js/shell.js lo manda a ingresar de nuevo.
+        if (err && err.code === "permission-denied") window.dispatchEvent(new CustomEvent("sersale:sin-permiso", { detail: { coleccion: nombre } }));
         st.sincronizado = false;
         escuchas.delete(nombre);
         listo();
