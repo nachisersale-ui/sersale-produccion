@@ -30,6 +30,17 @@
 <title>Presupuestos — Frigorífico Sersale</title>
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="assets/logo-pdf-jpeg.js"></script>
+<script src="assets/logo-muestras.js"></script>
+<script src="js/catalogo.js"></script>
+<script type="module">
+  // Conexión a la base: los presupuestos quedan guardados (colección "presupuestos") y el
+  // cliente se puede elegir de la lista del CRM.
+  import { db, collection, doc, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, runTransaction } from "./js/fb.js";
+  window.__db = db;
+  window.__fb = { collection, doc, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, runTransaction };
+  window.__fbReady = true;
+  document.dispatchEvent(new Event("fbReady"));
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:'IBM Plex Sans','Inter',sans-serif}
 body{background:#F2F3F5;min-height:100vh}
@@ -63,7 +74,7 @@ input[type=text]:focus{outline:none;border-color:#A4232A}
 .prod-precio input{width:100%;padding:7px 10px;border-radius:8px;border:1.5px solid #E4E7EA;font-size:13px;font-weight:700;color:#A4232A;text-align:right;font-family:'IBM Plex Sans','Inter',sans-serif}
 .prod-precio input:focus{outline:none;border-color:#A4232A}
 .info-bar{background:#F7EAEA;border-radius:10px;padding:10px 16px;font-size:12px;color:#7E1A20;font-weight:600;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
-.btn-gen{width:100%;padding:16px;border-radius:12px;border:none;font-weight:800;font-size:15px;cursor:pointer;font-family:'IBM Plex Sans','Inter',sans-serif;background:#A4232A;color:#fff;box-shadow:0 4px 16px rgba(192,57,43,.4)}
+.btn-gen{width:100%;padding:16px;border-radius:12px;border:none;font-weight:800;font-size:15px;cursor:pointer;font-family:'IBM Plex Sans','Inter',sans-serif;background:#A4232A;color:#fff;box-shadow:0 4px 16px rgba(164,35,42,.28)}
 .btn-gen:active{transform:scale(.98)}.btn-gen:disabled{background:#B9BFC5;box-shadow:none}
 .ld{text-align:center;padding:12px;color:#79828B;font-size:13px;display:none;margin-top:8px}
 .ld.show{display:block}
@@ -83,6 +94,57 @@ input[type=text]:focus{outline:none;border-color:#A4232A}
 .btn-add-custom{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:10px;border-radius:10px;border:2px dashed #A4232A;background:#F7EAEA;color:#A4232A;font-weight:700;font-size:13px;cursor:pointer;font-family:'IBM Plex Sans','Inter',sans-serif;margin-top:8px}
 .btn-add-custom:hover{background:#F7EAEA}
 .sel-all-btn{font-size:11px;color:#A4232A;background:none;border:none;cursor:pointer;font-weight:700;font-family:'IBM Plex Sans','Inter',sans-serif;padding:0;display:none}
+
+/* ── Pestañas, cotización y guardados ── */
+.pre-tabs{display:flex;max-width:680px;margin:0 auto;padding:0 16px;border-bottom:1px solid var(--ss-linea,#D8DCE0);background:#F2F3F5}
+.pre-tab{flex:1;min-height:48px;border:none;border-bottom:3px solid transparent;background:transparent;color:#5C666F;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap}
+.pre-tab.on{color:#A4232A;border-bottom-color:#A4232A}
+#vista-cot select{width:100%;padding:11px 12px;border-radius:10px;border:1.5px solid #D8DCE0;font-size:16px;background:#fff;color:#191E23}
+#vista-cot input[type=text],#vista-guardados input[type=text]{font-size:16px}
+.cot-dos{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:420px){.cot-dos{grid-template-columns:1fr}}
+.cot-vigencia{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10px;font-weight:600;color:#79828B;letter-spacing:.04em;text-transform:none}
+.cot-buscador{display:flex;gap:8px}
+.cot-buscador input{flex:1;min-width:0}
+.cot-ver-todo{flex-shrink:0;min-height:44px;padding:0 12px;border-radius:10px;border:1.5px solid #2A333B;background:#fff;color:#2A333B;font-weight:700;font-size:13px;cursor:pointer}
+.cot-resultados{margin-top:8px;border:1.5px solid #2A333B;border-radius:12px;max-height:320px;overflow-y:auto;-webkit-overflow-scrolling:touch;background:#fff}
+.cot-res-fam{padding:6px 12px;background:#F2F3F5;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#5C666F}
+.cot-res{display:flex;align-items:center;gap:10px;width:100%;min-height:52px;padding:6px 12px;border:none;border-bottom:1px solid #F2F3F5;background:#fff;text-align:left;cursor:pointer}
+.cot-res img,.cot-linea img{width:40px;height:40px;border-radius:8px;object-fit:cover;background:#EDEEF0;flex-shrink:0}
+.cot-res b{display:block;font-size:14px;color:#191E23;font-weight:600}
+.cot-res small{display:block;font-size:12px;color:#79828B}
+.cot-res .cot-res-precio{margin-left:auto;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px;font-weight:600;color:#A4232A;white-space:nowrap}
+.cot-res.puesto{opacity:.5}
+.cot-add-vario{display:flex;align-items:center;justify-content:center;width:100%;min-height:46px;padding:10px;border-radius:10px;border:2px dashed #A4232A;background:#F7EAEA;color:#A4232A;font-weight:700;font-size:13px;cursor:pointer;margin-top:10px}
+.cot-vacio{font-size:13px;color:#79828B;text-align:center;padding:18px 8px}
+.cot-linea{border:1px solid #D8DCE0;border-radius:14px;padding:10px 12px 12px;margin-top:10px;background:#fff}
+.cot-linea-cab{display:flex;align-items:center;gap:10px}
+.cot-linea-cab .cot-nombre{flex:1;min-width:0}
+.cot-linea-cab b{display:block;font-size:14px;color:#191E23;overflow-wrap:anywhere}
+.cot-linea-cab small{display:block;font-size:12px;color:#79828B}
+.cot-quitar{width:44px;height:44px;border:none;border-radius:8px;background:#F7EAEA;color:#A4232A;font-size:18px;cursor:pointer;flex-shrink:0}
+.cot-campos{display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:8px;margin-top:10px}
+.cot-campos label{font-size:11px;margin-bottom:3px;color:#5C666F}
+.cot-campos input{padding:10px;text-align:right;font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:600}
+.cot-sub{display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;font-size:13px;color:#5C666F}
+.cot-sub strong{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:15px;color:#191E23}
+.cot-totales{background:#12161A;color:#EFEAE1;border-radius:14px;padding:14px 16px;margin-bottom:12px}
+.cot-totales .fila{display:flex;justify-content:space-between;gap:10px;font-size:14px;padding:2px 0}
+.cot-totales .fila span:last-child{font-family:'IBM Plex Mono',ui-monospace,monospace;white-space:nowrap}
+.cot-totales .total{font-size:20px;font-weight:800;margin-top:6px;padding-top:8px;border-top:1px solid rgba(239,234,225,.25)}
+.cot-totales .nota{font-size:12px;opacity:.75;margin-top:6px}
+.cot-nuevo{width:100%;min-height:46px;margin-top:10px;border-radius:12px;border:1.5px solid #D8DCE0;background:#fff;color:#3A424A;font-weight:600;font-size:14px;cursor:pointer}
+.cot-aviso{background:#F0E7D9;border:1.5px solid #A8702A;color:#784212;border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:13px;font-weight:600}
+.gua{border:1px solid #D8DCE0;border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.gua-cab{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.gua-nro{font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:700;font-size:13px;color:#A4232A}
+.gua-fecha{font-size:12px;color:#79828B}
+.gua-cli{font-weight:700;font-size:15px;color:#191E23;margin:4px 0 2px;overflow-wrap:anywhere}
+.gua-det{font-size:13px;color:#5C666F}
+.gua-btns{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:10px}
+.gua-btns button{min-height:44px;border-radius:10px;border:1.5px solid #2A333B;background:#fff;color:#2A333B;font-weight:700;font-size:13px;cursor:pointer}
+.gua-btns .pdf{background:#2A333B;color:#fff}
+.gua-btns .borrar{min-width:44px;border-color:#E4C7C9;color:#C33039}
 
     :root { --app-max-w: 480px; }
     @media (min-width: 768px) { :root { --app-max-w: 860px; } }
@@ -135,7 +197,72 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   </div>
   <button onclick="exportarPresupuesto()" style="background:rgba(255,255,255,0.3);color:#fff;border:1px solid rgba(255,255,255,0.4);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;font-weight:700">📄 Exportar CSV</button>
 </div>
-<div class="con">
+<div class="pre-tabs" role="tablist" aria-label="Qué querés armar">
+  <button type="button" role="tab" id="tab-cot" class="pre-tab on" aria-selected="true" onclick="verVista('cot')">Cotización</button>
+  <button type="button" role="tab" id="tab-lista" class="pre-tab" aria-selected="false" onclick="verVista('lista')">Lista de precios</button>
+  <button type="button" role="tab" id="tab-guardados" class="pre-tab" aria-selected="false" onclick="verVista('guardados')">Guardados</button>
+</div>
+
+<!-- ── Cotización: productos con unidades, kilos y totales ── -->
+<div class="con" id="vista-cot">
+  <div class="cot-aviso" id="cot-editando" style="display:none"></div>
+  <div class="card">
+    <div class="ct">Cliente</div>
+    <label for="cot-cli">Nombre del cliente *</label>
+    <input type="text" id="cot-cli" list="cot-clientes" placeholder="Elegí un cliente o escribí el nombre" autocomplete="off" oninput="cotPintar()">
+    <datalist id="cot-clientes"></datalist>
+  </div>
+
+  <div class="card">
+    <div class="ct" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Productos</span><span class="cot-vigencia" id="cot-vigencia"></span>
+    </div>
+    <div class="cot-buscador">
+      <input type="text" id="cot-buscar" placeholder="Buscar producto por nombre o código" aria-label="Buscar producto" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="search" oninput="cotBuscar()">
+      <button type="button" class="cot-ver-todo" id="cot-ver-todo" onclick="cotVerTodo()">Ver catálogo</button>
+    </div>
+    <div id="cot-resultados" class="cot-resultados" style="display:none"></div>
+    <div id="cot-lineas"></div>
+    <p id="cot-vacio" class="cot-vacio">Buscá un producto y tocalo para sumarlo a la cotización.</p>
+    <button type="button" class="cot-add-vario" onclick="cotAgregarVario()">+ Agregar un artículo que no está en el catálogo</button>
+  </div>
+
+  <div class="card">
+    <div class="ct">Condiciones</div>
+    <label>Los precios son</label>
+    <div class="m-grid" style="margin-bottom:14px">
+      <button type="button" class="mbtn on" id="cot-iva-final" aria-pressed="true" onclick="cotIva('final')"><h3>Precios finales</h3><p>IVA incluido</p></button>
+      <button type="button" class="mbtn" id="cot-iva-mas" aria-pressed="false" onclick="cotIva('mas')"><h3>Precios + IVA</h3><p>El IVA se suma aparte</p></button>
+    </div>
+    <div class="cot-dos">
+      <div>
+        <label for="cot-ajuste-tipo">Descuento o recargo</label>
+        <div style="display:flex;gap:8px">
+          <select id="cot-ajuste-tipo" onchange="cotPintar()" aria-label="Tipo de ajuste">
+            <option value="">Sin ajuste</option>
+            <option value="bonif">Bonificación</option>
+            <option value="recargo">Recargo</option>
+          </select>
+          <input type="text" inputmode="decimal" id="cot-ajuste-pct" placeholder="%" aria-label="Porcentaje de ajuste" style="width:84px;text-align:center" oninput="cotPintar()">
+        </div>
+      </div>
+      <div>
+        <label for="cot-validez">Validez en días <span style="font-weight:400">(opcional)</span></label>
+        <input type="text" inputmode="numeric" id="cot-validez" placeholder="Sin validez" oninput="this.value=this.value.replace(/\D/g,'').slice(0,3)">
+      </div>
+    </div>
+    <label for="cot-obs" style="margin-top:14px">Observaciones <span style="font-weight:400">(opcional)</span></label>
+    <input type="text" id="cot-obs" placeholder="Ej: entrega en 48 h, pago a 15 días" autocomplete="off">
+  </div>
+
+  <div class="cot-totales" id="cot-totales"></div>
+  <button type="button" class="btn-gen" id="cot-generar" onclick="cotGenerar()">Guardar y generar PDF</button>
+  <button type="button" class="cot-nuevo" id="cot-nuevo" onclick="cotNuevo()">Empezar un presupuesto nuevo</button>
+  <div class="ld" id="cot-ld">Generando el presupuesto...</div>
+</div>
+
+<!-- ── Lista de precios (sin cantidades) ── -->
+<div class="con" id="vista-lista" style="display:none">
   <div class="card">
     <div class="ct">👤 Cliente</div>
     <label>Nombre del cliente *</label>
@@ -200,70 +327,25 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   <button class="btn-gen" id="btnGen" onclick="gen()">📄 Generar y descargar PDF</button>
   <div class="ld" id="ld">⏳ Generando PDF...</div>
 </div>
+
+<!-- ── Presupuestos guardados ── -->
+<div class="con" id="vista-guardados" style="display:none">
+  <div class="card">
+    <div class="ct">Presupuestos enviados</div>
+    <input type="text" id="gua-buscar" placeholder="Buscar por cliente o número" aria-label="Buscar presupuesto guardado" autocomplete="off" autocapitalize="none" spellcheck="false" oninput="guaPintar()">
+    <div id="gua-lista" style="margin-top:12px"></div>
+  </div>
+</div>
 <script>
-const CATS=[
-  {cat:"JAMONES COCIDOS",prods:[
-    {n:'JAMÓN COCIDO NATURAL "SUBLIME"',art:"Art. 304",peso:"6 KG",p:11590},
-    {n:"JAMÓN COCIDO ESPECIAL BAJO SODIO",art:"Art. 303",peso:"6 KG",p:8990},
-    {n:"JAMÓN COCIDO DE PATA",art:"Art. 301",peso:"6 KG",p:6990},
-  ]},
-  {cat:"PALETAS COCIDAS",prods:[
-    {n:"FIAMBRE COCIDO DE PALETA DE CERDO",art:"Art. 401",peso:"6 KG",p:5990},
-    {n:"FIAMBRE DE CERDO P/EMPAREDADOS",art:"Art. 403",peso:"6 KG",p:4990},
-  ]},
-  {cat:"JAMONES CRUDOS",prods:[
-    {n:"JAMÓN CRUDO C/HUESO 12 MESES",art:"Art. 102",peso:"9 KG",p:20990},
-    {n:"JAMÓN CRUDO ENTERO LISTO S/HUESO",art:"Art. 105",peso:"6 KG",p:23990},
-    {n:"JAMÓN CRUDO LISTO 1/2 PUNTA",art:"Art. 107",peso:"3 KG",p:22990},
-    {n:"JAMÓN CRUDO LISTO 1/2 GARRÓN",art:"Art. 107",peso:"3 KG",p:25590},
-    {n:"BONDIOLA SECA AL PAPEL",art:"Art. 202",peso:"1,5 KG",p:19990},
-    {n:"BONDIOLA SECA SERRANA",art:"Art. 203",peso:"1,5 KG",p:21990},
-  ]},
-  {cat:"PANCETAS Y AHUMADOS",prods:[
-    {n:"PANCETA AHUMADA",art:"Art. 501",peso:"1,5 KG",p:14990},
-    {n:"PANCETA SALADA",art:"Art. 505",peso:"2 KG",p:12990},
-    {n:"LOMO AHUMADO",art:"Art. 601",peso:"1,5 KG",p:14990},
-    {n:"LOMO TIPO SUIZO",art:"Art. 616",peso:"1,5 KG",p:18990},
-    {n:"SALCHICHAS DE VIENA",art:"Art. 510",peso:"a granel x 5kg",p:9990},
-    {n:"SALCHICHAS DE COPETIN",art:"Art. 511",peso:"a granel x 5kg",p:11990},
-  ]},
-  {cat:"EMBUTIDOS SECOS",prods:[
-    {n:"SALAMÍN PICADO FINO",art:"Art. 602",peso:"300grs",p:14990},
-    {n:"SALAMÍN PICADO GRUESO",art:"Art. 602",peso:"300grs",p:14990},
-    {n:"SOPRESATTA DE CERDO",art:"Art. 603",peso:"300grs",p:15990},
-    {n:"CHORIZO TIPO CANDELARIO",art:"Art. 604",peso:"300grs",p:14990},
-    {n:"CHORIZO TIPO CANTIMPALO",art:"Art. 605",peso:"400grs",p:15990},
-    {n:"LONGANIZA TIPO ESPAÑOLA",art:"Art. 606",peso:"500grs",p:15990},
-    {n:"LONGANIZA TIPO CALABRESA",art:"Art. 609",peso:"500grs",p:14990},
-    {n:"LONGANIZA CALABRESA BASTÓN",art:"Art. 617",peso:"1 KG",p:14990},
-    {n:"SALAME TIPO MILÁN",art:"Art. 610",peso:"3 KG",p:14990},
-    {n:"SALAME TIPO ESPAÑOL",art:"Art. 607",peso:"3 KG",p:14990},
-    {n:"SALAME CHACARERO DE CAMPO",art:"Art. 621",peso:"800grs",p:15990},
-  ]},
-  {cat:"PASTAS FINAS",prods:[
-    {n:"MORTADELA BOCHA",art:"Art. 621",peso:"2,5 KG",p:5890},
-    {n:"MORTADELA BOLOGNA",art:"Art. 621",peso:"3 KG",p:5490},
-    {n:"SALCHICHÓN C/JAMÓN",art:"Art. 612",peso:"3 KG",p:4900},
-    {n:"SALCHICHÓN PRIMAVERA",art:"Art. 613",peso:"3 KG",p:4900},
-  ]},
-  {cat:"EMBUTIDOS FRESCOS",prods:[
-    {n:"CHORIZO PURO CERDO",art:"Art. 900",peso:"10kg x gancho",p:5990},
-    {n:"CHORIZO ESPECIAL VACUNO/CERDO",art:"Art. 901",peso:"10kg x gancho",p:5190},
-    {n:"CHORIZO BOMBÓN",art:"Art. 902",peso:"5kg x gancho",p:7990},
-    {n:"MORCILLA CRIOLLA",art:"Art. 905",peso:"7kg x gancho",p:4590},
-    {n:"MORCILLA CRIOLLA ROSCA",art:"Art. 905",peso:"4kg x gancho",p:4590},
-    {n:"MORCILLA CRIOLLA BOMBÓN",art:"Art. 906",peso:"5kg x gancho",p:4990},
-    {n:"MORCILLA VASCA",art:"Art. 907",peso:"6kg x gancho",p:5990},
-    {n:"SALCHICHA FRESCA PARRILLERA",art:"Art. 908",peso:"4kg x gancho",p:6590},
-  ]},
-  {cat:"CORTES FRESCOS DE CERDO",prods:[
-    {n:"PECHO C/MANTA",art:"Art. 709",peso:"6 KG",p:null},
-    {n:"CARRÉ C/HUESO",art:"Art. 710",peso:"5 KG",p:null},
-    {n:"BONDIOLA FRESCA",art:"Art. 707",peso:"2 KG",p:null},
-    {n:"PERNIL FRESCO",art:"Art. 711",peso:"10 KG",p:null},
-    {n:"PALETA FRESCA",art:"Art. 712",peso:"6 KG",p:null},
-  ]},
-];
+// Productos, pesos y precios: los del catálogo mayorista (js/catalogo.js, que se
+// genera con tools/sincronizar-catalogo.mjs). Antes había una lista propia escrita
+// acá, que quedaba desactualizada respecto del catálogo.
+// En el PDF las comillas tipográficas no existen: van rectas.
+function textoPlano(s){ return String(s==null?'':s).replace(/[\u201C\u201D]/g,'"').replace(/[\u2018\u2019]/g,"'"); }
+const CATS=(window.SersaleCatalogo?window.SersaleCatalogo.familias:[]).map(f=>({
+  cat:textoPlano(f.nombre).toUpperCase(),
+  prods:f.productos.map(p=>({n:textoPlano(p.nombre).toUpperCase(),art:'Art. '+p.art,peso:p.peso,p:p.precio,artN:p.art,kg:p.kg,unidad:p.unidad,foto:p.foto}))
+}));
 let uid=0; CATS.forEach(c=>c.prods.forEach(p=>p.uid=uid++));
 
 // ESCAPE para interpolar texto del usuario en innerHTML / atributos
@@ -664,7 +746,7 @@ async function generarPDF(){
     c.prods.forEach(p=>{
       if(modo==='sel'){const cb=document.getElementById('cb-'+p.uid);if(!cb||!cb.checked)return;}
       // Sin precio en pantalla ("Consultar") = sin precio en el PDF: no se vuelve al precio de lista.
-      items.push({cat:c.cat,n:p.n,art:p.art,peso:p.peso,precio:getP(p.uid)});
+      items.push({cat:c.cat,n:p.n,art:p.art,peso:p.peso,precio:getP(p.uid),foto:p.foto});
     });
   });
   // Add custom items
@@ -712,11 +794,11 @@ async function generarPDF(){
     pdf.rect(0,0,PW,PH,'F');
 
     // Franja roja izquierda
-    pdf.setFillColor(192,57,43);
+    pdf.setFillColor(164,35,42);
     pdf.rect(0,0,8,PH,'F');
 
     // Franja roja superior
-    pdf.setFillColor(192,57,43);
+    pdf.setFillColor(164,35,42);
     pdf.rect(8,0,PW-8,6,'F');
 
     // Logo centrado en mitad superior
@@ -724,14 +806,14 @@ async function generarPDF(){
     pdf.addImage(logoData,'JPEG',PW/2-LS/2,PH*0.08,LS,LS);
 
     // Línea roja bajo el logo
-    pdf.setDrawColor(192,57,43);
+    pdf.setDrawColor(164,35,42);
     pdf.setLineWidth(1.5);
     pdf.line(M,PH*0.43,PW-M,PH*0.43);
 
     // Tipo doc
     pdf.setFont('helvetica','bold');
     pdf.setFontSize(11);
-    pdf.setTextColor(192,57,43);
+    pdf.setTextColor(164,35,42);
     pdf.text(tituloDoc,PW/2,PH*0.48,{align:'center'});
 
     // Nombre cliente: si no entra en el ancho se achica la letra y, si hace falta, va en más de un renglón
@@ -758,7 +840,7 @@ async function generarPDF(){
     pdf.setLineWidth(0.5);
     pdf.rect(M,boxY,W,boxH,'S');
     // Acento rojo izquierdo
-    pdf.setFillColor(192,57,43);
+    pdf.setFillColor(164,35,42);
     pdf.rect(M,boxY,4,boxH,'F');
 
     pdf.setFont('helvetica','bold');
@@ -770,13 +852,13 @@ async function generarPDF(){
     pdf.setFontSize(9);
     pdf.setTextColor(120,120,120);
     pdf.text('CUIT 30-70227633-7  ·  24 de Noviembre 1926, Parque Patricios, CABA',M+16,boxY+38);
-    pdf.setTextColor(192,57,43);
+    pdf.setTextColor(164,35,42);
     pdf.text('(011) 6763-7860',M+16,boxY+54);
     pdf.setTextColor(150,150,150);
     pdf.text('@sersalefrigorifico  ·  Venta por Mayor y Menor',M+16,boxY+68);
 
     // Franja roja inferior
-    pdf.setFillColor(192,57,43);
+    pdf.setFillColor(164,35,42);
     pdf.rect(8,PH-6,PW-8,6,'F');
 
     // ─── PÁGINAS DE PRODUCTOS ────────────────────────────────
@@ -785,8 +867,8 @@ async function generarPDF(){
 
     function drawPageHdr(){
       // Franja roja top
-      pdf.setFillColor(192,57,43); pdf.rect(0,0,PW,HDR_H,'F');
-      pdf.setFillColor(146,43,33); pdf.rect(0,0,8,HDR_H,'F');
+      pdf.setFillColor(164,35,42); pdf.rect(0,0,PW,HDR_H,'F');
+      pdf.setFillColor(126,26,32); pdf.rect(0,0,8,HDR_H,'F');
       // Título
       pdf.setFont('helvetica','bold'); pdf.setFontSize(15); pdf.setTextColor(255,255,255);
       pdf.text(tituloDoc,M+8,HDR_H/2+6);
@@ -805,13 +887,13 @@ async function generarPDF(){
       pdf.text('PRODUCTO',         M+10,    y+COL_H/2+3);
       pdf.text('ARTÍCULO',         M+W*0.53,y+COL_H/2+3);
       pdf.text('PESO (APROX)',     M+W*0.69,y+COL_H/2+3);
-      pdf.setTextColor(192,57,43);
+      pdf.setTextColor(164,35,42);
       pdf.text('PRECIO (x KILO)', M+W*0.84,y+COL_H/2+3);
     }
 
     function drawSep(cat,y){
       pdf.setFillColor(240,240,240); pdf.rect(M,y,W,SEP_H,'F');
-      pdf.setFillColor(192,57,43);   pdf.rect(M,y,4,SEP_H,'F');
+      pdf.setFillColor(164,35,42);   pdf.rect(M,y,4,SEP_H,'F');
       pdf.setDrawColor(220,220,220); pdf.setLineWidth(0.3);
       pdf.line(M,y+SEP_H,M+W,y+SEP_H);
       pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(60,60,60);
@@ -838,14 +920,17 @@ async function generarPDF(){
       pdf.line(M+1,y+ROW_H,M+W,y+ROW_H);
       // Nombre
       pdf.setFont('helvetica','bold'); pdf.setFontSize(10); pdf.setTextColor(30,30,30);
-      pdf.text(recortar(prod.n,W*0.53-16),M+10,y+ROW_H/2+4);
+      const foto=prod.foto?fotosLista[prod.foto]:null;
+      if(foto){ try{ pdf.addImage(foto,'JPEG',M+6,y+3,ROW_H-6,ROW_H-6,'foto-'+prod.foto,'FAST'); }catch(e){ console.warn('Foto en el PDF:',e&&e.message); } }
+      const xNombre=M+ROW_H+6;
+      pdf.text(recortar(prod.n,M+W*0.53-xNombre-6),xNombre,y+ROW_H/2+4);
       // Artículo
       pdf.setFont('helvetica','normal'); pdf.setFontSize(8.5); pdf.setTextColor(140,140,140);
       pdf.text(prod.art,M+W*0.53,y+ROW_H/2+4);
       // Peso
       pdf.text(recortar(prod.peso,W*0.15-6),M+W*0.69,y+ROW_H/2+4);
       // Precio
-      pdf.setFont('helvetica','bold'); pdf.setFontSize(12); pdf.setTextColor(192,57,43);
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(12); pdf.setTextColor(164,35,42);
       const pTxt=prod.precio!=null?'$'+Math.round(prod.precio).toLocaleString('es-AR'):'Consultar';
       pdf.text(pTxt,M+W*0.84,y+ROW_H/2+5);
     }
@@ -858,6 +943,10 @@ async function generarPDF(){
       pdf.text('Frigorífico Sersale SRL  ·  CUIT 30-70227633-7  ·  (011) 6763-7860  ·  @sersalefrigorifico  ·  Precios por kilo, sujetos a cambio sin previo aviso.',
         PW/2,PH-FTR_H/2+3,{align:'center'});
     }
+
+    // Fotos de los productos (las mismas del catálogo), ya listas para el PDF.
+    const fotosLista={};
+    await Promise.all(items.map(async it=>{ if(it.foto&&!(it.foto in fotosLista)) fotosLista[it.foto]=await cotFoto(it.foto); }));
 
     // Construir lista de elementos
     const elements=[];
@@ -898,9 +987,9 @@ async function generarPDF(){
     // Fondo blanco
     pdf.setFillColor(255,255,255); pdf.rect(0,0,PW,PH,'F');
     // Franjas igual que portada
-    pdf.setFillColor(192,57,43); pdf.rect(0,0,8,PH,'F');
-    pdf.setFillColor(192,57,43); pdf.rect(8,0,PW-8,6,'F');
-    pdf.setFillColor(192,57,43); pdf.rect(8,PH-6,PW-8,6,'F');
+    pdf.setFillColor(164,35,42); pdf.rect(0,0,8,PH,'F');
+    pdf.setFillColor(164,35,42); pdf.rect(8,0,PW-8,6,'F');
+    pdf.setFillColor(164,35,42); pdf.rect(8,PH-6,PW-8,6,'F');
 
     // Logo
     pdf.addImage(logoData,'JPEG',PW/2-LS/2,PH*0.10,LS,LS);
@@ -925,14 +1014,14 @@ async function generarPDF(){
     const cboxY=PH*0.67, cboxH=85;
     pdf.setFillColor(250,250,250); pdf.rect(M,cboxY,W,cboxH,'F');
     pdf.setDrawColor(225,225,225); pdf.setLineWidth(0.5); pdf.rect(M,cboxY,W,cboxH,'S');
-    pdf.setFillColor(192,57,43); pdf.rect(M,cboxY,4,cboxH,'F');
+    pdf.setFillColor(164,35,42); pdf.rect(M,cboxY,4,cboxH,'F');
 
     pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(30,30,30);
     pdf.text('Frigorífico Sersale SRL',M+16,cboxY+22);
     pdf.setFont('helvetica','normal'); pdf.setFontSize(9); pdf.setTextColor(130,130,130);
     pdf.text('CUIT 30-70227633-7',M+16,cboxY+38);
     pdf.text('24 de Noviembre 1926, Parque Patricios, CABA',M+16,cboxY+52);
-    pdf.setTextColor(192,57,43);
+    pdf.setTextColor(164,35,42);
     pdf.text('(011) 6763-7860',M+16,cboxY+68);
     pdf.setTextColor(160,160,160);
     pdf.text('@sersalefrigorifico  ·  Atención por Mayor y Menor',M+16,cboxY+80);
@@ -1014,6 +1103,532 @@ function exportarPresupuesto(){
   setTimeout(()=>URL.revokeObjectURL(url),40000);
   SersaleUI.toast('CSV exportado',{tipo:'ok'});
 }
+</script>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+// COTIZACIÓN: productos con unidades y kilos, totales, PDF con fotos, y
+// presupuestos guardados (colección "presupuestos").
+//   nro            número correlativo (se muestra P-0001); sale de config/contador_presupuestos
+//   fecha          "AAAA-MM-DD"
+//   cliente        nombre
+//   iva            "final" (IVA incluido) | "mas" (precios + IVA)
+//   validezDias    número o null (sin validez)
+//   obs            texto
+//   ajuste         { tipo: "" | "bonif" | "recargo", pct }
+//   items          [{ art, nombre, peso, unidad, unidades, kg, precio, subtotal, foto }]
+//   subtotal, ajusteMonto, total
+//   creadoEn / actualizadoEn (ISO), creadoPor (usuario)
+// ═══════════════════════════════════════════════════════════════════════
+const COT_EMPRESA={nombre:'FRIGORÍFICO SERSALE S.R.L.',lineas:['CUIT 30-70227633-7  ·  SENASA Est. 3839','24 de Noviembre 1926, Parque Patricios, CABA','Tel. (011) 6763-7860  ·  @sersalefrigorifico']};
+const COT_PRODUCTOS=[]; CATS.forEach(c=>c.prods.forEach(p=>COT_PRODUCTOS.push(Object.assign({cat:c.cat},p))));
+const cot={lineas:[],iva:'final',id:null,nro:null,creadoEn:null,creadoPor:null,sig:0,verTodo:false};
+
+function verVista(v){
+  ['cot','lista','guardados'].forEach(x=>{
+    document.getElementById('vista-'+x).style.display=x===v?'':'none';
+    const t=document.getElementById('tab-'+x);
+    t.classList.toggle('on',x===v); t.setAttribute('aria-selected',x===v?'true':'false');
+  });
+  try{ sessionStorage.setItem('sersale_pre_vista',v); }catch(e){}
+  if(v==='guardados') guaEscuchar();
+  window.scrollTo(0,0);
+}
+
+// ── Números escritos por la persona ──
+const cotNumPrecio=v=>{ const n=SersaleBase.numero(v); return n>0?n:null; };
+function cotNumKg(v){ const n=parseFloat(SersaleBase.decimalLimpiar(v,3).replace(',','.')); return isFinite(n)&&n>0?n:0; }
+function cotNumUn(v){ const n=parseInt(String(v||'').replace(/\D/g,''),10); return isFinite(n)&&n>0?n:0; }
+const cotKgTxt=n=>n>0?String(SersaleBase.redondear(n,3)).replace('.',','):'';
+function cotUnidadTxt(unidad,n){ const u=unidad||'unidad'; return n===1?u:(u==='unidad'?'unidades':u+'s'); }
+const cotNro=n=>n?'P-'+String(n).padStart(4,'0'):'';
+
+// ── Buscador de productos ──
+function cotBuscar(){
+  const q=document.getElementById('cot-buscar').value.trim();
+  const caja=document.getElementById('cot-resultados');
+  if(!q&&!cot.verTodo){ caja.style.display='none'; caja.innerHTML=''; return; }
+  const puestos=new Set(cot.lineas.map(l=>l.art).filter(Boolean));
+  let html='',fam='',n=0;
+  COT_PRODUCTOS.forEach(p=>{
+    if(q&&!SersaleBase.coincide(p.n+' '+p.art+' '+p.cat,q)) return;
+    if(p.cat!==fam){ fam=p.cat; html+='<div class="cot-res-fam">'+esc(fam)+'</div>'; }
+    n++;
+    html+='<button type="button" class="cot-res'+(puestos.has(p.artN)?' puesto':'')+'" data-art="'+p.artN+'" aria-label="Agregar '+esc(p.n)+'">'
+      +(p.foto?'<img src="assets/productos/'+p.foto+'" alt="" loading="lazy">':'<img alt="">')
+      +'<span style="min-width:0"><b>'+esc(p.n)+'</b><small>'+esc(p.art)+' · '+esc(p.peso)+(puestos.has(p.artN)?' · ya está en la cotización':'')+'</small></span>'
+      +'<span class="cot-res-precio">'+(p.p!=null?SersaleBase.fmtMonto(p.p):'Consultar')+'</span></button>';
+  });
+  caja.innerHTML=n?html:'<div class="cot-vacio">Ningún producto del catálogo coincide. Podés cargarlo abajo como artículo aparte.</div>';
+  caja.style.display='block';
+}
+function cotVerTodo(){
+  cot.verTodo=!cot.verTodo;
+  document.getElementById('cot-ver-todo').textContent=cot.verTodo?'Ocultar':'Ver catálogo';
+  cotBuscar();
+}
+document.getElementById('cot-resultados').addEventListener('click',function(e){
+  const b=e.target.closest?e.target.closest('button[data-art]'):null;
+  if(b) cotAgregar(Number(b.getAttribute('data-art')));
+});
+
+// ── Renglones ──
+function cotAgregar(art){
+  const p=COT_PRODUCTOS.find(x=>x.artN===art);
+  if(!p) return;
+  let l=cot.lineas.find(x=>x.art===art);
+  if(l){ SersaleUI.toast(p.n+' ya está en la cotización',{tipo:'info'}); }
+  else{
+    l={id:'l'+(cot.sig++),art:p.artN,n:p.n,peso:p.peso,kgPieza:p.kg,unidad:p.unidad,foto:p.foto,un:'',kg:'',kgAuto:true,precio:p.p!=null?fmtMilesTxt(String(p.p)):''};
+    cot.lineas.push(l);
+  }
+  document.getElementById('cot-buscar').value='';
+  if(!cot.verTodo){ document.getElementById('cot-resultados').style.display='none'; } else cotBuscar();
+  cotPintarLineas();
+  const campo=document.getElementById('cot-un-'+l.id);
+  if(campo){ campo.scrollIntoView({block:'center'}); try{ campo.focus({preventScroll:true}); }catch(e){} }
+}
+function cotAgregarVario(){
+  const l={id:'l'+(cot.sig++),art:null,n:'',peso:'',kgPieza:null,unidad:'unidad',foto:null,un:'',kg:'',kgAuto:true,precio:''};
+  cot.lineas.push(l);
+  cotPintarLineas();
+  const campo=document.getElementById('cot-n-'+l.id);
+  if(campo){ campo.scrollIntoView({block:'center'}); try{ campo.focus({preventScroll:true}); }catch(e){} }
+}
+function cotQuitar(id){
+  cot.lineas=cot.lineas.filter(l=>l.id!==id);
+  cotPintarLineas();
+  if(cot.verTodo) cotBuscar();
+}
+// Lo escrito en un campo de un renglón. Con unidades y sin kilos propios, los kilos
+// se proponen con el peso por pieza del catálogo (6 piezas de 6 kg → 36 kg).
+function cotCampo(id,campo,el){
+  const l=cot.lineas.find(x=>x.id===id);
+  if(!l) return;
+  if(campo==='un'){
+    el.value=String(el.value).replace(/\D/g,'').slice(0,5);
+    l.un=el.value;
+    if(l.kgAuto&&l.kgPieza){
+      l.kg=cotKgTxt(cotNumUn(l.un)*l.kgPieza);
+      const k=document.getElementById('cot-kg-'+id); if(k) k.value=l.kg;
+    }
+  }else if(campo==='kg'){
+    el.value=SersaleBase.decimalLimpiar(el.value,3);
+    l.kg=el.value;
+    l.kgAuto=el.value==='';
+  }else if(campo==='precio'){ l.precio=el.value; }
+  else if(campo==='n'){ l.n=el.value; }
+  else if(campo==='peso'){ l.peso=el.value; }
+  cotPintar();
+}
+function cotPintarLineas(){
+  const caja=document.getElementById('cot-lineas');
+  caja.innerHTML=cot.lineas.map((l,i)=>{
+    const etiqueta=l.art?esc(l.n):'artículo '+(i+1);
+    const cab=l.art
+      ?(l.foto?'<img src="assets/productos/'+l.foto+'" alt="">':'')+'<span class="cot-nombre"><b>'+esc(l.n)+'</b><small>Art. '+l.art+' · '+esc(l.peso)+'</small></span>'
+      :'<span class="cot-nombre"><input type="text" id="cot-n-'+l.id+'" placeholder="Descripción del artículo" aria-label="Descripción del artículo '+(i+1)+'" value="'+esc(l.n)+'" oninput="cotCampo(\''+l.id+'\',\'n\',this)">'
+        +'<input type="text" style="margin-top:6px" placeholder="Presentación (opcional): pieza de 2 kg" aria-label="Presentación del artículo '+(i+1)+'" value="'+esc(l.peso)+'" oninput="cotCampo(\''+l.id+'\',\'peso\',this)"></span>';
+    return '<div class="cot-linea" data-linea="'+(l.art||'vario')+'">'
+      +'<div class="cot-linea-cab">'+cab+'<button type="button" class="cot-quitar" onclick="cotQuitar(\''+l.id+'\')" aria-label="Quitar '+etiqueta+'">×</button></div>'
+      +'<div class="cot-campos">'
+        +'<div><label for="cot-un-'+l.id+'">'+(l.unidad==='gancho'?'Ganchos':l.unidad==='bolsa'?'Bolsas':'Unidades')+'</label><input type="text" inputmode="numeric" id="cot-un-'+l.id+'" aria-label="Unidades de '+etiqueta+'" value="'+esc(l.un)+'" placeholder="0" oninput="cotCampo(\''+l.id+'\',\'un\',this)"></div>'
+        +'<div><label for="cot-kg-'+l.id+'">Kilos</label><input type="text" inputmode="decimal" id="cot-kg-'+l.id+'" aria-label="Kilos de '+etiqueta+'" value="'+esc(l.kg)+'" placeholder="0" oninput="cotCampo(\''+l.id+'\',\'kg\',this)"></div>'
+        +'<div><label for="cot-pr-'+l.id+'">Precio por kg</label><input type="text" inputmode="decimal" class="monto" id="cot-pr-'+l.id+'" aria-label="Precio por kilo de '+etiqueta+'" value="'+esc(l.precio)+'" placeholder="A confirmar" oninput="cotCampo(\''+l.id+'\',\'precio\',this)"></div>'
+      +'</div>'
+      +'<div class="cot-sub"><span id="cot-nota-'+l.id+'"></span><strong id="cot-st-'+l.id+'"></strong></div>'
+      +'</div>';
+  }).join('');
+  document.getElementById('cot-vacio').style.display=cot.lineas.length?'none':'';
+  cotPintar();
+}
+
+// ── Cuenta ──
+// La MISMA cuenta para la pantalla, el PDF y lo que queda guardado.
+function cotCalcular(){
+  const items=cot.lineas.map(l=>{
+    const unidades=cotNumUn(l.un), kg=cotNumKg(l.kg), precio=cotNumPrecio(l.precio);
+    return {id:l.id,art:l.art,nombre:String(l.n||'').trim().replace(/\s+/g,' '),peso:String(l.peso||'').trim(),unidad:l.unidad,unidades,kg:SersaleBase.redondear(kg,3),
+      precio,subtotal:precio!=null&&kg>0?SersaleBase.redondear(kg*precio,0):null,foto:l.foto||null,kgAuto:!!(l.kgAuto&&l.kgPieza&&unidades>0)};
+  });
+  const subtotal=items.reduce((s,it)=>s+(it.subtotal||0),0);
+  const tipo=document.getElementById('cot-ajuste-tipo').value;
+  const pctTxt=document.getElementById('cot-ajuste-pct').value;
+  const pct=tipo?parseFloat(SersaleBase.decimalLimpiar(pctTxt,2).replace(',','.'))||0:0;
+  const pctMal=!!tipo&&(pct<0||pct>100||(tipo==='bonif'&&pct>=100));
+  const ajusteMonto=pctMal?0:SersaleBase.redondear(subtotal*pct/100,0)*(tipo==='bonif'?-1:1);
+  return {items,subtotal,ajuste:{tipo:pct>0?tipo:'',pct:pct>0?pct:0},pctMal,ajusteMonto,total:subtotal+ajusteMonto,
+    sinPrecio:items.filter(it=>(it.kg>0||it.unidades>0)&&it.subtotal==null).length};
+}
+function cotPintar(){
+  const c=cotCalcular();
+  c.items.forEach(it=>{
+    const st=document.getElementById('cot-st-'+it.id), nota=document.getElementById('cot-nota-'+it.id);
+    if(!st) return;
+    st.textContent=it.subtotal!=null?SersaleBase.fmtMonto(it.subtotal):'';
+    nota.textContent=it.subtotal!=null?(it.kgAuto?'Kilos estimados por el peso de la pieza':'')
+      :(it.kg>0||it.unidades>0)?(it.precio==null?'Precio a confirmar: no suma al total':'Faltan los kilos para calcular'):'';
+  });
+  const caja=document.getElementById('cot-totales');
+  const etiquetaAjuste=c.ajuste.tipo==='bonif'?'Bonificación':'Recargo';
+  caja.innerHTML='<div class="fila"><span>Subtotal</span><span id="cot-subtotal">'+SersaleBase.fmtMonto(c.subtotal)+'</span></div>'
+    +(c.ajuste.tipo?'<div class="fila"><span>'+etiquetaAjuste+' '+String(c.ajuste.pct).replace('.',',')+'%</span><span id="cot-ajuste">'+SersaleBase.fmtMonto(c.ajusteMonto)+'</span></div>':'')
+    +'<div class="fila total"><span>Total'+(cot.iva==='mas'?' + IVA':'')+'</span><span id="cot-total">'+SersaleBase.fmtMonto(c.total)+'</span></div>'
+    +'<div class="nota">'+(cot.iva==='mas'?'Los precios no incluyen IVA.':'Precios finales, IVA incluido.')
+      +(c.sinPrecio?' Hay '+c.sinPrecio+(c.sinPrecio===1?' producto':' productos')+' con precio a confirmar, sin sumar.':'')
+      +(c.pctMal?' ⚠ Revisá el porcentaje: va de 0 a 100 (una bonificación, menos de 100).':'')+'</div>';
+}
+function cotIva(v){
+  cot.iva=v;
+  ['final','mas'].forEach(x=>{ const b=document.getElementById('cot-iva-'+x); b.classList.toggle('on',x===v); b.setAttribute('aria-pressed',x===v?'true':'false'); });
+  cotPintar();
+}
+
+// ── Empezar de nuevo / abrir uno guardado ──
+function cotLimpiar(){
+  cot.lineas=[]; cot.id=null; cot.nro=null; cot.creadoEn=null; cot.creadoPor=null;
+  ['cot-cli','cot-buscar','cot-ajuste-pct','cot-validez','cot-obs'].forEach(id=>{ document.getElementById(id).value=''; });
+  document.getElementById('cot-ajuste-tipo').value='';
+  document.getElementById('cot-editando').style.display='none';
+  document.getElementById('cot-generar').textContent='Guardar y generar PDF';
+  cotIva('final');
+  cotPintarLineas();
+}
+async function cotNuevo(){
+  const hayAlgo=cot.lineas.length>0||document.getElementById('cot-cli').value.trim()!=='';
+  if(hayAlgo&&!cot.id){
+    const ok=await SersaleUI.confirmar({titulo:'¿Empezar de nuevo?',cuerpo:'Se borra lo que cargaste en esta cotización, que todavía no está guardada.',aceptar:'Empezar de nuevo',cancelar:'Seguir con esta',peligro:true});
+    if(!ok) return;
+  }
+  cotLimpiar();
+  window.scrollTo(0,0);
+}
+function cotAbrir(p){
+  cotLimpiar();
+  cot.id=p.id; cot.nro=p.nro||null; cot.creadoEn=p.creadoEn||null; cot.creadoPor=p.creadoPor||null;
+  document.getElementById('cot-cli').value=p.cliente||'';
+  document.getElementById('cot-validez').value=p.validezDias?String(p.validezDias):'';
+  document.getElementById('cot-obs').value=p.obs||'';
+  const aj=p.ajuste||{};
+  document.getElementById('cot-ajuste-tipo').value=aj.tipo||'';
+  document.getElementById('cot-ajuste-pct').value=aj.pct?String(aj.pct).replace('.',','):'';
+  cot.lineas=(Array.isArray(p.items)?p.items:[]).map(it=>{
+    const cat=it.art?COT_PRODUCTOS.find(x=>x.artN===it.art):null;
+    return {id:'l'+(cot.sig++),art:it.art||null,n:it.nombre||'',peso:it.peso||'',kgPieza:cat?cat.kg:null,unidad:it.unidad||(cat?cat.unidad:'unidad'),foto:it.foto||(cat?cat.foto:null),
+      un:it.unidades?String(it.unidades):'',kg:cotKgTxt(Number(it.kg)||0),kgAuto:false,precio:it.precio?fmtMilesTxt(String(it.precio)):''};
+  });
+  cotIva(p.iva==='mas'?'mas':'final');
+  cotPintarLineas();
+  const aviso=document.getElementById('cot-editando');
+  aviso.textContent='Estás modificando el presupuesto '+cotNro(cot.nro)+'. Al guardar se actualiza ese mismo, con el mismo número.';
+  aviso.style.display='';
+  document.getElementById('cot-generar').textContent='Guardar cambios y generar PDF';
+  verVista('cot');
+}
+
+// ── Guardar ──
+function conBase(){
+  return new Promise(ok=>{ if(window.__fbReady) ok(); else document.addEventListener('fbReady',()=>ok(),{once:true}); });
+}
+const fbPre=()=>Object.assign({db:window.__db},window.__fb);
+// Guarda el presupuesto y devuelve su número. Uno nuevo toma el número siguiente en la
+// misma transacción que lo guarda (dos teléfonos a la vez no repiten número; si la
+// confirmación se pierde y Firestore repite la función, no toma otro).
+async function cotGuardar(datos){
+  await conBase();
+  const f=fbPre(), ahora=new Date().toISOString();
+  if(cot.id){
+    const ref=f.doc(f.db,'presupuestos',cot.id);
+    await f.runTransaction(f.db,async tx=>{
+      const snap=await tx.get(ref);
+      if(!snap.exists()){ const e=new Error('no existe'); e.code='not-found'; throw e; }
+      tx.update(ref,Object.assign({},datos,{actualizadoEn:ahora}));
+    });
+    return cot.nro;
+  }
+  const contadorRef=f.doc(f.db,'config','contador_presupuestos');
+  let maximo=0;
+  if(!(await f.getDoc(contadorRef)).exists()){
+    (await f.getDocs(f.collection(f.db,'presupuestos'))).docs.forEach(x=>{ const n=Number(x.data().nro)||0; if(n>maximo) maximo=n; });
+  }
+  const ref=f.doc(f.collection(f.db,'presupuestos'));
+  const por=sessionStorage.getItem('sersale_usuario')||'';
+  const nro=await f.runTransaction(f.db,async tx=>{
+    const ya=await tx.get(ref);
+    if(ya.exists()) return ya.data().nro;
+    const cont=await tx.get(contadorRef);
+    const n=(cont.exists()?Number(cont.data().ultimo)||0:maximo)+1;
+    tx.set(contadorRef,{ultimo:n,actualizadoEn:ahora});
+    tx.set(ref,Object.assign({},datos,{nro:n,creadoEn:ahora,creadoPor:por}));
+    return n;
+  });
+  cot.id=ref.id; cot.nro=nro; cot.creadoEn=ahora; cot.creadoPor=por;
+  return nro;
+}
+
+let cotGenerando=false;
+async function cotGenerar(){
+  if(cotGenerando) return; // un doble toque no guarda dos
+  // En el iPhone tocar el botón no saca el cursor del campo: se cierra el teclado antes de leer la pantalla.
+  if(document.activeElement&&document.activeElement.blur) document.activeElement.blur();
+  const falta=(m,id)=>{ SersaleUI.toast(m,{tipo:'error'}); const el=id&&document.getElementById(id); if(el){ el.scrollIntoView({block:'center'}); try{ el.focus({preventScroll:true}); }catch(e){} } };
+  const cliente=document.getElementById('cot-cli').value.trim().replace(/\s+/g,' ');
+  if(!cliente) return falta('Poné el nombre del cliente.','cot-cli');
+  const c=cotCalcular();
+  const items=c.items.filter(it=>it.nombre||it.kg>0||it.unidades>0);
+  if(!items.length) return falta('Agregá al menos un producto a la cotización.','cot-buscar');
+  for(const it of items){
+    if(!it.nombre) return falta('Escribí la descripción del artículo.','cot-n-'+it.id);
+    if(!(it.kg>0)&&!(it.unidades>0)) return falta('Poné las unidades o los kilos de '+it.nombre+'.','cot-un-'+it.id);
+  }
+  if(c.pctMal) return falta('Revisá el porcentaje: va de 0 a 100 (una bonificación, menos de 100).','cot-ajuste-pct');
+  if(!window.jspdf){ SersaleUI.toast('La página no terminó de cargar. Recargala y probá de nuevo.',{tipo:'error'}); return; }
+  const validez=parseInt(document.getElementById('cot-validez').value,10);
+  const datos={
+    fecha:SersaleBase.hoy(), cliente, iva:cot.iva, validezDias:validez>0?validez:null, obs:document.getElementById('cot-obs').value.trim(),
+    ajuste:c.ajuste,
+    items:items.map(it=>({art:it.art||null,nombre:it.nombre,peso:it.peso,unidad:it.unidad||'unidad',unidades:it.unidades,kg:it.kg,precio:it.precio,subtotal:it.subtotal,foto:it.foto})),
+    subtotal:c.subtotal, ajusteMonto:c.ajusteMonto, total:c.total,
+  };
+  cotGenerando=true;
+  const btn=document.getElementById('cot-generar');
+  btn.disabled=true;
+  document.getElementById('cot-ld').classList.add('show');
+  try{
+    let nro=null, guardado=true;
+    try{ nro=await cotGuardar(datos); }
+    catch(e){
+      console.error(e);
+      guardado=false;
+      if(e&&e.code==='not-found'){ SersaleUI.toast('Este presupuesto ya no existe: lo eliminaron desde otro teléfono. No se guardó.',{tipo:'error'}); return; }
+      // Sin señal no se puede tomar número: se pregunta si sale igual, sin guardar.
+      const seguir=await SersaleUI.confirmar({titulo:'No se pudo guardar',cuerpo:'Parece que no hay conexión. Podés generar el PDF igual, pero va a salir sin número y no va a quedar en Guardados.',aceptar:'Generar sin guardar',cancelar:'Volver'});
+      if(!seguir) return;
+    }
+    const pdf=await cotPDF(Object.assign({},datos,{nro}));
+    pdf.save(cotArchivo(Object.assign({},datos,{nro})));
+    if(guardado){
+      const aviso=document.getElementById('cot-editando');
+      aviso.textContent='Guardado como '+cotNro(nro)+'. Si cambiás algo y volvés a generar, se actualiza ese mismo presupuesto.';
+      aviso.style.display='';
+      btn.textContent='Guardar cambios y generar PDF';
+      SersaleUI.toast('Presupuesto '+cotNro(nro)+' guardado y PDF generado',{tipo:'ok'});
+    }else SersaleUI.toast('PDF generado sin guardar',{tipo:'info'});
+  }catch(e){
+    console.error(e);
+    SersaleUI.toast('No se pudo generar el PDF. Probá de nuevo.',{tipo:'error'});
+  }finally{
+    document.getElementById('cot-ld').classList.remove('show');
+    btn.disabled=false;
+    cotGenerando=false;
+  }
+}
+const cotArchivo=p=>'Presupuesto_'+(p.nro?cotNro(p.nro)+'_':'')+nombreArchivo(p.cliente||'Cliente')+'_'+SersaleBase.fmtFecha(p.fecha||SersaleBase.hoy()).replace(/\//g,'-')+'.pdf';
+
+// ── PDF de la cotización ──
+const cotFotos={};
+// Foto de un producto lista para el PDF (o null si no se pudo leer: el renglón sale sin foto).
+function cotFoto(archivo){
+  if(!archivo) return Promise.resolve(null);
+  if(!cotFotos[archivo]) cotFotos[archivo]=fetch('assets/productos/'+archivo)
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.blob(); })
+    .then(b=>new Promise((ok,mal)=>{ const fr=new FileReader(); fr.onload=()=>ok(fr.result); fr.onerror=()=>mal(fr.error); fr.readAsDataURL(b); }))
+    .catch(e=>{ console.warn('Foto de producto no disponible:',archivo,e&&e.message); delete cotFotos[archivo]; return null; });
+  return cotFotos[archivo];
+}
+async function cotPDF(p){
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({unit:'mm',format:'a4'});
+  const W=doc.internal.pageSize.getWidth(), H=doc.internal.pageSize.getHeight();
+  const mx=12, pw=W-mx*2, PIE=14;
+  const items=Array.isArray(p.items)?p.items:[];
+  const fotos=await Promise.all(items.map(it=>cotFoto(it.foto)));
+  const logo=window.__sersaleLogoMuestras;
+  const corto=(t,ancho)=>{ t=textoPlano(t); if(doc.getTextWidth(t)<=ancho) return t; while(t.length>1&&doc.getTextWidth(t+'...')>ancho) t=t.slice(0,-1); return t+'...'; };
+  const lacre=()=>doc.setTextColor(164,35,42);
+  // Columnas: foto | producto | unidades | kilos | precio | subtotal (las numéricas, alineadas a la derecha)
+  const xFoto=mx+1.5, xProd=mx+16, xUn=mx+pw*0.60, xKg=mx+pw*0.73, xPr=mx+pw*0.87, xSt=mx+pw-1.5;
+  const ALTO=15;
+  let y=0;
+
+  function encabezado(primera){
+    y=12;
+    try{ if(logo) doc.addImage(logo.datos,'JPEG',mx,y-3,22,22*logo.alto/logo.ancho,'logo'); }catch(e){ console.error('Logo del presupuesto:',e); }
+    doc.setFont('helvetica','bold'); doc.setFontSize(13); lacre();
+    doc.text(COT_EMPRESA.nombre,mx+26,y+3);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(90);
+    COT_EMPRESA.lineas.forEach((l,i)=>doc.text(l,mx+26,y+8+i*3.7));
+    doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.setTextColor(25);
+    doc.text('PRESUPUESTO',W-mx,y+3,{align:'right'});
+    doc.setFontSize(11); lacre();
+    if(p.nro) doc.text('N° '+cotNro(p.nro),W-mx,y+9,{align:'right'});
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90);
+    doc.text('Fecha: '+SersaleBase.fmtFecha(p.fecha),W-mx,y+(p.nro?14:9),{align:'right'});
+    y+=22;
+    doc.setDrawColor(164,35,42); doc.setLineWidth(0.7); doc.line(mx,y,W-mx,y);
+    y+=6;
+    if(primera){
+      doc.setFont('helvetica','normal'); doc.setFontSize(6.5); doc.setTextColor(140);
+      doc.text('CLIENTE',mx,y);
+      if(p.validezDias) doc.text('VALIDEZ',mx+pw*0.66,y);
+      doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(25);
+      doc.text(corto(p.cliente||'-',pw*(p.validezDias?0.62:1)),mx,y+5.5);
+      if(p.validezDias){
+        doc.setFontSize(10);
+        doc.text(p.validezDias+(p.validezDias===1?' día':' días')+' (hasta el '+SersaleBase.fmtFecha(SersaleBase.sumarDias(p.fecha,p.validezDias))+')',mx+pw*0.66,y+5.5);
+      }
+      y+=11;
+    }
+    doc.setFillColor(18,22,26); doc.rect(mx,y,pw,7,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(239,234,225);
+    doc.text('PRODUCTO',xProd,y+4.7);
+    doc.text('UNIDADES',xUn,y+4.7,{align:'right'});
+    doc.text('KILOS',xKg,y+4.7,{align:'right'});
+    doc.text('PRECIO x KG',xPr,y+4.7,{align:'right'});
+    doc.text('SUBTOTAL',xSt,y+4.7,{align:'right'});
+    y+=7;
+  }
+
+  encabezado(true);
+  items.forEach((it,i)=>{
+    if(y+ALTO>H-PIE){ doc.addPage(); encabezado(false); }
+    if(i%2===1){ doc.setFillColor(247,248,249); doc.rect(mx,y,pw,ALTO,'F'); }
+    if(fotos[i]){ try{ doc.addImage(fotos[i],'JPEG',xFoto,y+1.5,12,12,'foto-'+it.foto,'FAST'); }catch(e){ console.warn('Foto en el PDF:',e&&e.message); } }
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(25);
+    doc.text(corto(it.nombre,xUn-xProd-20),xProd,y+6.4);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(120);
+    doc.text(corto([it.art?'Art. '+it.art:'',it.peso].filter(Boolean).join('  ·  '),xUn-xProd-20),xProd,y+10.6);
+    doc.setFontSize(9.5); doc.setTextColor(40);
+    doc.text(it.unidades>0?String(it.unidades):'-',xUn,y+7.2,{align:'right'});
+    if(it.unidades>0){ doc.setFontSize(6.5); doc.setTextColor(140); doc.text(cotUnidadTxt(it.unidad,it.unidades),xUn,y+10.6,{align:'right'}); }
+    doc.setFontSize(9.5); doc.setTextColor(40);
+    doc.text(it.kg>0?SersaleBase.fmtNumero(it.kg,3)+' kg':'-',xKg,y+7.2,{align:'right'});
+    doc.text(it.precio!=null?SersaleBase.fmtMonto(it.precio):'A confirmar',xPr,y+7.2,{align:'right'});
+    doc.setFont('helvetica','bold'); doc.setTextColor(25);
+    doc.text(it.subtotal!=null?SersaleBase.fmtMonto(it.subtotal):'-',xSt,y+7.2,{align:'right'});
+    doc.setDrawColor(225); doc.setLineWidth(0.2); doc.line(mx,y+ALTO,W-mx,y+ALTO);
+    y+=ALTO;
+  });
+
+  // Totales
+  const filasTot=1+(p.ajuste&&p.ajuste.tipo?1:0);
+  const altoTot=filasTot*6+16;
+  if(y+altoTot+30>H-PIE){ doc.addPage(); encabezado(false); }
+  y+=5;
+  const xT=mx+pw*0.55, anchoT=pw*0.45;
+  const filaTot=(rotulo,valor)=>{
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(70);
+    doc.text(rotulo,xT+3,y+4.2); doc.text(valor,xSt,y+4.2,{align:'right'}); y+=6;
+  };
+  filaTot('Subtotal',SersaleBase.fmtMonto(p.subtotal));
+  if(p.ajuste&&p.ajuste.tipo) filaTot((p.ajuste.tipo==='bonif'?'Bonificación ':'Recargo ')+String(p.ajuste.pct).replace('.',',')+'%',SersaleBase.fmtMonto(p.ajusteMonto));
+  doc.setFillColor(164,35,42); doc.rect(xT,y+1,anchoT,10,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(255);
+  doc.text(p.iva==='mas'?'TOTAL + IVA':'TOTAL',xT+3,y+7.6);
+  doc.setFontSize(13);
+  doc.text(SersaleBase.fmtMonto(p.total),xSt,y+7.7,{align:'right'});
+  y+=15;
+  doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(40);
+  doc.text(p.iva==='mas'?'Los precios no incluyen IVA.':'Precios finales, IVA incluido.',xSt,y,{align:'right'});
+
+  // Aclaraciones
+  y+=7;
+  const notas=['Precios por kilo. Las unidades y los kilos son estimados: el importe final surge del peso real de la mercadería entregada.'];
+  if(items.some(it=>it.subtotal==null)) notas.push('Los productos con precio «a confirmar» o sin kilos no están sumados en el total.');
+  if(p.validezDias) notas.push('Presupuesto válido por '+p.validezDias+(p.validezDias===1?' día':' días')+' desde su fecha. Pasado ese plazo los precios pueden cambiar.');
+  if(p.obs) notas.push('Observaciones: '+textoPlano(p.obs).replace(/\s+/g,' '));
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(90);
+  notas.forEach(n=>{
+    const lineas=doc.splitTextToSize(textoPlano(n).replace(/[«»]/g,'"'),pw);
+    if(y+lineas.length*3.8>H-PIE){ doc.addPage(); encabezado(false); y+=4; doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(90); }
+    doc.text(lineas,mx,y); y+=lineas.length*3.8+1.5;
+  });
+
+  // Pie en todas las hojas
+  const hojas=doc.getNumberOfPages();
+  for(let i=1;i<=hojas;i++){
+    doc.setPage(i);
+    doc.setDrawColor(215); doc.setLineWidth(0.2); doc.line(mx,H-10,W-mx,H-10);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(140);
+    doc.text('Frigorífico Sersale S.R.L.  ·  CUIT 30-70227633-7  ·  (011) 6763-7860  ·  @sersalefrigorifico',mx,H-6);
+    doc.text('Hoja '+i+' de '+hojas,W-mx,H-6,{align:'right'});
+  }
+  return doc;
+}
+
+// ── Guardados ──
+let guaLista=null, guaCortar=null, guaError=null;
+async function guaEscuchar(){
+  if(guaCortar) return;
+  await conBase();
+  const f=fbPre();
+  guaCortar=f.onSnapshot(f.collection(f.db,'presupuestos'),
+    snap=>{ guaError=null; guaLista=snap.docs.map(d=>Object.assign({id:d.id},d.data())); guaPintar(); },
+    e=>{ console.error(e); guaError=e&&e.code==='permission-denied'?'permiso':'otro'; guaCortar=null; guaPintar(); });
+  guaPintar();
+}
+function guaPintar(){
+  const caja=document.getElementById('gua-lista');
+  if(guaError){ caja.innerHTML='<p class="cot-vacio">'+(guaError==='permiso'?'La base de datos no permite ver los presupuestos. Avisá para que se habilite.':'No se pudieron cargar los presupuestos. Revisá la señal y volvé a entrar.')+'</p>'; return; }
+  if(guaLista===null){ caja.innerHTML='<p class="cot-vacio">Cargando presupuestos…</p>'; return; }
+  const q=document.getElementById('gua-buscar').value.trim();
+  const lista=guaLista.slice().sort((a,b)=>(Number(b.nro)||0)-(Number(a.nro)||0))
+    .filter(p=>!q||SersaleBase.coincide([cotNro(p.nro),p.cliente,(p.items||[]).map(it=>it.nombre).join(' ')].join(' '),q));
+  if(!lista.length){ caja.innerHTML='<p class="cot-vacio">'+(guaLista.length?'Ningún presupuesto coincide con la búsqueda.':'Todavía no hay presupuestos guardados. Los que generes en «Cotización» quedan acá.')+'</p>'; return; }
+  caja.innerHTML=lista.map(p=>{
+    const n=(p.items||[]).length;
+    return '<div class="gua" data-presupuesto="'+esc(cotNro(p.nro))+'">'
+      +'<div class="gua-cab"><span class="gua-nro">'+esc(cotNro(p.nro))+'</span><span class="gua-fecha">'+esc(SersaleBase.fmtFecha(p.fecha))+'</span></div>'
+      +'<div class="gua-cli">'+esc(p.cliente||'(sin cliente)')+'</div>'
+      +'<div class="gua-det">'+n+(n===1?' producto':' productos')+' · <strong>'+SersaleBase.fmtMonto(p.total)+(p.iva==='mas'?' + IVA':'')+'</strong></div>'
+      +'<div class="gua-btns"><button type="button" class="pdf" data-gua="pdf" data-id="'+esc(p.id)+'" aria-label="PDF del presupuesto '+esc(cotNro(p.nro))+'">PDF</button>'
+      +'<button type="button" data-gua="abrir" data-id="'+esc(p.id)+'" aria-label="Modificar el presupuesto '+esc(cotNro(p.nro))+'">Modificar</button>'
+      +'<button type="button" class="borrar" data-gua="borrar" data-id="'+esc(p.id)+'" aria-label="Eliminar el presupuesto '+esc(cotNro(p.nro))+'">🗑️</button></div>'
+      +'</div>';
+  }).join('');
+}
+let guaOcupado=false;
+document.getElementById('gua-lista').addEventListener('click',async function(e){
+  const b=e.target.closest?e.target.closest('button[data-gua]'):null;
+  if(!b||guaOcupado) return;
+  const p=(guaLista||[]).find(x=>x.id===b.getAttribute('data-id'));
+  if(!p) return;
+  const accion=b.getAttribute('data-gua');
+  if(accion==='abrir'){ cotAbrir(p); return; }
+  guaOcupado=true;
+  try{
+    if(accion==='pdf'){ (await cotPDF(p)).save(cotArchivo(p)); SersaleUI.toast('PDF generado',{tipo:'ok'}); }
+    else{
+      const ok=await SersaleUI.confirmar({titulo:'Eliminar el presupuesto '+cotNro(p.nro),cuerpo:(p.cliente||'')+' · '+SersaleBase.fmtMonto(p.total)+'\nNo se puede deshacer.',aceptar:'Eliminar',peligro:true});
+      if(!ok) return;
+      const f=fbPre();
+      await f.deleteDoc(f.doc(f.db,'presupuestos',p.id));
+      if(cot.id===p.id) cotLimpiar();
+      SersaleUI.toast('Presupuesto eliminado',{tipo:'ok'});
+    }
+  }catch(err){
+    console.error(err);
+    SersaleUI.toast(accion==='pdf'?'No se pudo generar el PDF. Probá de nuevo.':'No se pudo eliminar. Probá de nuevo.',{tipo:'error'});
+  }finally{ guaOcupado=false; }
+});
+
+// ── Arranque ──
+document.getElementById('cot-vigencia').textContent=window.SersaleCatalogo?'Catálogo '+window.SersaleCatalogo.vigencia:'';
+cotPintarLineas();
+(function(){
+  let v='cot';
+  try{ const g=sessionStorage.getItem('sersale_pre_vista'); if(['cot','lista','guardados'].includes(g)) v=g; }catch(e){}
+  if(v!=='cot') verVista(v);
+})();
+// Clientes del CRM para elegir en el campo (igual se puede escribir uno que no esté).
+conBase().then(async function(){
+  try{
+    const f=fbPre();
+    const snap=await f.getDocs(f.collection(f.db,'clientes'));
+    const nombres=snap.docs.map(d=>d.data().nombre).filter(Boolean).sort((a,b)=>String(a).localeCompare(String(b),'es',{sensitivity:'base'}));
+    document.getElementById('cot-clientes').innerHTML=nombres.map(n=>'<option value="'+esc(n)+'"></option>').join('');
+  }catch(e){ console.warn('No se pudieron cargar los clientes:',e&&(e.code||e.message)); }
+});
 </script>
 
 

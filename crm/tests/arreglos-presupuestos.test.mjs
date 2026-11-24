@@ -13,6 +13,9 @@ const NOCHE = "2026-11-10T22:30:00-03:00"; // en UTC ya es 11/11
 async function abrir(opts = {}) {
   const h = await launch({ rol: "director", etiqueta: "presup", seed: buildSeed(), ...opts });
   await h.ir("presupuestos.html");
+  // Estas pruebas son de la «Lista de precios»; la página abre en «Cotización»
+  // (sus pruebas están en presupuestos-cotizacion.test.mjs).
+  await h.page.getByRole("tab", { name: "Lista de precios" }).click();
   await h.page.waitForSelector("#p-0");
   return h;
 }
@@ -156,12 +159,12 @@ test('un precio del catálogo borrado ("Consultar") sale "Consultar" en el PDF, 
 
     const pdf = await generarPdf(h);
     assert.equal(filaPdf(pdf, "JAMÓN COCIDO DE PATA").precio, "Consultar");
-    assert.deepEqual(filaPdf(pdf, "JAMÓN COCIDO ESPECIAL BAJO SODIO"), { datos: ["Art. 303", "6 KG"], precio: "$8.250" });
-    assert.equal(filaPdf(pdf, 'JAMÓN COCIDO NATURAL "SUBLIME"').precio, "$12.749");
+    assert.deepEqual(filaPdf(pdf, "JAMÓN COCIDO ESPECIAL BAJO SODIO"), { datos: ["Art. 303", "6 kg"], precio: "$8.250" });
+    assert.equal(filaPdf(pdf, 'JAMÓN COCIDO NATURAL "SUBLIME"').precio, "$13.717");
     assert.equal(filaPdf(pdf, "PERNIL FRESCO").precio, "Consultar"); // nunca tuvo precio de lista
     // El catálogo completo trae todos los productos, con el nombre entero.
     const nombres = await h.page.evaluate(() => CATS.flatMap((c) => c.prods.map((p) => p.n)));
-    assert.equal(nombres.length, 45);
+    assert.equal(nombres.length, 48); // los del catálogo mayorista de noviembre
     for (const n of nombres) assert.ok(estaEnPdf(pdf, n), "falta en el PDF: " + n);
 
     const csv = await exportarCsv(h);
@@ -178,7 +181,7 @@ test("los ajustes por categoría y por producto no se cuelan en el catálogo com
   try {
     const sublime = await uidDe(h, 'JAMÓN COCIDO NATURAL "SUBLIME"');
     const paleta = await uidDe(h, "FIAMBRE COCIDO DE PALETA DE CERDO");
-    const emparedados = await uidDe(h, "FIAMBRE DE CERDO P/EMPAREDADOS");
+    const emparedados = await uidDe(h, "FIAMBRE DE CERDO P/ EMPAREDADOS");
 
     // Cliente A: presupuesto por selección con 10 % de bonificación en Paletas y +20 % en el Sublime.
     await cliente(h, "Cliente A");
@@ -193,9 +196,9 @@ test("los ajustes por categoría y por producto no se cuelan en el catálogo com
     assert.match(await h.page.innerText("#ajuste-preview"), /Ajuste propio en 1 categoría y 1 producto/);
 
     const pdfA = await generarPdf(h);
-    assert.equal(filaPdf(pdfA, "FIAMBRE COCIDO DE PALETA DE CERDO").precio, "$5.391");
-    assert.equal(filaPdf(pdfA, "FIAMBRE DE CERDO P/EMPAREDADOS").precio, "$4.491");
-    assert.equal(filaPdf(pdfA, 'JAMÓN COCIDO NATURAL "SUBLIME"').precio, "$13.908");
+    assert.equal(filaPdf(pdfA, "FIAMBRE COCIDO DE PALETA DE CERDO").precio, "$5.661");
+    assert.equal(filaPdf(pdfA, "FIAMBRE DE CERDO P/ EMPAREDADOS").precio, "$4.491");
+    assert.equal(filaPdf(pdfA, 'JAMÓN COCIDO NATURAL "SUBLIME"').precio, "$14.964");
     // Portada y páginas de productos llevan el mismo título.
     assert.equal(pdfA.textos.filter((t) => t === "PRESUPUESTO").length, 2);
     assert.ok(!estaEnPdf(pdfA, "LISTA DE PRECIOS"));
@@ -208,12 +211,12 @@ test("los ajustes por categoría y por producto no se cuelan en el catálogo com
 
     const pdfB = await generarPdf(h);
     assert.ok(estaEnPdf(pdfB, "Cliente B"));
-    assert.equal(filaPdf(pdfB, "FIAMBRE COCIDO DE PALETA DE CERDO").precio, "$5.990");
-    assert.equal(filaPdf(pdfB, "FIAMBRE DE CERDO P/EMPAREDADOS").precio, "$4.990");
-    assert.equal(filaPdf(pdfB, 'JAMÓN COCIDO NATURAL "SUBLIME"').precio, "$11.590");
+    assert.equal(filaPdf(pdfB, "FIAMBRE COCIDO DE PALETA DE CERDO").precio, "$6.290");
+    assert.equal(filaPdf(pdfB, "FIAMBRE DE CERDO P/ EMPAREDADOS").precio, "$4.990");
+    assert.equal(filaPdf(pdfB, 'JAMÓN COCIDO NATURAL "SUBLIME"').precio, "$12.470");
     assert.equal(pdfB.textos.filter((t) => t === "LISTA DE PRECIOS").length >= 2, true);
     const csvB = await exportarCsv(h);
-    assert.equal(csvB.fila("FIAMBRE COCIDO DE PALETA DE CERDO")[3], "5990");
+    assert.equal(csvB.fila("FIAMBRE COCIDO DE PALETA DE CERDO")[3], "6290");
 
     // Al volver a selección los ajustes siguen cargados, y se avisa.
     await h.page.tap("#b-sel");
@@ -292,7 +295,7 @@ test("un porcentaje imposible (bonificación de 150 %) no genera precios negativ
     await h.page.fill("#ajuste-pct", "10");
     assert.match(await h.page.innerText("#ajuste-preview"), /una bonificación del -10%/);
     const pdf = await generarPdf(h);
-    assert.equal(filaPdf(pdf, "JAMÓN COCIDO ESPECIAL BAJO SODIO").precio, "$8.091");
+    assert.equal(filaPdf(pdf, "JAMÓN COCIDO ESPECIAL BAJO SODIO").precio, "$8.901");
     assert.ok(!pdf.textos.some((t) => /^\$-/.test(t)), "no hay precios negativos");
 
     // En modo selección también se controla el porcentaje propio de un producto marcado.
@@ -307,7 +310,7 @@ test("un porcentaje imposible (bonificación de 150 %) no genera precios negativ
     await h.page.waitForFunction(() => !document.getElementById("btnGen").disabled);
     await h.page.fill(`#prod-pct-${sodio}`, "20");
     const pdfSel = await generarPdf(h);
-    assert.equal(filaPdf(pdfSel, "JAMÓN COCIDO ESPECIAL BAJO SODIO").precio, "$7.192");
+    assert.equal(filaPdf(pdfSel, "JAMÓN COCIDO ESPECIAL BAJO SODIO").precio, "$7.912");
     assert.equal(h.llamadas.descargas.length, 2, "solo se descargaron los dos PDF válidos");
   } finally {
     await h.close();
