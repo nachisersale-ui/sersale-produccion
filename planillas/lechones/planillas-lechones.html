@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Stock de lechones</title>
+<style>
+  @page { size: A4 portrait; margin: 10mm; }
+  @page apaisada { size: A4 landscape; margin: 9mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #000; margin: 0; font-size: 10.5pt; }
+  .hoja { page-break-after: always; }
+  .hoja:last-child { page-break-after: auto; }
+  .apaisada { page: apaisada; }
+  .cab { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid #000; padding-bottom: 2mm; margin-bottom: 3mm; }
+  .cab h1 { font-size: 17pt; margin: 0; }
+  .cab .sub { font-size: 9pt; color: #333; margin-top: 1mm; }
+  .cab .datos { font-size: 10pt; text-align: right; line-height: 1.9; }
+  table { border-collapse: collapse; width: 100%; }
+  th { background: #e6e6e6; font-size: 8.5pt; text-transform: uppercase; letter-spacing: .3px; border: 1.2px solid #000; padding: 1.2mm 1mm; }
+  td { border: 1px solid #000; height: 7mm; padding: 0 1.5mm; font-size: 9pt; }
+  td.n { text-align: center; font-weight: bold; color: #555; width: 11mm; }
+  tr:nth-child(5n) td { border-bottom: 2px solid #000; }
+  .dos { display: flex; gap: 5mm; }
+  .dos > div { flex: 1; }
+  .nota { font-size: 8.5pt; margin-top: 2.5mm; line-height: 1.45; border: 1px dashed #666; padding: 2mm 3mm; }
+  .nota b { font-size: 9pt; }
+  .totales { display: flex; gap: 4mm; margin-top: 3mm; }
+  .totales div { flex: 1; border: 1.5px solid #000; padding: 1.5mm; font-size: 9pt; height: 12mm; }
+  /* Tablero */
+  .rangos { display: flex; gap: 3mm; }
+  .rango { flex: 1; }
+  .rango .tit { border: 2px solid #000; background: #e6e6e6; text-align: center; padding: 1.5mm; font-weight: bold; font-size: 10.5pt; }
+  .rango .cuenta { display: flex; border: 2px solid #000; border-top: none; }
+  .rango .cuenta div { flex: 1; text-align: center; font-size: 7.5pt; padding: .8mm 0 5mm; border-right: 1px solid #000; }
+  .rango .cuenta div:last-child { border-right: none; font-weight: bold; }
+  .rango td { height: 6.3mm; font-size: 8pt; }
+  .rango th { font-size: 7.5pt; padding: .8mm .5mm; }
+  .chk { display: inline-block; width: 3.2mm; height: 3.2mm; border: 1px solid #000; }
+</style>
+</head>
+<body>
+
+<!-- ============ HOJA 1: CONTEO INICIAL ============ -->
+<section class="hoja">
+  <div class="cab">
+    <div>
+      <h1>1 · Conteo inicial de lechones</h1>
+      <div class="sub">Cámara de congelados — se hace UNA vez, al arrancar. Cada lechón lleva su número escrito en la bolsa.</div>
+    </div>
+    <div class="datos">Fecha: ____/____/______<br>Contó: ____________________</div>
+  </div>
+  <div class="dos">
+    <div><table>
+      <tr><th>N°</th><th style="width:20mm">Kg</th><th style="width:15mm">Rango</th><th>Ubicación / Obs.</th></tr>
+      <!--FILAS1-->
+    </table></div>
+    <div><table>
+      <tr><th>N°</th><th style="width:20mm">Kg</th><th style="width:15mm">Rango</th><th>Ubicación / Obs.</th></tr>
+      <!--FILAS2-->
+    </table></div>
+  </div>
+  <div class="totales">
+    <div>Total lechones:</div>
+    <div>Total kilos:</div>
+    <div>Peso más chico / más grande:</div>
+  </div>
+  <div class="nota">
+    <b>Cómo se usa:</b> numerar cada bolsa con fibrón o cinta de papel (1, 2, 3…). Pesar y anotar los kilos con coma (ej. 9,8).
+    En "Rango" poner la letra del tablero (A, B, C o D). Si hay más de 60, seguir en otra copia de esta hoja desde el 61.
+    "Ubicación": estante, canasto o caja, para encontrarlo rápido.
+  </div>
+</section>
+
+<!-- ============ HOJA 2: TABLERO POR RANGO ============ -->
+<section class="hoja apaisada">
+  <div class="cab">
+    <div>
+      <h1>2 · Tablero de stock por rango de kilos</h1>
+      <div class="sub">Va pegado en la puerta de la cámara. Cuando sale un lechón: <b>se tacha la fila</b> con una línea y se completa fecha y para quién.</div>
+    </div>
+    <div class="datos">Temporada: Navidad / Año Nuevo ______<br>Hoja ___ de ___</div>
+  </div>
+  <div class="rangos">
+    <!--RANGOS-->
+  </div>
+  <div class="nota" style="margin-top:2mm">
+    <b>Regla de oro:</b> lo que no está tachado, tiene que estar en la cámara. "Reserv." = marcar ✓ cuando el lechón ya está apartado para una reserva (todavía no salió); escribir el nombre en "Para".
+    Al salir: tachar la fila y poner la fecha. "Quedan" = Entraron − Salieron.
+  </div>
+</section>
+
+<!-- ============ HOJA 3: REGISTRO DE SALIDAS ============ -->
+<section class="hoja">
+  <div class="cab">
+    <div>
+      <h1>3 · Registro de salidas</h1>
+      <div class="sub">Una línea por cada lechón que sale de la cámara, en el momento en que sale.</div>
+    </div>
+    <div class="datos">Hoja N° _____</div>
+  </div>
+  <table>
+    <tr><th style="width:17mm">Fecha</th><th style="width:13mm">N°<br>lechón</th><th style="width:17mm">Kg</th><th>Cliente / reserva</th><th style="width:22mm">Seña / pagado</th><th style="width:24mm">Entregó</th><th style="width:15mm">Quedan</th></tr>
+    <!--SALIDAS-->
+  </table>
+  <div class="nota">
+    <b>"Quedan":</b> restar uno al número de la línea anterior. Si el kilaje real al entregar no coincide con la planilla, anotarlo en "Kg" y marcar con un círculo.
+  </div>
+</section>
+
+<!-- ============ HOJA 4: CONTROL DE CÁMARA ============ -->
+<section class="hoja">
+  <div class="cab">
+    <div>
+      <h1>4 · Control de cámara (recuento)</h1>
+      <div class="sub">Recontar físicamente cada 2 o 3 días y comparar con el tablero. Si no da, se busca la diferencia ESE día.</div>
+    </div>
+    <div class="datos">Responsable: ____________________</div>
+  </div>
+  <table>
+    <tr><th style="width:20mm">Fecha</th><th>Según tablero<br>(no tachados)</th><th>Contados<br>en cámara</th><th>Diferencia</th><th style="width:30mm">Rango A / B / C / D<br>(contados)</th><th>Qué pasó / cómo se resolvió</th><th style="width:22mm">Firma</th></tr>
+    <!--CONTROL-->
+  </table>
+</section>
+
+</body>
+</html>
