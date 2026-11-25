@@ -49,11 +49,11 @@ test("abre «Por día»: un bloque por fecha de retiro con lo que hay que tener,
     await grupo(p, "Jueves 05/11/2026").getByText("sin retirar (hace 5 días)").waitFor();
     // Una línea por reserva: quién, qué, cuánto y cómo está de plata. Juntas las del mismo producto.
     assert.deepEqual(await filasDe(p, "Jueves 24/12/2026"), [
-      "Marta Gómez | LECHÓN | 10 kg | Resta $95.000",
-      "Pedro Ruiz | lechon · Abierto al medio | 12 kg | Pagado",
-      "Marta Gómez | CORDERO | 8 a 10 kg | Sin seña",
+      "Marta Gómez | LECHÓN · Parque Patricios | 10 kg | Resta $95.000",
+      "Pedro Ruiz | lechon · Parque Patricios · Abierto al medio | 12 kg | Pagado",
+      "Marta Gómez | CORDERO · Parque Patricios | 8 a 10 kg | Sin seña",
     ]);
-    assert.deepEqual(await filasDe(p, "Retiro a confirmar"), ["Raúl Díaz | COCHINILLO | 5 kg | A convenir"]);
+    assert.deepEqual(await filasDe(p, "Retiro a confirmar"), ["Raúl Díaz | COCHINILLO · Parque Patricios | 5 kg | A convenir"]);
     assert.equal(await p.locator("[data-reserva]").count(), 0, "las tarjetas grandes no se ven hasta tocar una fila");
 
     // Tocar una fila abre la tarjeta de siempre, con sus botones; de a una por vez.
@@ -118,7 +118,7 @@ test("editar una reserva desde una fila guarda los cambios y vuelve a la misma v
     await abierta.getByText("11,5").first().waitFor();
     assert.equal(await grupo(p, "Jueves 24/12/2026").locator("[data-reserva]").count(), 0);
     await p.getByRole("button", { name: "Cerrar el detalle de Marta Gómez" }).click();
-    assert.ok((await filasDe(p, "Jueves 31/12/2026")).includes("Marta Gómez | LECHÓN · Lo quiere abierto | 11,5 kg | Resta $116.750"));
+    assert.ok((await filasDe(p, "Jueves 31/12/2026")).includes("Marta Gómez | LECHÓN · Parque Patricios · Lo quiere abierto | 11,5 kg | Resta $116.750"));
     assert.equal((await filasDe(p, "Jueves 24/12/2026")).filter((f) => f.startsWith("Marta Gómez | LECHÓN")).length, 0);
 
     // Una segunda edición seguida, de la misma reserva, también se guarda.
@@ -143,11 +143,11 @@ test("filtros rápidos, búsqueda, y las vistas «Por producto» y «Por cliente
     for (const t of ["Pendientes (6)", "Sin seña (3)", "Atrasadas (1)", "Entregadas (1)", "Todas (7)"]) await p.getByRole("button", { name: t, exact: true }).waitFor();
     await p.getByRole("button", { name: "Sin seña (3)", exact: true }).click();
     assert.deepEqual(await titulos(p), ["Jueves 05/11/2026", "Jueves 24/12/2026", "Jueves 31/12/2026"]);
-    assert.deepEqual(await filasDe(p, "Jueves 24/12/2026"), ["Marta Gómez | CORDERO | 8 a 10 kg | Sin seña"]);
+    assert.deepEqual(await filasDe(p, "Jueves 24/12/2026"), ["Marta Gómez | CORDERO · Parque Patricios | 8 a 10 kg | Sin seña"]);
     await p.getByRole("button", { name: "Atrasadas (1)", exact: true }).click();
     assert.deepEqual(await titulos(p), ["Jueves 05/11/2026"]);
     await p.getByRole("button", { name: "Entregadas (1)", exact: true }).click();
-    assert.deepEqual(await filasDe(p, "Jueves 24/12/2026"), ["Juan Vera | CORDERO | 7 kg | ✓ Entregada"]);
+    assert.deepEqual(await filasDe(p, "Jueves 24/12/2026"), ["Juan Vera | CORDERO · Parque Patricios | 7 kg | ✓ Entregada"]);
     await p.getByRole("button", { name: "Pendientes (6)", exact: true }).click();
 
     // Buscar mira en todas (también las entregadas), sin acentos.
@@ -164,19 +164,19 @@ test("filtros rápidos, búsqueda, y las vistas «Por producto» y «Por cliente
     await grupo(p, "LECHÓN").getByText("4 reservas · 42 kg").waitFor();
     await grupo(p, "CORDERO").getByText("1 reserva · 8 a 10 kg").waitFor();
     assert.deepEqual(await filasDe(p, "LECHÓN"), [
-      "Ana Sosa | Retira 05/11 | 11 kg | Sin seña",
-      "Marta Gómez | Retira 24/12 | 10 kg | Resta $95.000",
-      "Pedro Ruiz | Retira 24/12 · Abierto al medio | 12 kg | Pagado",
-      "Lucía Paz | Retira 31/12 | 9 kg | Sin seña",
+      "Ana Sosa | Retira 05/11 · Parque Patricios | 11 kg | Sin seña",
+      "Marta Gómez | Retira 24/12 · Parque Patricios | 10 kg | Resta $95.000",
+      "Pedro Ruiz | Retira 24/12 · Parque Patricios · Abierto al medio | 12 kg | Pagado",
+      "Lucía Paz | Retira 31/12 · Parque Patricios | 9 kg | Sin seña",
     ]);
-    assert.deepEqual(await filasDe(p, "COCHINILLO"), ["Raúl Díaz | Retira a confirmar | 5 kg | A convenir"]);
+    assert.deepEqual(await filasDe(p, "COCHINILLO"), ["Raúl Díaz | Retira a confirmar · Parque Patricios | 5 kg | A convenir"]);
 
     // Por cliente: todo lo de cada persona junto, con su seña y lo que resta.
     await p.getByRole("tab", { name: "Por cliente" }).click();
     assert.deepEqual(await titulos(p), ["Ana Sosa", "Lucía Paz", "Marta Gómez", "Pedro Ruiz", "Raúl Díaz"]);
     await grupo(p, "Marta Gómez").getByText("2 reservas · 18 a 20 kg").waitFor();
     await grupo(p, "Marta Gómez").getByText("seña $50.000 · resta $255.000 a $295.000").waitFor();
-    assert.deepEqual(await filasDe(p, "Marta Gómez"), ["LECHÓN | Retira 24/12 | 10 kg | Resta $95.000", "CORDERO | Retira 24/12 | 8 a 10 kg | Sin seña"]);
+    assert.deepEqual(await filasDe(p, "Marta Gómez"), ["LECHÓN | Retira 24/12 · Parque Patricios | 10 kg | Resta $95.000", "CORDERO | Retira 24/12 · Parque Patricios | 8 a 10 kg | Sin seña"]);
     await grupo(p, "Pedro Ruiz").getByText("seña $120.000").waitFor();
 
     // La vista elegida se recuerda al volver a entrar; «Lista» sigue siendo la de siempre.

@@ -106,6 +106,14 @@ mayorista en PDF desde el teléfono, con el mismo diseño que el de la computado
 - `catalogo-pdf/` se publica pero NO entra en la lista del service worker: para
   emitir un catálogo hace falta señal.
 
+**Reservas: sucursal de retiro** (25/11/2026): campo opcional `sucursal`
+("patricios" | "caballito") en la colección `reservas`. Se elige en el formulario,
+se ve en cada reserva, hay botones para mirar una sucursal sola y la planilla del
+depósito sale por sucursal. Las reservas sin el campo se leen de su observación
+(`rsvSucursal`: "Senillosa"/"Caballito" → Caballito; si no, Parque Patricios). Las
+10 reservas que había en la base real ya tienen el campo escrito (copia previa en
+`C:\Users\nacho\sersale-respaldos\`, fuera del repositorio).
+
 Pendiente de que el dueño confirme desde su iPhone:
 
 - Que guardar una reserva funcione contra la base real (las reglas de Firestore

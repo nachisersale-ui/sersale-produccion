@@ -13,12 +13,26 @@
     //   precioKg      número|null   precio acordado por kilo (null = a convenir)
     //   sena          número        seña que dejó (0 = no dejó nada)
     //   fechaRetiro   "AAAA-MM-DD"  día en que retira ("" = a confirmar)
+    //   sucursal      "patricios" | "caballito"  por cuál retira (opcional: las reservas viejas no lo
+    //                               tienen y se deduce de la observación; ver rsvSucursal)
     //   obs           texto
     //   estado        "pendiente" | "entregada"
     //   creadoEn / actualizadoEn (ISO), creadoPor (usuario)
 
     const RSV_ITEMS_FIESTAS = ["LECHÓN", "CORDERO", "COCHINILLO", "MEDIO LECHÓN", "MEDIO CORDERO"];
     const RSV_OTRO = "__otro__";
+    // Sucursal por la que retira. Las reservas anteriores a este campo no lo tienen: se toma
+    // de la observación ("retira por Senillosa") y, si no dice nada, es Parque Patricios.
+    const RSV_SUCURSALES = [
+      { id: "patricios", nombre: "Parque Patricios", calle: "24 de Noviembre 1926" },
+      { id: "caballito", nombre: "Caballito", calle: "Senillosa 626" },
+    ];
+    function rsvSucursal(r) {
+      const s = r && r.sucursal;
+      if (s === "patricios" || s === "caballito") return s;
+      return /senillosa|caballito/i.test(String((r && r.obs) || "")) ? "caballito" : "patricios";
+    }
+    const rsvSucursalNombre = r => RSV_SUCURSALES.find(x => x.id === rsvSucursal(r)).nombre;
     const RSV_BAJADAS = "sersale_rsv_bajadas"; // marca en el teléfono: las reservas ya se bajaron del servidor alguna vez
 
     /** Total estimado de la reserva (kg × precio), o null si falta alguno de los dos. */
@@ -234,6 +248,7 @@
       const [sena, setSena] = useState(Number(previa.sena) > 0 ? String(previa.sena) : "");
       const [fechaRetiro, setFechaRetiro] = useState(dia(previa.fechaRetiro));
       const [obs, setObs] = useState(txt(previa.obs));
+      const [sucursal, setSucursal] = useState(rsvSucursal(previa));
       const [precioSugerido, setPrecioSugerido] = useState(false);
       const [cargados, setCargados] = useState([]);
       // El formulario arranca arriba aunque la lista estuviera bajada. Con setTimeout corre después de que
@@ -259,7 +274,7 @@
       // ── Salir con algo a medio cargar: se pregunta antes de perderlo ──
       // "Lo escrito" se compara contra cómo estaba el formulario al abrirlo (o al quedar
       // listo para el ítem siguiente con "Guardar y cargar otro").
-      const firma = JSON.stringify([fechaReserva, cliente, contacto, itemSel, itemLibre, kg, kgHasta, precioKg, sena, fechaRetiro, obs]);
+      const firma = JSON.stringify([fechaReserva, cliente, contacto, itemSel, itemLibre, kg, kgHasta, precioKg, sena, fechaRetiro, obs, sucursal]);
       const firmaBase = React.useRef(null);
       if (firmaBase.current === null) firmaBase.current = firma;
       const hayCambios = firma !== firmaBase.current;
@@ -310,6 +325,7 @@
           precioKg: borrador.precioKg > 0 ? SersaleBase.redondear(borrador.precioKg, 2) : null,
           sena: SersaleBase.redondear(borrador.sena, 2),
           fechaRetiro: fechaRetiro || "",
+          sucursal,
           obs: obs.trim(),
         };
       }
@@ -328,6 +344,9 @@
             // dejar) volvía al valor que tenía cuando se abrió esta pantalla.
             const cambios = {};
             Object.keys(d).forEach(k => { if (d[k] !== reserva[k] && !(d[k] == null && reserva[k] == null)) cambios[k] = d[k]; });
+            // Una reserva vieja no tiene el campo `sucursal`: si quedó la que ya se leía de su
+            // observación, no es un cambio (y no se escribe nada si no se tocó nada).
+            if (reserva.sucursal == null && cambios.sucursal === rsvSucursal(reserva)) delete cambios.sucursal;
             if (Object.keys(cambios).length > 0) await updateDoc(doc(db, "reservas", reserva.id), { ...cambios, actualizadoEn: ahora });
           }
           SersaleUI.toast(nueva ? "Reserva guardada: " + d.cliente + " · " + d.item : "Reserva actualizada", { tipo: "ok" });
@@ -453,6 +472,17 @@
               </div>
             )}
 
+            <label style={RSV_ETIQUETA} id="rsv-sucursal-et">Retira por</label>
+            <div role="group" aria-labelledby="rsv-sucursal-et" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              {RSV_SUCURSALES.map(s => (
+                <button key={s.id} type="button" data-sucursal={s.id} onClick={()=>setSucursal(s.id)} aria-pressed={sucursal === s.id}
+                  style={{minHeight:56,padding:"6px 10px",borderRadius:12,border:"1.5px solid " + (sucursal === s.id ? "#A4232A" : "#D8DCE0"),background:sucursal === s.id ? "#A4232A" : "#fff",color:sucursal === s.id ? "#fff" : "#3A424A",cursor:"pointer",textAlign:"center"}}>
+                  <span style={{display:"block",fontWeight:700,fontSize:15}}>{s.nombre}</span>
+                  <span style={{display:"block",fontSize:12,opacity:0.85}}>{s.calle}</span>
+                </button>
+              ))}
+            </div>
+
             <label style={RSV_ETIQUETA} htmlFor="rsv-obs">Observaciones (opcional)</label>
             <input id="rsv-obs" style={RSV_CAMPO} placeholder="Ej: lo quiere deshuesado" value={obs} onChange={e=>setObs(e.target.value)} />
 
@@ -504,6 +534,7 @@
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginTop:10,fontSize:15,color:"#191E23"}}>
               <div>
                 <div>Retira: {r.fechaRetiro ? <strong style={dato}>{SersaleBase.fmtFecha(r.fechaRetiro)}</strong> : <strong>a confirmar</strong>}</div>
+                <div data-sucursal={rsvSucursal(r)} style={{marginTop:2,fontSize:13,color:"#5C666F"}}>Por <strong style={{color:"#191E23"}}>{rsvSucursalNombre(r)}</strong></div>
                 {cuando && <div style={{marginTop:2}}><span style={{display:"inline-block",whiteSpace:"nowrap",padding:"1px 8px",borderRadius:10,fontSize:12,fontWeight:700,background:urgente?"#A4232A":vencida?"#F0E7D9":"#EDEEF0",color:urgente?"#fff":vencida?"#784212":"#5C666F"}}>{cuando}</span></div>}
               </div>
               <div style={{textAlign:"right"}}>
@@ -632,7 +663,8 @@
     // ── Planilla para el depósito (PDF) ──
     // Qué hay que preparar cada día: un resumen por producto y el detalle reserva por
     // reserva, con una casilla para ir tildando. Sin precios ni señas: es para el depósito.
-    function rsvPlanillaPDF(pendientes, soloDia) {
+    function rsvPlanillaPDF(pendientes, soloDia, sucursal) {
+      const deSucursal = sucursal ? RSV_SUCURSALES.find(x => x.id === sucursal) : null;
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF({ unit: "mm", format: "a4" });
       const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
@@ -651,7 +683,12 @@
         .filter(d => soloDia === undefined || d === soloDia)
         .sort((a, b) => (a || "9999").localeCompare(b || "9999"));
       let y = 0;
-      const cx = [mx, mx + 8, mx + 17, mx + 17 + pw * 0.27, mx + 17 + pw * 0.52, mx + 17 + pw * 0.66];
+      // Con las dos sucursales juntas se suma una columna angosta que dice por cuál retira
+      // (cx[6]); con una sola, la planilla queda como siempre y lo dice el título.
+      const cx = deSucursal
+        ? [mx, mx + 8, mx + 17, mx + 17 + pw * 0.27, mx + 17 + pw * 0.52, mx + 17 + pw * 0.66]
+        : [mx, mx + 8, mx + 17, mx + 17 + pw * 0.25, mx + 17 + pw * 0.46, mx + 17 + pw * 0.71, mx + 17 + pw * 0.59];
+      const finKilos = deSucursal ? cx[5] : cx[6];
       function cabeceraHoja(dia, sigue) {
         y = 14;
         doc.setFont("helvetica", "bold"); doc.setFontSize(13); doc.setTextColor(164, 35, 42);
@@ -662,7 +699,7 @@
         doc.setDrawColor(164, 35, 42); doc.setLineWidth(0.6); doc.line(mx, y, W - mx, y);
         y += 8;
         doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(25);
-        doc.text("RESERVAS PARA PREPARAR", mx, y);
+        doc.text("RESERVAS PARA PREPARAR" + (deSucursal ? "  ·  RETIRO POR " + deSucursal.nombre.toUpperCase() : ""), mx, y);
         y += 7;
         doc.setFontSize(12); doc.setTextColor(164, 35, 42);
         doc.text(rsvDiaTexto(dia).toUpperCase() + (sigue ? "  (continúa)" : ""), mx, y);
@@ -676,6 +713,7 @@
         doc.text("CLIENTE", cx[2] + 1, y + 4.4);
         doc.text("QUÉ LLEVA", cx[3] + 1, y + 4.4);
         doc.text("KILOS", cx[4] + 1, y + 4.4);
+        if (!deSucursal) doc.text("RETIRA POR", cx[6] + 1, y + 4.4);
         doc.text("OBSERVACIONES", cx[5] + 1, y + 4.4);
         y += 6.5;
       }
@@ -720,7 +758,8 @@
             doc.setFont("helvetica", "normal");
             doc.text(corto(rsvItemDeLista(r.item, deLista), cx[4] - cx[3] - 3), cx[3] + 1, y + 5);
             doc.setFont("helvetica", "bold");
-            doc.text(corto(rsvKgTexto(r), cx[5] - cx[4] - 2), cx[4] + 1, y + 5);
+            doc.text(corto(rsvKgTexto(r), finKilos - cx[4] - 2), cx[4] + 1, y + 5);
+            if (!deSucursal) { doc.setFontSize(8.5); doc.text(rsvSucursal(r) === "caballito" ? "CABALLITO" : "P. PATRICIOS", cx[6] + 1, y + 5); doc.setFontSize(10); }
             doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(70);
             doc.text(corto(r.obs, mx + pw - cx[5] - 2), cx[5] + 1, y + 5);
             doc.setDrawColor(215); doc.setLineWidth(0.2); doc.line(mx, y + 7.6, W - mx, y + 7.6);
@@ -730,7 +769,7 @@
       });
       return doc;
     }
-    const rsvPlanillaArchivo = soloDia => "Reservas para preparar - " + (soloDia === undefined ? "todas" : soloDia ? SersaleBase.fmtFecha(soloDia).replace(/\//g, "-") : "retiro a confirmar") + ".pdf";
+    const rsvPlanillaArchivo = (soloDia, sucursal) => "Reservas para preparar - " + (sucursal ? RSV_SUCURSALES.find(x => x.id === sucursal).nombre + " - " : "") + (soloDia === undefined ? "todas" : soloDia ? SersaleBase.fmtFecha(soloDia).replace(/\//g, "-") : "retiro a confirmar") + ".pdf";
 
     // ── Fila compacta de una reserva (vistas agrupadas) ──
     // Una línea por reserva; al tocarla se abre la tarjeta completa, con los mismos datos
@@ -745,7 +784,7 @@
       const retiro = r.fechaRetiro ? SersaleBase.fmtFechaCorta(r.fechaRetiro) : "a confirmar";
       const dato = { fontFamily:"'IBM Plex Mono',ui-monospace,monospace", fontVariantNumeric:"tabular-nums" };
       const principal = vista === "cliente" ? r.item : r.cliente;
-      const detalle = vista === "dia" ? r.item : vista === "producto" ? "Retira " + retiro : "Retira " + retiro;
+      const detalle = (vista === "dia" ? r.item : "Retira " + retiro) + " · " + rsvSucursalNombre(r);
       if (abierta) {
         return (
           <div data-reserva-fila={r.id} style={{margin:"6px 0 2px"}}>
@@ -785,6 +824,9 @@
       const [verResumen, setVerResumen] = useState(null); // null = según cuántos renglones tenga
       // Cómo se organiza la pantalla: por día de retiro, por producto, por cliente, o la lista de siempre.
       const [modo, setModo] = useState(() => { const m = sessionStorage.getItem("sersale_rsv_modo"); return ["dia", "producto", "cliente", "lista"].includes(m) ? m : "dia"; });
+      // Sucursal de retiro que se está mirando ("" = las dos).
+      const [suc, setSuc] = useState(() => { const s = sessionStorage.getItem("sersale_rsv_suc"); return s === "patricios" || s === "caballito" ? s : ""; });
+      const elegirSuc = s => { setSuc(s); setFilaAbierta(null); try { sessionStorage.setItem("sersale_rsv_suc", s); } catch (e) {} };
       const [filtro, setFiltro] = useState("pendientes"); // pendientes | sinsena | atrasadas | entregadas | todas
       const [plegados, setPlegados] = useState({}); // grupos cerrados a mano
       const [filaAbierta, setFilaAbierta] = useState(null);
@@ -866,9 +908,10 @@
       // Las vistas agrupadas se arman una sola vez por cambio de datos, de vista, de filtro o
       // de búsqueda (no en cada toque), y las filas no se vuelven a dibujar si no cambiaron.
       const hoyDia = SersaleBase.hoy();
+      const deSuc = React.useMemo(() => (suc ? (reservas || []).filter(r => rsvSucursal(r) === suc) : reservas || []), [reservas, suc]);
       const agrupado = React.useMemo(
-        () => (modo === "lista" ? { sinSena: [], atrasadas: [], filtradas: [], grupos: [] } : rsvAgrupar(reservas || [], modo, filtro, buscar, hoyDia)),
-        [reservas, modo, filtro, buscar, hoyDia]
+        () => (modo === "lista" ? { sinSena: [], atrasadas: [], filtradas: [], grupos: [] } : rsvAgrupar(deSuc, modo, filtro, buscar, hoyDia)),
+        [deSuc, modo, filtro, buscar, hoyDia]
       );
       const acciones = React.useRef({});
       acciones.current = { editar: x => setForm(x), estado: cambiarEstado, eliminar };
@@ -880,7 +923,9 @@
         return <ReservaForm key={form.id || "nueva"} reserva={form} anteriores={reservas || []} onCerrar={()=>setForm(null)} onGuardada={cerrar => { if (cerrar) setForm(null); }} />;
       }
 
-      const todas = reservas || [];
+      const todas = deSuc;
+      const hayReservas = (reservas || []).length > 0;
+      const sucVacia = suc && hayReservas && todas.length === 0 ? "No hay reservas para retirar por " + RSV_SUCURSALES.find(x => x.id === suc).nombre + "." : null;
       // No se afirma "no hay reservas" (ni que la lista está completa) si este teléfono nunca
       // las bajó, o si está sin conexión y no tiene ninguna guardada.
       const sinConfirmar = copia.nuncaBajadas || (copia.sinServidor && todas.length === 0 && navigator.onLine === false);
@@ -888,7 +933,8 @@
       const entregadas = todas.filter(r => r.estado === "entregada");
       // El número de cada reserva es su lugar en el orden de reserva entre las pendientes.
       const lugar = {};
-      rsvOrdenar(pendientes, "reserva").forEach((r, i) => { lugar[r.id] = i + 1; });
+      // (entre las de las dos sucursales: el número no cambia al mirar una sola)
+      rsvOrdenar((reservas || []).filter(r => r.estado !== "entregada"), "reserva").forEach((r, i) => { lugar[r.id] = i + 1; });
       // Al buscar se mira en todas (pendientes y entregadas): si no, una ya entregada "no existe".
       const buscando = buscar.trim() !== "";
       const base = buscando ? todas : ver === "pendiente" ? pendientes : ver === "entregada" ? entregadas : todas;
@@ -924,7 +970,7 @@
         try {
           const para = dia === undefined ? pendientes : pendientes.filter(r => String(r.fechaRetiro || "") === dia);
           if (para.length === 0) { SersaleUI.toast("No hay reservas pendientes para la planilla.", { tipo: "info" }); return; }
-          rsvPlanillaPDF(pendientes, dia).save(rsvPlanillaArchivo(dia));
+          rsvPlanillaPDF(pendientes, dia, suc).save(rsvPlanillaArchivo(dia, suc));
         } catch (e) {
           console.error(e);
           SersaleUI.toast("No se pudo armar la planilla. Probá de nuevo.", { tipo: "error" });
@@ -969,6 +1015,16 @@
                   <button role="tab" aria-selected={modo==="cliente"} onClick={()=>elegirModo("cliente")} style={pestana(modo==="cliente")}>Por cliente</button>
                   <button role="tab" aria-selected={modo==="lista"} onClick={()=>elegirModo("lista")} style={pestana(modo==="lista")}>Lista</button>
                 </div>
+                {hayReservas && (
+                  <div role="group" aria-label="Sucursal de retiro" style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginBottom:10,WebkitOverflowScrolling:"touch"}}>
+                    <button onClick={()=>elegirSuc("")} aria-pressed={suc===""} style={chip(suc==="")}>Las dos sucursales</button>
+                    {RSV_SUCURSALES.map(s => (
+                      <button key={s.id} onClick={()=>elegirSuc(s.id)} aria-pressed={suc===s.id} style={chip(suc===s.id)}>
+                        {s.nombre} ({(reservas || []).filter(r => r.estado !== "entregada" && rsvSucursal(r) === s.id).length})
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {(agrupada ? todas.length > 0 : (todas.length > 6 || buscando)) && (
                   <div style={{position:"relative",marginBottom:12}}>
                     <input style={{...RSV_CAMPO, paddingRight:48}} placeholder="🔍 Buscar cliente, ítem o teléfono" aria-label="Buscar reserva" enterKeyHint="search" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"
@@ -980,7 +1036,9 @@
 
                 {agrupada && (
                   <>
-                    {todas.length === 0 ? (
+                    {sucVacia ? (
+                      <p style={{textAlign:"center",padding:"36px 16px",color:"#79828B",fontSize:14}}>{sucVacia}</p>
+                    ) : todas.length === 0 ? (
                       <div style={{textAlign:"center",padding:"36px 16px",color:"#79828B"}}>
                         {!sinConfirmar && <p style={{fontWeight:700,fontSize:15,color:"#3A424A",marginBottom:6}}>Todavía no hay reservas</p>}
                         {!sinConfirmar && <p style={{fontSize:13,marginBottom:16}}>Anotá acá lo que los clientes dejan reservado para las fiestas.</p>}
@@ -1081,7 +1139,7 @@
 
                 {!agrupada && visibles.length === 0 && (
                   <div style={{textAlign:"center",padding:"36px 16px",color:"#79828B"}}>
-                    {todas.length === 0 ? (
+                    {sucVacia ? sucVacia : todas.length === 0 ? (
                       <>
                         {!sinConfirmar && <p style={{fontWeight:700,fontSize:15,color:"#3A424A",marginBottom:6}}>Todavía no hay reservas</p>}
                         {!sinConfirmar && <p style={{fontSize:13,marginBottom:16}}>Anotá acá lo que los clientes dejan reservado para las fiestas.</p>}
