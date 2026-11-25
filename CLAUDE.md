@@ -10,9 +10,12 @@ de la raíz (`App.js`, `firebase.js`, `index.html`) son anteriores y no se usan.
 
 ## Reglas que no se negocian
 
-- **El sitio real (`crm-frigorifico-sersale.netlify.app`) no se publica sin el OK
-  explícito del dueño.** Todo se prueba antes en
-  `sersale-crm-prueba.netlify.app`.
+- **El sitio real (`crm-frigorifico-sersale.netlify.app`) se publica solo con la
+  suite de pruebas pasando.** Desde el 25/11/2026 el dueño autorizó publicar
+  directo en el real (y en `sersale-crm-prueba.netlify.app`) cuando un cambio que
+  él pidió pasa las pruebas, sin pedirle OK cada vez; después se le avisa la
+  versión. Si algo falla, no se publica y se le avisa. Esto no cubre aplicar las
+  reglas de Firestore ni cambios masivos de datos: eso sigue pidiendo su OK.
 - **El sitio de prueba usa la base de datos REAL.** Lo que se cargue ahí queda
   en producción. Las pruebas automáticas no: corren contra un emulador.
 - **Babel queda fijo en 7.26.4** (`@babel/standalone`). La versión 8 rompió el
@@ -113,6 +116,12 @@ depósito sale por sucursal. Las reservas sin el campo se leen de su observació
 (`rsvSucursal`: "Senillosa"/"Caballito" → Caballito; si no, Parque Patricios). Las
 10 reservas que había en la base real ya tienen el campo escrito (copia previa en
 `C:\Users\nacho\sersale-respaldos\`, fuera del repositorio).
+
+**Reservas: cantidad** (25/11/2026): campo opcional `cantidad` (null, 1 o falta
+= una unidad). Con más de una ("2 lechones"), `kg` y `kgHasta` son los kilos DE
+CADA UNA: totales de kilos, importes, "qué hay que tener" y la planilla
+multiplican por la cantidad (`rsvCant`, `rsvKgTot`). Columna "Cantidad" en el
+backup.
 
 Pendiente de que el dueño confirme desde su iPhone:
 
